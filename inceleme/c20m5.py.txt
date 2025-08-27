@@ -1,0 +1,316 @@
+import asyncio
+import aiohttp
+import time
+from termcolor import colored
+from datetime import datetime
+import pandas as pd
+import numpy as np
+import random
+
+
+def calculate_rsi_wilders(data, column='close', period=14):
+    # RSI hesaplaması
+    delta = data[column].diff(1)
+    gain = delta.where(delta > 0, 0.0)
+    loss = -delta.where(delta < 0, 0.0)
+    
+    avg_gain = gain.ewm(alpha=1/period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1/period, adjust=False).mean()
+    
+    rs = avg_gain / avg_loss
+    return 100.0 - (100.0 / (1.0 + rs))
+
+async def fetch_with_retry(session, url, max_retries=3, base_delay=1):
+    """Rate limit ve hatalara karşı üstel bekleme stratejisiyle yeniden deneme yapar"""
+    for attempt in range(max_retries):
+        try:
+            async with session.get(url) as response:
+                if response.status == 429:  # Rate limit aşıldı
+                    retry_after = int(response.headers.get("Retry-After", 60))
+                    print(colored(f"Rate limit aşıldı! {retry_after} saniye bekleniyor...", "red"))
+                    await asyncio.sleep(retry_after)
+                    continue
+                elif response.status != 200:
+                    raise aiohttp.ClientError(f"HTTP Error {response.status}")
+                return await response.json()
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            wait = base_delay * (2 ** attempt) + random.uniform(0, 1)
+            print(colored(f"Hata: {str(e)}. {wait:.4f} saniye sonra tekrar deneniyor (Deneme {attempt+1}/{max_retries})", "yellow"))
+            await asyncio.sleep(wait)
+    raise Exception(f"Maksimum yeniden deneme sayısına ({max_retries}) ulaşıldı.")
+
+def calculate_ema(data, period):
+    """EMA hesaplama fonksiyonu"""
+    return data.ewm(span=period, adjust=False).mean()
+
+def calculate_diff(data, length):
+    """Yüzde fark hesaplaması yapan fonksiyon"""
+    # Kapanış, yüksek ve düşük değerleri al
+    close = data['close'].astype(float)
+    high = data['high'].astype(float)
+    low = data['low'].astype(float)
+    
+    # EMA hesapla
+    ema_value = calculate_ema(close, length)
+    
+    # Crossover ve crossunder durumları
+    long_signal = (close > ema_value) & (close.shift(1) <= ema_value.shift(1))
+    short_signal = (close < ema_value) & (close.shift(1) >= ema_value.shift(1))
+    
+    # Değişkenleri başlat
+    longPullbackLevel = np.full_like(close, np.nan, dtype=float)
+    shortPullbackLevel = np.full_like(close, np.nan, dtype=float)
+    isAfterShort = np.zeros_like(close, dtype=bool)
+    
+    # Veriler üzerinden döngü ile pullback seviyelerini hesapla
+    for i in range(1, len(close)):
+        # Önceki değerleri aktar
+        longPullbackLevel[i] = longPullbackLevel[i-1]
+        shortPullbackLevel[i] = shortPullbackLevel[i-1]
+        isAfterShort[i] = isAfterShort[i-1]
+        
+        # Short sinyali varsa
+        if short_signal.iloc[i]:
+            shortPullbackLevel[i] = high.iloc[i]
+            longPullbackLevel[i] = shortPullbackLevel[i]
+            isAfterShort[i] = True
+            
+        # Long sinyali ve henüz pullback seviyesi yoksa
+        if long_signal.iloc[i] and np.isnan(longPullbackLevel[i]):
+            longPullbackLevel[i] = low.iloc[i]
+            
+        # Short sonrası long sinyali
+        if long_signal.iloc[i] and isAfterShort[i]:
+            longPullbackLevel[i] = low.iloc[i]
+            isAfterShort[i] = False
+    
+    # Yüzde farkı hesapla
+    diff_percent = pd.Series(np.nan, index=close.index)
+    for i in range(len(close)):
+        if not np.isnan(longPullbackLevel[i]):
+            diff_percent.iloc[i] = ((close.iloc[i] - longPullbackLevel[i]) / longPullbackLevel[i]) * 100
+    
+    return diff_percent
+
+async def get_binance_data(pair, interval, session):
+    try:
+        url = f"https://api.binance.com/api/v3/klines?symbol={pair}&interval={interval}"
+        try:
+            data = await fetch_with_retry(session, url)
+        except Exception as e:
+            return (pair, None, f"Veri alınamadı: {str(e)}")
+            
+        if len(data) < 200:
+            return (pair, None, f"Yetersiz veri (200'den az mum)")
+        
+        df = pd.DataFrame(data, columns=[
+            'timestamp', 'open', 'high', 'low', 'close', 'volume',
+            'close_time', 'quote_asset_volume', 'trades',
+            'taker_buy_base', 'taker_buy_quote', 'ignore'
+        ])
+
+        df['ema200_close'] = df['close'].ewm(span=200, adjust=False).mean().astype(float)
+        last_row = df.iloc[-1]
+        last_ema200_close = last_row['ema200_close']
+        # Sayısal dönüşümler
+        numeric_cols = ['open', 'high', 'low', 'close']
+        df[numeric_cols] = df[numeric_cols].apply(pd.to_numeric, errors='coerce')
+        if df['close'].isnull().any() or df['high'].isnull().any() or df['low'].isnull().any():
+            return (pair, None, "Geçersiz fiyat verisi")
+        
+        # Logaritmik hesaplamalar
+        df['logHigh'] = np.log(df['high'].replace(0, np.nan))
+        df['logLow'] = np.log(df['low'].replace(0, np.nan))
+        df['logClose'] = np.log(df['close'].replace(0, np.nan))
+        
+        try:
+            df['rsihigh'] = calculate_rsi_wilders(df, 'logHigh')
+            df['rsilow'] = calculate_rsi_wilders(df, 'logLow')
+            df['rsiclose'] = calculate_rsi_wilders(df, 'logClose')
+        except Exception as e:
+            return (pair, None, f"RSI hesaplama hatası: {str(e)}")
+            
+        # Değişim oranları
+        df['rsiChangeclose'] = df['rsiclose'].diff()
+        df['rsiChangelow'] = df['rsilow'].diff()
+        
+        # MACD benzeri hesaplamalar
+        df['fast_ma'] = df['close'].ewm(span=12, adjust=False).mean()
+        df['slow_ma'] = df['close'].ewm(span=26, adjust=False).mean()
+        temp = df['fast_ma'] - df['slow_ma']
+        df['rsi_temp'] = calculate_rsi_wilders(pd.DataFrame({'temp': temp}), column='temp', period=100)
+        df['macd'] = df['rsi_temp'].diff()
+        df['ema_macd'] = df['macd'].ewm(span=9, adjust=False).mean()
+        df['rsi_signal'] = calculate_rsi_wilders(pd.DataFrame({'ema_macd': df['ema_macd']}), column='ema_macd', period=100)
+        df['signal'] = df['rsi_signal'].diff()
+        df['top'] = (df['macd'] + df['signal']) / 2
+        
+        # Yüzde fark hesaplaması (kod.py'den entegre edildi)
+        length = 200  # EMA Periyodu
+        diff_percent = calculate_diff(df, length)
+        df['diff_percent'] = diff_percent
+        last_diff_percent = diff_percent.iloc[-1] if not diff_percent.empty and not np.isnan(diff_percent.iloc[-1]) else None
+
+        # Sinyal tespiti fonksiyonları
+        def is_crossover(series, threshold, i):
+            return series.iloc[i-1] < threshold and series.iloc[i] >= threshold
+
+        def is_crossunder(series, threshold, i):
+            return series.iloc[i-1] > threshold and series.iloc[i] <= threshold
+        signals = []
+        last_candle = 1
+        if df['close'].iloc[-2] < last_ema200_close < df['close'].iloc[-1]  or df['close'].iloc[-2] > last_ema200_close > df['close'].iloc[-1]:
+            for i in range(-last_candle, 0):
+                try:
+                    current_time = datetime.fromtimestamp(df['timestamp'].iloc[i] / 1000)
+                    time_diff = datetime.now() - current_time
+                    sigs = []
+                    if i-1 >= -len(df):
+                        if is_crossover(df['rsiChangeclose'], 20, i):
+                            sigs.append(f"{current_time} C20L")
+                        if is_crossover(df['rsiChangeclose'], 10, i):
+                            sigs.append(f"{current_time} C10L")
+                        if is_crossover(df['rsiChangelow'], -20, i):
+                            sigs.append(f"{current_time} L20S")
+                        if is_crossunder(df['rsiChangelow'], 20, i):
+                            sigs.append(f"{current_time} L20L")
+                        if is_crossunder(df['rsiChangeclose'], -20, i):
+                            sigs.append(f"{current_time} C20S")
+                        if is_crossunder(df['rsiChangeclose'], -10, i):
+                            sigs.append(f"{current_time} C10S")
+                        
+                        # MACD tabanlı sinyaller
+                        if any([is_crossover(df['macd'], 2, i), is_crossover(df['signal'], 2, i), is_crossover(df['top'], 2, i)]):
+                            sigs.append(f"{current_time} M2L")
+                        if any([is_crossover(df['macd'], 3, i), is_crossover(df['signal'], 3, i), is_crossover(df['top'], 3, i)]):
+                            sigs.append(f"{current_time} M3L")
+                        if any([is_crossover(df['macd'], 4, i), is_crossover(df['signal'], 4, i), is_crossover(df['top'], 4, i)]):
+                            sigs.append(f"{current_time} M4L")
+                        if any([is_crossover(df['macd'], 5, i), is_crossover(df['signal'], 5, i), is_crossover(df['top'], 5, i)]):
+                            sigs.append(f"{current_time} M5L")
+                        if any([is_crossunder(df['macd'], -2, i), is_crossunder(df['signal'], -2, i), is_crossunder(df['top'], -2, i)]):
+                            sigs.append(f"{current_time} M2S")
+                        if any([is_crossunder(df['macd'], -3, i), is_crossunder(df['signal'], -3, i), is_crossunder(df['top'], -3, i)]):
+                            sigs.append(f"{current_time} M3S")
+                        if any([is_crossunder(df['macd'], -4, i), is_crossunder(df['signal'], -4, i), is_crossunder(df['top'], -4, i)]):
+                            sigs.append(f"{current_time} M4S")
+                        if any([is_crossunder(df['macd'], -5, i), is_crossunder(df['signal'], -5, i), is_crossunder(df['top'], -5, i)]):
+                            sigs.append(f"{current_time} M5S")
+                    inv = 0
+                    if interval == "1m":
+                        inv = 60 *last_candle
+                    if interval == "5m":
+                        inv = 300*last_candle
+                    if interval == "30m":
+                        inv = 1800 *last_candle
+                    if interval == "1h":
+                        inv = 3600*last_candle
+                    if interval == "4h":
+                        inv = 14400*last_candle
+                    if interval == "1d":
+                        inv = 86400*last_candle
+                    if interval == "1w":
+                        inv = 604800*last_candle
+                    if time_diff.total_seconds() > inv:
+                        continue
+                    if 0 < len(sigs):
+                        sigs.append(f"[{interval}]")
+                        # Sondan önceki mumun kapanış değerini ekle
+                        previous_close = df['close'].iloc[-2] if len(df) > 1 else None
+                        
+                        # Yüzdeyi ekle
+                        signal_info = " | ".join(sigs) + f" (Önceki Kapanış: ${previous_close:,.2f})"
+                        if last_diff_percent is not None:
+                            signal_info += f" %{last_diff_percent:.2f}"
+                        
+                        signals.append(signal_info)
+                        
+                        # Sinyal oluştuğunda mesaj gönder
+                        message = f"{pair}\nFiyat: ${df['close'].iloc[-1]}\nönceki kapanış:{previous_close}\nEMA200: {last_ema200_close}"
+                        if last_diff_percent is not None:
+                            message += f"\n%{last_diff_percent:.2f}"
+                        message += f"\nSinyal: {' | '.join(sigs)}\n-------------"
+                        print(colored(message, "cyan"))
+                except Exception as e:
+                    continue
+        
+        return (pair, df['close'].iloc[-1], signals[-3:] if signals else None, last_ema200_close, last_diff_percent)
+        
+    except Exception as e:
+        return (pair, None, f"Hata: {str(e)}", None, None)
+
+async def get_active_pairs(session, trading_type='spot'):
+    if trading_type == 'perpetual':
+        url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
+    else:
+        url = "https://api.binance.com/api/v3/exchangeInfo"
+        
+    try:
+        data = await fetch_with_retry(session, url)
+        pairs = []
+        for symbol in data['symbols']:
+            if symbol['status'] == 'TRADING' and symbol['quoteAsset'] == 'USDT':
+                pairs.append(symbol['symbol'])
+        return pairs
+    except Exception as e:
+        print(colored(f"Çiftler alınamadı: {str(e)}", "red"))
+        return []
+
+async def main():
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    }
+    async with aiohttp.ClientSession(headers=headers) as session:
+        active_pairs = await get_active_pairs(session)
+        
+        start_time = time.time()
+        print(colored(f"🚀 Toplam {len(active_pairs)} aktif çift taranıyor...", "cyan", attrs=['bold']))
+        
+        found = []
+        error_count = 0
+        intervals = ["1m","15m","1h","1d","1w","1M"]
+        
+        # Eş zamanlı istek sayısını sınırla
+        MAX_CONCURRENT_REQUESTS = 30
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
+        
+        async def fetch_with_semaphore(pair, interval):
+            async with semaphore:
+                await asyncio.sleep(random.uniform(0.1, 0.5))
+                return await get_binance_data(pair, interval, session)
+        
+        tasks = [fetch_with_semaphore(pair, interval) for pair in active_pairs for interval in intervals]
+        results = await asyncio.gather(*tasks)
+    for result in results:
+        if result[1] is not None and result[2] is not None:
+            price = colored(f"${result[1]:,}", "yellow")
+            if result[1] < result[3]:
+                emma = colored("🔻", "red")
+            if result[1] > result[3]:
+                emma = colored("🔼", "green")
+            
+            header = colored(f"🎯 {result[0]:<12}", "magenta") + colored("│ ", "white") + price + emma
+            
+            # Yüzdeyi ekle (eğer varsa)
+            diff_percent = result[4]
+            if diff_percent is not None:
+                diff_color = "green" if diff_percent > 0 else "red"
+                header += " " + colored(f"%{diff_percent:.2f}", diff_color)
+                
+            print(header)
+            print(colored("   └────────────────────────", "white"))
+            found.append(result)
+
+
+    print(colored("\n" + "═" * 50, "blue"))
+    print(colored("🔍 SONUÇLAR", "green", attrs=['bold']))
+    print(colored(f"• Sinyal Bulunan: {len(found)}", "cyan"))
+    toplam_islenen = len(active_pairs) - error_count
+    oran = (len(found) / toplam_islenen * 100) if toplam_islenen != 0 else 0
+    print(colored(f"• Başarı Oranı: {oran:.1f}%", "yellow"))
+    print(colored("═" * 50 + "\n", "blue"))
+    
+    print(colored(f"\n⏱️ Toplam süre: {time.time() - start_time:.1f} saniye", "yellow", attrs=['bold']))
+
+if __name__ == "__main__":
+    asyncio.run(main())

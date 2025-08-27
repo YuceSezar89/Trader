@@ -1,0 +1,42 @@
+
+.nx/installation
+.nx/cache
+.nx/workspace-data
+
+
+.cursor/rules/nx-rules.mdc
+ 
+# --- Python genel ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+
+# --- Sanal ortamlar ---
+.venv/
+venv/
+env/
+
+# --- IDE/OS ---
+.DS_Store
+.vscode/
+.idea/
+
+# --- Uygulama çıktıları/loglar ---
+logs/
+*.log
+exports/
+
+# --- Veritabanı/Geçici ---
+*.db
+*.db-shm
+*.db-wal
+signals.db
+signals.db-shm
+signals.db-wal
+
+# --- Streamlit/Secrets (dosya varsa) ---
+.streamlit/secrets.toml
+.github/instructions/nx.instructions.md

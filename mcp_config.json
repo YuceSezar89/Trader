@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "fetch": {
+      "command": "mcp-server-fetch",
+      "args": [],
+      "transport": "stdio"
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC"
+      ],
+      "transport": "stdio"
+    }
+  }
+}

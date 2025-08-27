@@ -1,0 +1,886 @@
+//@version=5
+indicator("%CG Panel + Tablo", overlay=false)
+
+// Inputs
+length = input.int(200, "EMA Length", step=1)
+
+// Z-Score uzunluu
+z_score_length = input.int(14, "Z-Score Length", minval=1)
+
+// Ratios Inputs
+rf = input.float(0.02, title="Risk-Free Rate for Ratios", step=0.001)
+period = input.int(14, title="Ratios Calculation Period")
+
+//Tablo Gˆsterilsin mi 
+tablo=input.bool(true,"Tablo Gˆsterilsin mi?")
+
+// Inputs for symbols
+symbol1 = input.symbol("BINANCE:BTCUSDT", "Symbol 1 (BTC)")
+symbol2 = input.symbol("BINANCE:ETHUSDT", "Symbol 2 (ETH)")
+symbol3 = input.symbol("BINANCE:BNBUSDT", "Symbol 3 (BNB)")
+symbol4 = input.symbol("BINANCE:ADAUSDT", "Symbol 4 (ADA)")
+symbol5 = input.symbol("BINANCE:XRPUSDT", "Symbol 5 (XRP)")
+symbol6 = input.symbol("BINANCE:LTCUSDT", "Symbol 6 (LTC)")
+symbol7 = input.symbol("BINANCE:DOTUSDT", "Symbol 7 (DOT)")
+symbol8 = input.symbol("BINANCE:SOLUSDT", "Symbol 8 (SOL)")
+symbol9 = input.symbol("BINANCE:AVAXUSDT", "Symbol 9 (AVAX)")
+symbol10 = input.symbol("BINANCE:TRXUSDT", "Symbol 10 (TRX)")
+symbol11 = input.symbol("BINANCE:UNIUSDT", "Symbol 11 (UNI)")
+symbol12 = input.symbol("BINANCE:LINKUSDT", "Symbol 12 (LINK)")
+symbol13 = input.symbol("BINANCE:VETUSDT", "Symbol 13 (VET)")
+symbol14 = input.symbol("BINANCE:XLMUSDT", "Symbol 14 (XLM)")
+symbol15 = input.symbol("BINANCE:NEARUSDT", "Symbol 15 (NEAR)")
+symbol16 = input.symbol("BINANCE:WIFUSDT", "Symbol 16 (WIF)")
+symbol17 = input.symbol("BINANCE:ZRXUSDT", "Symbol 17 (ZRX)")
+symbol18 = input.symbol("BINANCE:ATOMUSDT", "Symbol 18 (ATOM)")
+symbol19 = input.symbol("BINANCE:CAKEUSDT", "Symbol 19 (CAKE)")
+symbol20 = input.symbol("BINANCE:KSMUSDT", "Symbol 20 (KSM)")
+
+// Colors
+color_positive = input.color(color.new(color.green, 0), "Positive Color")
+color_negative = input.color(color.new(color.red, 0), "Negative Color")
+
+// Function to calculate percentage difference
+f_calculate_diff(sym, len) =>
+    src = request.security(sym, timeframe.period, close)
+    ema_value = ta.ema(src, len)  // EMA Calculation
+    stdev_value = ta.stdev(src, len)  // Standard Deviation Calculation
+    zscore = (src - ema_value) / stdev_value  // Z-Score Calculation
+    diff_percent = zscore * 100  // Percentage Difference based on Z-Score
+    diff_percent
+
+
+// Calculate differences for each symbol
+diff1 = f_calculate_diff(symbol1, length)
+diff2 = f_calculate_diff(symbol2, length)
+diff3 = f_calculate_diff(symbol3, length)
+diff4 = f_calculate_diff(symbol4, length)
+diff5 = f_calculate_diff(symbol5, length)
+diff6 = f_calculate_diff(symbol6, length)
+diff7 = f_calculate_diff(symbol7, length)
+diff8 = f_calculate_diff(symbol8, length)
+diff9 = f_calculate_diff(symbol9, length)
+diff10 = f_calculate_diff(symbol10, length)
+diff11 = f_calculate_diff(symbol11, length)
+diff12 = f_calculate_diff(symbol12, length)
+diff13 = f_calculate_diff(symbol13, length)
+diff14 = f_calculate_diff(symbol14, length)
+diff15 = f_calculate_diff(symbol15, length)
+diff16 = f_calculate_diff(symbol16, length)
+diff17 = f_calculate_diff(symbol17, length)
+diff18 = f_calculate_diff(symbol18, length)
+diff19 = f_calculate_diff(symbol19, length)
+diff20 = f_calculate_diff(symbol20, length)
+
+f_array_avg_pos_neg(arr) =>
+    posArray = array.new_float()  // Pozitif deerleri saklayan dizi
+    negArray = array.new_float()  // Negatif deerleri saklayan dizi
+
+    // Diziyi dˆng¸yle kontrol et
+    for i = 0 to array.size(arr) - 1
+        value = array.get(arr, i)
+        if value >= 0
+            array.push(posArray, value)  // Pozitifse pozitif diziye ekle
+        else
+            array.push(negArray, value)  // Negatifse negatif diziye ekle
+
+    // Pozitif ortalama
+    posAvg = array.size(posArray) > 0 ? array.sum(posArray) / array.size(posArray) : na
+
+    // Negatif ortalama
+    negAvg = array.size(negArray) > 0 ? array.sum(negArray) / array.size(negArray) : na
+
+    [posAvg, negAvg]  // ıki deeri dˆnd¸r
+//
+
+
+
+// Plot percentage differences in the lower panel
+plot(not na(diff1) ? diff1 : na, title="BTC", color=(diff1 >= 0 ? color.green : color_negative), linewidth=2)
+plot(not na(diff2) ? diff2 : na, title="ETH", color=(diff2 >= 0 ? color.blue : color_negative), linewidth=2)
+plot(not na(diff3) ? diff3 : na, title="BNB", color=(diff3 >= 0 ? color.purple : color_negative), linewidth=2)
+plot(not na(diff4) ? diff4 : na, title="ADA", color=(diff4 >= 0 ? color.red : color_negative), linewidth=2)
+plot(not na(diff5) ? diff5 : na, title="XRP", color=(diff5 >= 0 ? color.orange : color_negative), linewidth=2)
+plot(not na(diff6) ? diff6 : na, title="LTC", color=(diff6 >= 0 ? color.yellow : color_negative), linewidth=2)
+plot(not na(diff7) ? diff7 : na, title="DOT", color=(diff7 >= 0 ? color.fuchsia : color_negative), linewidth=2)
+plot(not na(diff8) ? diff8 : na, title="SOL", color=(diff8 >= 0 ? #8edbc1 : color_negative), linewidth=2)
+plot(not na(diff9) ? diff9 : na, title="AVAX", color=(diff9 >= 0 ? #92cbfa : color_negative), linewidth=2)
+plot(not na(diff10) ? diff10 : na, title="TRX", color=(diff10 >= 0 ? #555555 : color_negative), linewidth=2)
+plot(not na(diff11) ? diff11 : na, title="UNI", color=(diff11 >= 0 ? color.gray : color_negative), linewidth=2)
+plot(not na(diff12) ? diff12 : na, title="LINK", color=(diff12 >= 0 ? color.navy : color_negative), linewidth=2)
+plot(not na(diff13) ? diff13 : na, title="VET", color=(diff13 >= 0 ? color.maroon : color_negative), linewidth=2)
+plot(not na(diff14) ? diff14 : na, title="XLM", color=(diff14 >= 0 ? color.red : color_negative), linewidth=2)
+plot(not na(diff15) ? diff15 : na, title="NEAR", color=(diff15 >= 0 ? #1c0ee7 : color_negative), linewidth=2)
+plot(not na(diff16) ? diff16 : na, title="WIF", color=(diff16 >= 0 ? color.fuchsia : color_negative), linewidth=2)
+plot(not na(diff17) ? diff17 : na, title="ZRX", color=(diff17 >= 0 ? color.purple : color_negative), linewidth=2)
+plot(not na(diff18) ? diff18 : na, title="ATOM", color=(diff18 >= 0 ? color.orange : color_negative), linewidth=2)
+plot(not na(diff19) ? diff19 : na, title="XTZ", color=(diff19 >= 0 ? color.yellow : color_negative), linewidth=2)
+plot(not na(diff20) ? diff20 : na, title="KSM", color=(diff20 >= 0 ? color.gray : color_negative), linewidth=2)
+
+
+
+// Function to create labels 
+f_create_label(diff, color, label_text, ypos, label_id) =>
+    if barstate.islast
+        if not na(label_id)
+            label.delete(label_id)
+        label.new(bar_index, ypos, text=label_text, color=color, textcolor=color.white, style=label.style_label_left, size=size.small)
+
+// Create labels for each symbol
+var label label1 = na
+var label label2 = na
+var label label3 = na
+var label label4 = na
+var label label5 = na
+var label label6 = na
+var label label7 = na
+var label label8 = na
+var label label9 = na
+var label label10 = na
+var label label11 = na
+var label label12 = na
+var label label13 = na
+var label label14 = na
+var label label15 = na
+var label label16 = na
+var label label17 = na
+var label label18 = na
+var label label19 = na
+var label label20 = na
+
+// Update labels dynamically
+label1 := f_create_label(diff1, diff1 >= 0 ? color.green : color_negative, syminfo.ticker(symbol1), diff1, label1)
+label2 := f_create_label(diff2, diff2 >= 0 ? color.blue : color_negative, syminfo.ticker(symbol2), diff2, label2)
+label3 := f_create_label(diff3, diff3 >= 0 ? color.purple : color_negative, syminfo.ticker(symbol3), diff3, label3)
+label4 := f_create_label(diff4, diff4 >= 0 ? color.red : color_negative, syminfo.ticker(symbol4), diff4, label4)
+label5 := f_create_label(diff5, diff5 >= 0 ? color.orange : color_negative, syminfo.ticker(symbol5), diff5, label5)
+label6 := f_create_label(diff6, diff6 >= 0 ? color.yellow : color_negative, syminfo.ticker(symbol6), diff6, label6)
+label7 := f_create_label(diff7, diff7 >= 0 ? color.fuchsia : color_negative, syminfo.ticker(symbol7), diff7, label7)
+label8 := f_create_label(diff8, diff8 >= 0 ? #8edbc1 : color_negative, syminfo.ticker(symbol8), diff8, label8)
+label9 := f_create_label(diff9, diff9 >= 0 ? #92cbfa : color_negative, syminfo.ticker(symbol9), diff9, label9)
+label10 := f_create_label(diff10, diff10 >= 0 ? #555555 : color_negative, syminfo.ticker(symbol10), diff10, label10)
+label11 := f_create_label(diff11, diff11 >= 0 ? color.gray : color_negative, syminfo.ticker(symbol11), diff11, label11)
+label12 := f_create_label(diff12, diff12 >= 0 ? color.navy : color_negative, syminfo.ticker(symbol12), diff12, label12)
+label13 := f_create_label(diff13, diff13 >= 0 ? color.maroon : color_negative, syminfo.ticker(symbol13), diff13, label13)
+label14 := f_create_label(diff14, diff14 >= 0 ? color.red : color_negative, syminfo.ticker(symbol14), diff14, label14)
+label15 := f_create_label(diff15, diff15 >= 0 ? #1c0ee7 : color_negative, syminfo.ticker(symbol15), diff15, label15)
+label16 := f_create_label(diff16, diff16 >= 0 ? color.fuchsia : color_negative, syminfo.ticker(symbol16), diff16, label16)
+label17 := f_create_label(diff17, diff17 >= 0 ? color.purple : color_negative, syminfo.ticker(symbol17), diff17, label17)
+label18 := f_create_label(diff18, diff18 >= 0 ? color.orange : color_negative, syminfo.ticker(symbol18), diff18, label18)
+label19 := f_create_label(diff19, diff19 >= 0 ? color.yellow : color_negative, syminfo.ticker(symbol19), diff19, label19)
+label20 := f_create_label(diff20, diff20 >= 0 ? color.gray : color_negative, syminfo.ticker(symbol20), diff20, label20)
+
+// Momentum(ROC) hesaplama fonksiyonu
+f_calculate_Momentum_ROC(sym3, len) =>
+    src = request.security(sym3, timeframe.period, close)
+
+    // EMA200 Hesaplama
+    ema200 = request.security(sym3, timeframe.period, ta.ema(src, len))
+
+    // EMA200 Kesi˛im Ko˛ulu
+    crossUp = ta.crossover(src, ema200)
+
+    // Kesi˛im Mumunun Kapan˝˛˝n˝ ve EMA200 Deerini Kaydet
+    crossClose = ta.valuewhen(crossUp, src, 0)
+    crossEma200 = ta.valuewhen(crossUp, ema200, 0)
+
+    // Momentum Hesaplama (Kesi˛im Mumunun ÷nceki Deerine Gˆre)
+    momentum = crossClose - ta.valuewhen(crossUp, src[1], 0)
+
+    // ROC (Rate of Change) - Kesi˛im Mumuna Gˆre
+    momentumROC = ((crossClose / ta.valuewhen(crossUp, src[1], 0)) - 1) * 100
+    momentumROC
+//
+
+
+// Calculate Momentum(ROC) for each symbol
+mROC1 = f_calculate_Momentum_ROC(symbol1, length)
+mROC2 = f_calculate_Momentum_ROC(symbol2, length)
+mROC3 = f_calculate_Momentum_ROC(symbol3, length)
+mROC4 = f_calculate_Momentum_ROC(symbol4, length)
+mROC5 = f_calculate_Momentum_ROC(symbol5, length)
+mROC6 = f_calculate_Momentum_ROC(symbol8, length)
+mROC7 = f_calculate_Momentum_ROC(symbol9, length)
+mROC8 = f_calculate_Momentum_ROC(symbol10, length)
+mROC9 = f_calculate_Momentum_ROC(symbol11, length)
+mROC10 = f_calculate_Momentum_ROC(symbol12, length)
+mROC11 = f_calculate_Momentum_ROC(symbol13, length)
+mROC12 = f_calculate_Momentum_ROC(symbol14, length)
+mROC13 = f_calculate_Momentum_ROC(symbol15, length)
+mROC14 = f_calculate_Momentum_ROC(symbol16, length)
+mROC15 = f_calculate_Momentum_ROC(symbol17, length)
+mROC16 = f_calculate_Momentum_ROC(symbol18, length)
+mROC17 = f_calculate_Momentum_ROC(symbol19, length)
+mROC18 = f_calculate_Momentum_ROC(symbol20, length)
+mROC19 = f_calculate_Momentum_ROC(symbol20, length)
+mROC20 = f_calculate_Momentum_ROC(symbol20, length)
+
+
+
+// Momentum(ROC) hesaplama fonksiyonu
+f_calculate_Momentum_ROCs(sym5, len) =>
+    src = request.security(sym5, timeframe.period, close)
+
+    // EMA200 Hesaplama
+    ema200 = request.security(sym5, timeframe.period, ta.ema(src, len))
+
+    // EMA200 Kesi˛im Ko˛ulu
+    crossDown = ta.crossunder(src, ema200)
+
+    // Kesi˛im Mumunun Kapan˝˛˝n˝ ve EMA200 Deerini Kaydet
+    crossClose = ta.valuewhen(crossDown, src, 0)
+    crossEma200 = ta.valuewhen(crossDown, ema200, 0)
+
+    // Momentum Hesaplama (Kesi˛im Mumunun ÷nceki Deerine Gˆre)
+    momentum = crossClose - ta.valuewhen(crossDown, src[1], 0)
+
+    // ROC (Rate of Change) - Kesi˛im Mumuna Gˆre
+    momentumROC = ((crossClose / ta.valuewhen(crossDown, src[1], 0)) - 1) * 100
+    momentumROC
+//
+
+// Calculate Momentum(ROC) for each symbol
+mROCs1 = f_calculate_Momentum_ROCs(symbol1, length)
+mROCs2 = f_calculate_Momentum_ROCs(symbol2, length)
+mROCs3 = f_calculate_Momentum_ROCs(symbol3, length)
+mROCs4 = f_calculate_Momentum_ROCs(symbol4, length)
+mROCs5 = f_calculate_Momentum_ROCs(symbol5, length)
+mROCs6 = f_calculate_Momentum_ROCs(symbol8, length)
+mROCs7 = f_calculate_Momentum_ROCs(symbol9, length)
+mROCs8 = f_calculate_Momentum_ROCs(symbol10, length)
+mROCs9 = f_calculate_Momentum_ROCs(symbol11, length)
+mROCs10 = f_calculate_Momentum_ROCs(symbol12, length)
+mROCs11 = f_calculate_Momentum_ROCs(symbol13, length)
+mROCs12 = f_calculate_Momentum_ROCs(symbol14, length)
+mROCs13 = f_calculate_Momentum_ROCs(symbol15, length)
+mROCs14 = f_calculate_Momentum_ROCs(symbol16, length)
+mROCs15 = f_calculate_Momentum_ROCs(symbol17, length)
+mROCs16 = f_calculate_Momentum_ROCs(symbol18, length)
+mROCs17 = f_calculate_Momentum_ROCs(symbol19, length)
+mROCs18 = f_calculate_Momentum_ROCs(symbol20, length)
+mROCs19 = f_calculate_Momentum_ROCs(symbol20, length)
+mROCs20 = f_calculate_Momentum_ROCs(symbol20, length)
+
+// R-Score hesaplama fonksiyonu
+f_calculate_ratios(sym2, len) =>
+    data = request.security(sym2, timeframe.period, close)
+    returns = math.log(data / data[1])
+    average_return = ta.sma(returns, len)
+    stddev_return = ta.stdev(returns, len)
+   
+    // Sharpe Ratio
+    sharpe_ratio = (average_return - rf) / stddev_return
+
+    // Sortino Ratio
+    neg_deviation = ta.stdev(ta.valuewhen(returns < 0, returns, 0), len)
+    sortino_ratio = (average_return - rf) / neg_deviation
+
+    // Calmar Ratio
+    max_drawdown = ta.highest(data, len) - ta.lowest(data, len)
+    calmar_ratio = average_return / max_drawdown
+
+    // Omega Ratio
+    threshold = rf
+    denom_omega = math.sum(ta.valuewhen(returns < threshold, threshold - returns, 0), len)
+    num_omega = math.sum(ta.valuewhen(returns >= threshold, returns - threshold, 0), len)
+    omega_ratio = num_omega / denom_omega
+
+    diff_ratio_avg = sortino_ratio * 0.40 + omega_ratio * 0.30 + calmar_ratio * 0.20 + sharpe_ratio * 0.10  // Average Ratios
+    diff_ratio_avg
+
+// Her sembol¸n R-Score deerini hesapla
+r_score1 = f_calculate_ratios(symbol1, period)
+r_score2 = f_calculate_ratios(symbol2, period)
+r_score3 = f_calculate_ratios(symbol3, period)
+r_score4 = f_calculate_ratios(symbol4, period)
+r_score5 = f_calculate_ratios(symbol5, period)
+r_score6 = f_calculate_ratios(symbol6, period)
+r_score7 = f_calculate_ratios(symbol7, period)
+r_score8 = f_calculate_ratios(symbol8, period)
+r_score9 = f_calculate_ratios(symbol9, period)
+r_score10 = f_calculate_ratios(symbol10, period)
+r_score11 = f_calculate_ratios(symbol11, period)
+r_score12 = f_calculate_ratios(symbol12, period)
+r_score13 = f_calculate_ratios(symbol13, period)
+r_score14 = f_calculate_ratios(symbol14, period)
+r_score15 = f_calculate_ratios(symbol15, period)
+r_score16 = f_calculate_ratios(symbol16, period)
+r_score17 = f_calculate_ratios(symbol17, period)
+r_score18 = f_calculate_ratios(symbol18, period)
+r_score19 = f_calculate_ratios(symbol19, period)
+r_score20 = f_calculate_ratios(symbol20, period)
+
+
+// GeÁen Mum Say˝s˝ hesaplama fonksiyonu
+f_calculate_Mum_Say(sym4, len) =>
+    src = request.security(sym4, timeframe.period, close)
+    ema200 = ta.ema(src, len)
+
+    // EMA200'¸ yukar˝ kesme kontrol¸
+    crossUp = ta.crossover(src, ema200)
+
+    // Son yukar˝ kesi˛imden itibaren geÁen mum say˝s˝
+    barsSinceCross = ta.barssince(crossUp)
+
+    barsSinceCross
+ 
+//
+
+// Calculate GeÁen Mum Say˝s˝ for each symbol
+msayl1 = f_calculate_Mum_Say(symbol1, length)
+msayl2 = f_calculate_Mum_Say(symbol2, length)
+msayl3 = f_calculate_Mum_Say(symbol3, length)
+msayl4 = f_calculate_Mum_Say(symbol4, length)
+msayl5 = f_calculate_Mum_Say(symbol5, length)
+msayl6 = f_calculate_Mum_Say(symbol8, length)
+msayl7 = f_calculate_Mum_Say(symbol9, length)
+msayl8 = f_calculate_Mum_Say(symbol10, length)
+msayl9 = f_calculate_Mum_Say(symbol11, length)
+msayl10 = f_calculate_Mum_Say(symbol12, length)
+msayl11 = f_calculate_Mum_Say(symbol13, length)
+msayl12 = f_calculate_Mum_Say(symbol14, length)
+msayl13 = f_calculate_Mum_Say(symbol15, length)
+msayl14 = f_calculate_Mum_Say(symbol16, length)
+msayl15 = f_calculate_Mum_Say(symbol17, length)
+msayl16 = f_calculate_Mum_Say(symbol18, length)
+msayl17 = f_calculate_Mum_Say(symbol19, length)
+msayl18 = f_calculate_Mum_Say(symbol20, length)
+msayl19 = f_calculate_Mum_Say(symbol20, length)
+msayl20 = f_calculate_Mum_Say(symbol20, length)
+
+// GeÁen Mum Say˝s˝ hesaplama fonksiyonu
+f_calculate_Mum_Says(sym4, len) =>
+    src = request.security(sym4, timeframe.period, close)
+    ema200 = ta.ema(src, len)
+
+    // EMA200'¸ a˛a˝ kesme kontrol¸
+    crossDown = ta.crossunder(src, ema200)
+
+    // Son yukar˝ kesi˛imden itibaren geÁen mum say˝s˝
+    barsSinceCross = ta.barssince(crossDown)
+    barsSinceCross
+//
+
+// Calculate GeÁen Mum Say˝s˝ for each symbol
+msays1 = f_calculate_Mum_Says(symbol1, length)
+msays2 = f_calculate_Mum_Says(symbol2, length)
+msays3 = f_calculate_Mum_Says(symbol3, length)
+msays4 = f_calculate_Mum_Says(symbol4, length)
+msays5 = f_calculate_Mum_Says(symbol5, length)
+msays6 = f_calculate_Mum_Says(symbol8, length)
+msays7 = f_calculate_Mum_Says(symbol9, length)
+msays8 = f_calculate_Mum_Says(symbol10, length)
+msays9 = f_calculate_Mum_Says(symbol11, length)
+msays10 = f_calculate_Mum_Says(symbol12, length)
+msays11 = f_calculate_Mum_Says(symbol13, length)
+msays12 = f_calculate_Mum_Says(symbol14, length)
+msays13 = f_calculate_Mum_Says(symbol15, length)
+msays14 = f_calculate_Mum_Says(symbol16, length)
+msays15 = f_calculate_Mum_Says(symbol17, length)
+msays16 = f_calculate_Mum_Says(symbol18, length)
+msays17 = f_calculate_Mum_Says(symbol19, length)
+msays18 = f_calculate_Mum_Says(symbol20, length)
+msays19 = f_calculate_Mum_Says(symbol20, length)
+msays20 = f_calculate_Mum_Says(symbol20, length)
+
+
+
+// Dizi Tan˝mlamalar˝
+r_scores = array.new_float()
+symbols = array.new_string()
+indices = array.new_int()
+indices2 = array.new_int()
+indices3 = array.new_int()
+indices4 = array.new_int()
+ratios = array.new_float()
+colors = array.new_color()
+mROCs = array.new_float()
+mROCsS = array.new_float()
+msayl = array.new_int() 
+msays = array.new_int() 
+
+array.push(r_scores, r_score1)
+array.push(symbols, symbol1)
+array.push(indices, 1)
+array.push(indices2, 1)
+array.push(indices3, 1)
+array.push(indices4, 1)
+array.push(ratios, diff1)
+array.push(colors, color.green)
+array.push(mROCs, mROC1)
+array.push(msayl, msayl1)
+array.push(mROCsS, mROCs1)
+array.push(msays, msays1)
+
+array.push(r_scores, r_score2)
+array.push(symbols, symbol2)
+array.push(indices, 2)
+array.push(indices2, 2)
+array.push(indices3, 2)
+array.push(indices4, 2)
+array.push(ratios, diff2)
+array.push(colors, color.blue)
+array.push(mROCs, mROC2)
+array.push(msayl, msayl2)
+array.push(mROCsS, mROCs2)
+array.push(msays, msays2)
+
+array.push(r_scores, r_score3)
+array.push(symbols, symbol3)
+array.push(indices, 3)
+array.push(indices2, 3)
+array.push(indices3, 3)
+array.push(indices4, 3)
+array.push(ratios, diff3)
+array.push(colors, color.purple)
+array.push(mROCs, mROC3)
+array.push(msayl, msayl3)
+array.push(mROCsS, mROCs3)
+array.push(msays, msays3)
+
+array.push(r_scores, r_score4)
+array.push(symbols, symbol4)
+array.push(indices, 4)
+array.push(indices2, 4)
+array.push(indices3, 4)
+array.push(indices4, 4)
+array.push(ratios, diff4)
+array.push(colors, color.red)
+array.push(mROCs, mROC4)
+array.push(msayl, msayl4)
+array.push(mROCsS, mROCs4)
+array.push(msays, msays4)
+
+array.push(r_scores, r_score5)
+array.push(symbols, symbol5)
+array.push(indices, 5)
+array.push(indices2, 5)
+array.push(indices3, 5)
+array.push(indices4, 5)
+array.push(ratios, diff5)
+array.push(colors, color.orange)
+array.push(mROCs, mROC5)
+array.push(msayl, msayl5)
+array.push(mROCsS, mROCs5)
+array.push(msays, msays5)
+
+array.push(r_scores, r_score6)
+array.push(symbols, symbol6)
+array.push(indices, 6)
+array.push(indices2, 6)
+array.push(indices3, 6)
+array.push(indices4, 6)
+array.push(ratios, diff6)
+array.push(colors, color.yellow)
+array.push(mROCs, mROC6)
+array.push(msayl, msayl6)
+array.push(mROCsS, mROCs6)
+array.push(msays, msays6)
+
+array.push(r_scores, r_score7)
+array.push(symbols, symbol7)
+array.push(indices, 7)
+array.push(indices2, 7)
+array.push(indices3, 7)
+array.push(indices4, 7)
+array.push(ratios, diff7)
+array.push(colors, color.fuchsia)
+array.push(mROCs, mROC7)
+array.push(msayl, msayl7)
+array.push(mROCsS, mROCs7)
+array.push(msays, msays7)
+
+array.push(r_scores, r_score8)
+array.push(symbols, symbol8)
+array.push(indices, 8)
+array.push(indices2, 8)
+array.push(indices3, 8)
+array.push(indices4, 8)
+array.push(ratios, diff8)
+array.push(colors, #8edbc1)
+array.push(mROCs, mROC8)
+array.push(msayl, msayl8)
+array.push(mROCsS, mROCs8)
+array.push(msays, msays8)
+
+array.push(r_scores, r_score9)
+array.push(symbols, symbol9)
+array.push(indices, 9)
+array.push(indices2, 9)
+array.push(indices3, 9)
+array.push(indices4, 9)
+array.push(ratios, diff9)
+array.push(colors, #92cbfa)
+array.push(mROCs, mROC9)
+array.push(msayl, msayl9)
+array.push(mROCsS, mROCs9)
+array.push(msays, msays9)
+
+array.push(r_scores, r_score10)
+array.push(symbols, symbol10)
+array.push(indices, 10)
+array.push(indices2, 10)
+array.push(indices3, 10)
+array.push(indices4, 10)
+array.push(ratios, diff10)
+array.push(colors, #555555)
+array.push(mROCs, mROC10)
+array.push(msayl, msayl10)
+array.push(mROCsS, mROCs10)
+array.push(msays, msays10)
+
+array.push(r_scores, r_score11)
+array.push(symbols, symbol11)
+array.push(indices, 11)
+array.push(indices2, 11)
+array.push(indices3, 11)
+array.push(indices4, 11)
+array.push(ratios, diff11)
+array.push(colors, color.gray)
+array.push(mROCs, mROC11)
+array.push(msayl, msayl11)
+array.push(mROCsS, mROCs11)
+array.push(msays, msays11)
+
+array.push(r_scores, r_score12)
+array.push(symbols, symbol12)
+array.push(indices, 12)
+array.push(indices2, 12)
+array.push(indices3, 12)
+array.push(indices4, 12)
+array.push(ratios, diff12)
+array.push(colors, color.navy)
+array.push(mROCs, mROC12)
+array.push(msayl, msayl12)
+array.push(mROCsS, mROCs12)
+array.push(msays, msays12)
+
+array.push(r_scores, r_score13)
+array.push(symbols, symbol13)
+array.push(indices, 13)
+array.push(indices2, 13)
+array.push(indices3, 13)
+array.push(indices4, 13)
+array.push(ratios, diff13)
+array.push(colors, color.maroon)
+array.push(mROCs, mROC13)
+array.push(msayl, msayl13)
+array.push(mROCsS, mROCs13)
+array.push(msays, msays13)
+
+array.push(r_scores, r_score14)
+array.push(symbols, symbol14)
+array.push(indices, 14)
+array.push(indices2, 14)
+array.push(indices3, 14)
+array.push(indices4, 14)
+array.push(ratios, diff14)
+array.push(colors, color.red)
+array.push(mROCs, mROC14)
+array.push(msayl, msayl14)
+array.push(mROCsS, mROCs14)
+array.push(msays, msays14)
+
+array.push(r_scores, r_score15)
+array.push(symbols, symbol15)
+array.push(indices, 15)
+array.push(indices2, 15)
+array.push(indices3, 15)
+array.push(indices4, 15)
+array.push(ratios, diff15)
+array.push(colors, color.red )
+array.push(mROCs, mROC15)
+array.push(msayl, msayl15)
+array.push(mROCsS, mROCs15)
+array.push(msays, msays15)
+
+array.push(r_scores, r_score16)
+array.push(symbols, symbol16)
+array.push(indices, 16)
+array.push(indices2, 16)
+array.push(indices3, 16)
+array.push(indices4, 16)
+array.push(ratios, diff16)
+array.push(colors, color.fuchsia)
+array.push(mROCs, mROC16)
+array.push(msayl, msayl16)
+array.push(mROCsS, mROCs16)
+array.push(msays, msays16)
+
+array.push(r_scores, r_score17)
+array.push(symbols, symbol17)
+array.push(indices, 17)
+array.push(indices2, 17)
+array.push(indices3, 17)
+array.push(indices4, 17)
+array.push(ratios, diff17)
+array.push(colors, color.purple)
+array.push(mROCs, mROC17)
+array.push(msayl, msayl17)
+array.push(mROCsS, mROCs17)
+array.push(msays, msays17)
+
+array.push(r_scores, r_score18)
+array.push(symbols, symbol18)
+array.push(indices, 18)
+array.push(indices2, 18)
+array.push(indices3, 18)
+array.push(indices4, 18)
+array.push(ratios, diff18)
+array.push(colors, color.orange)
+array.push(mROCs, mROC18)
+array.push(msayl, msayl18)
+array.push(mROCsS, mROCs18)
+array.push(msays, msays18)
+
+array.push(r_scores, r_score19)
+array.push(symbols, symbol19)
+array.push(indices, 19)
+array.push(indices2, 19)
+array.push(indices3, 19)
+array.push(indices4, 19)
+array.push(ratios, diff19)
+array.push(colors, color.yellow)
+array.push(mROCs, mROC19)
+array.push(msayl, msayl19)
+array.push(mROCsS, mROCs19)
+array.push(msays, msays19)
+
+array.push(r_scores, r_score20)
+array.push(symbols, symbol20)
+array.push(indices, 20)
+array.push(indices2, 20)
+array.push(indices3, 20)
+array.push(indices4, 20)
+array.push(ratios, diff20)
+array.push(colors, color.gray)
+array.push(mROCs, mROC20)
+array.push(msayl, msayl20)
+array.push(mROCsS, mROCs20)
+array.push(msays, msays20)
+
+
+// Bubble Sort ile b¸y¸kten k¸Á¸e s˝ralama
+for i = 0 to array.size(r_scores) - 2
+    for j = 0 to array.size(r_scores) - i - 2
+        if array.get(r_scores, j) < array.get(r_scores, j + 1)
+
+            // R-Score'lar˝ dei˛ toku˛ et
+            temp_score = array.get(r_scores, j)
+            array.set(r_scores, j, array.get(r_scores, j + 1))
+            array.set(r_scores, j + 1, temp_score)
+            
+            // Sembolleri dei˛ toku˛ et
+            temp_symbol = array.get(symbols, j)
+            array.set(symbols, j, array.get(symbols, j + 1))
+            array.set(symbols, j + 1, temp_symbol)
+            
+            // ındeksleri dei˛ toku˛ et
+            temp_index = array.get(indices, j)
+            array.set(indices, j, array.get(indices, j + 1))
+            array.set(indices, j + 1, temp_index)
+
+
+// Bubble Sort ile b¸y¸kten k¸Á¸e s˝ralama
+for i = 0 to array.size(ratios) - 2
+    for j = 0 to array.size(ratios) - i - 2
+        if array.get(ratios, j) < array.get(ratios, j + 1)
+            
+            // ındeksleri dei˛ toku˛ et
+            temp_index2 = array.get(indices2, j)
+            array.set(indices2, j, array.get(indices2, j + 1))
+            array.set(indices2, j + 1, temp_index2)
+
+            // Ratiolar˝ dei˛ toku˛ et
+            temp_ratios = array.get(ratios, j)
+            array.set(ratios, j, array.get(ratios, j + 1))
+            array.set(ratios, j + 1, temp_ratios)
+
+            // Renkleri dei˛ toku˛ et
+            temp_colors = array.get(colors, j)
+            array.set(colors, j, array.get(colors, j + 1))
+            array.set(colors, j + 1, temp_colors)
+
+
+// Bubble Sort ile b¸y¸kten k¸Á¸e s˝ralama
+for i = 0 to array.size(mROCs) - 2
+    for j = 0 to array.size(mROCs) - i - 2
+        if array.get(mROCs, j) < array.get(mROCs, j + 1)
+            
+            // ındeksleri dei˛ toku˛ et
+            temp_index3 = array.get(indices3, j)
+            array.set(indices3, j, array.get(indices3, j + 1))
+            array.set(indices3, j + 1, temp_index3)
+
+            // Momentum(ROC) lar˝ dei˛ toku˛ et
+            temp_mROCs = array.get(mROCs, j)
+            array.set(mROCs, j, array.get(mROCs, j + 1))
+            array.set(mROCs, j + 1, temp_mROCs)
+
+            // GeÁen Mum Say˝s˝n˝ dei˛ toku˛ et
+            temp_msayl = array.get(msayl, j)
+            array.set(msayl, j, array.get(msayl, j + 1))
+            array.set(msayl, j + 1, temp_msayl)
+
+
+// Bubble Sort ile b¸y¸kten k¸Á¸e s˝ralama
+for i = 0 to array.size(mROCsS) - 2
+    for j = 0 to array.size(mROCsS) - i - 2
+        if array.get(mROCsS, j) < array.get(mROCsS, j + 1)
+            
+            // ındeksleri dei˛ toku˛ et
+            temp_index4 = array.get(indices4, j)
+            array.set(indices4, j, array.get(indices4, j + 1))
+            array.set(indices4, j + 1, temp_index4)
+
+            // Momentum(ROC) lar˝ dei˛ toku˛ et
+            temp_mROCsS = array.get(mROCsS, j)
+            array.set(mROCsS, j, array.get(mROCsS, j + 1))
+            array.set(mROCsS, j + 1, temp_mROCsS)
+
+            // GeÁen Mum Say˝s˝n˝ dei˛ toku˛ et
+            temp_msays = array.get(msays, j)
+            array.set(msays, j, array.get(msays, j + 1))
+            array.set(msays, j + 1, temp_msays)
+//
+
+// Fonksiyonu Áa˝r ve sonuÁlar˝ dei˛kenlere ata
+[avgPos, avgNeg] = f_array_avg_pos_neg(ratios)
+
+// Dinamik yatay Áizgiler iÁin plot kullan˝m˝
+plot(avgPos, title="Positive Average", color=#ffffff, linewidth=2, style=plot.style_line)
+plot(avgNeg, title="Negative Average", color=#ffffff, linewidth=2, style=plot.style_line)
+//
+
+if tablo
+    
+    tablo2 = table.new(position.top_right,columns=5, rows=21,border_width=1,border_color=#8aa4ff, frame_color=#8aa4ff, frame_width=1)
+
+   
+    table.cell(tablo2,0,0,bgcolor=#8aa4ff,text_color=color.white, text="1)Emtia",text_size=size.small)
+    table.cell(tablo2,1,0,bgcolor=#8aa4ff,text_color=color.white, text="Score",text_size=size.small)
+    table.cell(tablo2,2,0,bgcolor=#8aa4ff,text_color=color.white, text="Ratio",text_size=size.small)
+    table.cell(tablo2,3,0,bgcolor=#8aa4ff,text_color=color.white, text="L/S/T",text_size=size.small)
+    table.cell(tablo2,4,0,bgcolor=#8aa4ff,text_color=color.white, text="S/S/T",text_size=size.small)
+      
+
+    table.cell(tablo2,0,1,bgcolor= diff1 >= 0 ? color.green : color_negative, text_color=#000000, text='1)'+ str.tostring(symbol1),text_size=size.small)
+    table.cell(tablo2,1,1,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)    
+    table.cell(tablo2,2,1,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,3,1,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,4,1,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,0,2,bgcolor= diff2 >= 0 ? color.blue : color_negative,text_color=#000000, text='2)'+ str.tostring(symbol2),text_size=size.small)
+    table.cell(tablo2,1,2,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,2,2,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,3,2,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,4,2,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,0,3,bgcolor= diff3 >= 0 ? color.purple : color_negative, text_color=#000000, text='3)'+ str.tostring(symbol3),text_size=size.small)
+    table.cell(tablo2,1,3,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,2,3,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,3,3,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,4,3,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,0,4,bgcolor= diff4 >= 0 ? color.red : color_negative,text_color=#000000, text='4)'+ str.tostring(symbol4),text_size=size.small)
+    table.cell(tablo2,1,4,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,2,4,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,3,4,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,4,4,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,0,5,bgcolor= diff5 >= 0 ? color.orange : color_negative,text_color=#000000, text='5)'+ str.tostring(symbol5),text_size=size.small)
+    table.cell(tablo2,1,5,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,2,5,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,3,5,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,4,5,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,0,6,bgcolor= diff6>= 0 ? color.yellow : color_negative,text_color=#000000, text='6)'+ str.tostring(symbol6),text_size=size.small)
+    table.cell(tablo2,1,6,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)    
+    table.cell(tablo2,2,6,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,3,6,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,4,6,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,0,7,bgcolor= diff7 >= 0 ? color.fuchsia : color_negative,text_color=#000000, text='7)'+ str.tostring(symbol7),text_size=size.small)
+    table.cell(tablo2,1,7,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,2,7,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,3,7,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,4,7,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,0,8,bgcolor= diff8 >= 0 ? #8edbc1 : color_negative,text_color=#000000, text='8)'+ str.tostring(symbol8),text_size=size.small)
+    table.cell(tablo2,1,8,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,2,8,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,3,8,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,4,8,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,0,9,bgcolor= diff8 >= 0 ? #92cbfa : color_negative,text_color=#000000, text='9)'+ str.tostring(symbol9),text_size=size.small)
+    table.cell(tablo2,1,9,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,2,9,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,3,9,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,4,9,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,0,10,bgcolor= diff10 >= 0 ? #555555 : color_negative,text_color=#000000, text='10)'+ str.tostring(symbol10),text_size=size.small)
+    table.cell(tablo2,1,10,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,2,10,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,3,10,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,4,10,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,0,11,bgcolor= diff11 >= 0 ? color.gray : color_negative,text_color=#000000, text='11)'+ str.tostring(symbol11),text_size=size.small)
+    table.cell(tablo2,1,11,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,2,11,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,3,11,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,4,11,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,0,12,bgcolor= diff12 >= 0 ? color.navy : color_negative,text_color=#000000, text='12)'+ str.tostring(symbol12),text_size=size.small)
+    table.cell(tablo2,1,12,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,2,12,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,3,12,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,4,12,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,0,13,bgcolor= diff13 >= 0 ? color.maroon : color_negative,text_color=#000000, text='13)'+ str.tostring(symbol13),text_size=size.small)
+    table.cell(tablo2,1,13,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,2,13,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,3,13,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,4,13,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,0,14,bgcolor= diff14 >= 0 ? color.red : color_negative,text_color=#000000, text='14)'+ str.tostring(symbol14),text_size=size.small)
+    table.cell(tablo2,1,14,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)    
+    table.cell(tablo2,2,14,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,3,14,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,4,14,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,0,15,bgcolor= diff15 >= 0 ? #1c0ee7 : color_negative,text_color=#000000, text='15)'+ str.tostring(symbol15),text_size=size.small)
+    table.cell(tablo2,1,15,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,2,15,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,3,15,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,4,15,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,0,16,bgcolor= diff16 >= 0 ? color.fuchsia : color_negative,text_color=#000000, text='16)'+ str.tostring(symbol16),text_size=size.small)
+    table.cell(tablo2,1,16,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,2,16,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,3,16,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,4,16,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,0,17,bgcolor= diff17 >= 0 ? color.red : color_negative,text_color=#000000, text='17)'+ str.tostring(symbol17),text_size=size.small)
+    table.cell(tablo2,1,17,bgcolor=color.purple,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,2,17,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,3,17,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,4,17,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,0,18,bgcolor= diff18 >= 0 ? color.orange : color_negative,text_color=#000000, text='18)'+ str.tostring(symbol18),text_size=size.small)
+    table.cell(tablo2,1,18,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,2,18,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,3,18,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,4,18,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,0,19,bgcolor= diff19 >= 0 ? color.yellow : color_negative,text_color=#000000, text='19)'+ str.tostring(symbol19),text_size=size.small)
+    table.cell(tablo2,1,19,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,2,19,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,3,19,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,4,19,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,0,20,bgcolor= diff20 >= 0 ? color.gray : color_negative,text_color=#000000, text='20)'+ str.tostring(symbol20),text_size=size.small)
+    table.cell(tablo2,1,20,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,2,20,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,3,20,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+    table.cell(tablo2,4,20,bgcolor=color.red,text_color=color.black, text=str.tostring(7),text_size=size.tiny)
+
+
+
+
+    // Tabloya R-Score'lar˝ ekle
+    for i = 0 to array.size(r_scores) - 1
+        table.cell(tablo2, 1, i + 1, str.tostring(array.get(r_scores, i), "#.##") + ' / ' + str.tostring(array.get(indices, i)), bgcolor=color.new(color.gray, 90), text_color=color.white, text_size=size.small)
+
+    // Tabloya Ratio'lar˝ ekle
+    for i = 0 to array.size(ratios) - 1
+        table.cell(tablo2, 2, i + 1, str.tostring(array.get(ratios, i), "#.##") + ' / ' + str.tostring(array.get(indices2, i)), bgcolor = array.get(ratios, i) >= 0 ? array.get(colors, i) : color_negative, text_color=#000000, text_size=size.small)
+
+    // Tabloya Long Momentum'lar˝ ekle
+    for i = 0 to array.size(mROCs) - 1
+        table.cell(tablo2, 3, i + 1, str.tostring(array.get(mROCs, i), "#.##") + ' / ' + str.tostring(array.get(indices3, i)) + ' / ' +  str.tostring(array.get(msayl, i)), bgcolor =#009107, text_color=color.rgb(255, 255, 255), text_size=size.small)
+
+    // Tabloya Short Momentum'lar˝ ekle
+    for i = 0 to array.size(mROCsS) - 1
+        table.cell(tablo2, 4, i + 1, str.tostring(array.get(mROCsS, i), "#.##") + ' / ' + str.tostring(array.get(indices4, i)) + ' / ' +  str.tostring(array.get(msays, i)), bgcolor =color.rgb(145, 0, 0), text_color=color.rgb(255, 255, 255), text_size=size.small)
+

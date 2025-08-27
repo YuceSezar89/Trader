@@ -1,0 +1,2573 @@
+import math
+import time
+import json
+import pytz
+import queue
+import logging
+import threading
+import numpy as np
+from datetime import datetime
+from functools import lru_cache
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import csv
+import os
+
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+import pandas as pd
+
+import dash
+from dash import Dash, html, dcc, dash_table
+from dash.dependencies import Input, Output, State
+import plotly.graph_objects as go
+
+
+import joblib
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import StandardScaler
+import warnings
+warnings.filterwarnings("ignore")
+
+LOCAL_TZ = pytz.timezone("Europe/Istanbul")
+DEFAULT_TIMEFRAME = "15m"
+LIMIT = 500 
+SYMBOL_LIMIT = None  
+
+VOL_SMA_LEN = 20
+DEFAULT_MIN_STREAK = 3
+DEFAULT_MIN_PCT = 0.5
+DEFAULT_MIN_VOLR = 1.5
+DEFAULT_MIN_AI_SCORE = 0.3
+
+
+AUTO_REFRESH_INTERVAL = 1
+
+
+INITIAL_CAPITAL = 1000.0
+MAX_OPEN_POSITIONS = 3  
+
+COMMISSION_RATE = 0.0  
+STOP_LOSS_PCT = 0.02  
+TAKE_PROFIT_PCT = 0.04  
+SCAN_INTERVAL = 5  
+
+
+TRADES_CSV = 'ai_crypto_trades.csv'
+CAPITAL_CSV = 'ai_crypto_capital.csv'
+
+
+DEVISO_PARAMS = {
+    'zigzag_high_period': 10,
+    'zigzag_low_period': 10,
+    'min_movement_pct': 0.160,
+    'ma_period': 20,
+    'std_mult': 2.0,
+    'ma_length': 10
+}
+
+
+AI_PARAMS = {
+    'model_type': 'random_forest',
+    'retrain_interval': 50,
+    'min_data_for_training': 20,
+    'target_profit_threshold': 1.0,
+}
+
+MAX_WORKERS = 8           
+REQ_SLEEP = 0.05          
+TIMEOUT = 10
+
+BASE = "https://fapi.binance.com"
+EXCHANGE_INFO = f"{BASE}/fapi/v1/exchangeInfo"
+KLINES = f"{BASE}/fapi/v1/klines"  
+
+
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+log = logging.getLogger("crypto-analytics")
+
+
+current_capital = INITIAL_CAPITAL
+open_positions = {}
+trading_active = False
+paper_trade_thread = None
+
+session = requests.Session()
+session.headers.update({
+    "User-Agent": "crypto-analytics/1.0"
+})
+
+retry = Retry(
+    total=3,
+    backoff_factor=0.3,  
+    status_forcelist=[429, 500, 502, 503, 504],
+    allowed_methods=["GET"],
+)
+adapter = HTTPAdapter(pool_connections=100, pool_maxsize=100, max_retries=retry)
+session.mount("https://", adapter)
+session.mount("http://", adapter)
+
+
+def gauss_sum(n: float) -> float:
+    """n*(n+1)/2 - SİZİN KODUNUZDAN AYNEN"""
+    return n * (n + 1) / 2.0
+
+
+def safe_log(value, base=math.e, min_value=1e-10):
+    """Güvenli logaritma hesaplama - SİZİN KODUNUZDAN AYNEN"""
+    if value <= 0:
+        return math.log(min_value, base) if base != math.e else math.log(min_value)
+    return math.log(value, base) if base != math.e else math.log(value)
+
+
+
+
+class CryptoMLModel:
+    """Geliştirilmiş AI model sistemi"""
+    
+    def __init__(self):
+        self.model = None
+        self.scaler = StandardScaler()
+        self.is_trained = False
+        self.feature_names = [
+            'run_count', 'run_perc', 'gauss_run', 'gauss_run_perc',
+            'vol_ratio', 'hh_vol_streak', 'deviso_ratio', 'trend_alignment'
+        ]
+        self.training_data = []
+        self.model_stats = {'accuracy': 0.0, 'last_training': None}
+        
+       
+        self._create_improved_training_data()
+        
+        try:
+            self.load_model()
+        except:
+            log.info("🤖 Geliştirilmiş AI modeli oluşturuluyor...")
+            self._train_initial_model()
+    
+    def _create_improved_training_data(self):
+        """Gerçekçi ve kaliteli eğitim verisi"""
+        import random
+        
+        demo_data = []
+        
+       
+        for i in range(50):
+            run_count = random.randint(4, 8)
+            run_perc = random.uniform(2.0, 15.0)  
+            gauss_run = gauss_sum(run_count)
+            gauss_run_perc = gauss_sum(round(run_perc, 2))
+            vol_ratio = random.uniform(2.0, 4.0)  
+            hh_vol_streak = random.randint(2, 6)  
+            deviso_ratio = random.uniform(3.0, 20.0)  
+            trend_alignment = 1  
+            
+            demo_data.append({
+                'run_count': run_count,
+                'run_perc': run_perc,
+                'gauss_run': gauss_run,
+                'gauss_run_perc': gauss_run_perc,
+                'vol_ratio': vol_ratio,
+                'hh_vol_streak': hh_vol_streak,
+                'deviso_ratio': deviso_ratio,
+                'trend_alignment': trend_alignment,
+                'target': 1  
+            })
+        
+        
+        for i in range(30):
+            run_count = random.randint(3, 5)
+            run_perc = random.uniform(1.0, 5.0)
+            gauss_run = gauss_sum(run_count)
+            gauss_run_perc = gauss_sum(round(run_perc, 2))
+            vol_ratio = random.uniform(1.2, 2.5)
+            hh_vol_streak = random.randint(1, 3)
+            deviso_ratio = random.uniform(1.0, 8.0)
+            trend_alignment = random.choice([0, 1])
+            
+            demo_data.append({
+                'run_count': run_count,
+                'run_perc': run_perc,
+                'gauss_run': gauss_run,
+                'gauss_run_perc': gauss_run_perc,
+                'vol_ratio': vol_ratio,
+                'hh_vol_streak': hh_vol_streak,
+                'deviso_ratio': deviso_ratio,
+                'trend_alignment': trend_alignment,
+                'target': 0.7  
+            })
+        
+      
+        for i in range(40):
+            run_count = random.randint(1, 3)
+            run_perc = random.uniform(0.1, 2.0)  
+            gauss_run = gauss_sum(run_count)
+            gauss_run_perc = gauss_sum(round(run_perc, 2))
+            vol_ratio = random.uniform(0.5, 1.5)  
+            hh_vol_streak = random.randint(0, 1)
+            deviso_ratio = random.uniform(-5.0, 2.0)  
+            trend_alignment = 0  
+            
+            demo_data.append({
+                'run_count': run_count,
+                'run_perc': run_perc,
+                'gauss_run': gauss_run,
+                'gauss_run_perc': gauss_run_perc,
+                'vol_ratio': vol_ratio,
+                'hh_vol_streak': hh_vol_streak,
+                'deviso_ratio': deviso_ratio,
+                'trend_alignment': trend_alignment,
+                'target': 0  
+            })
+        
+        self.training_data = demo_data
+        log.info(f"📊 {len(demo_data)} geliştirilmiş eğitim verisi oluşturuldu")
+    
+    def _train_initial_model(self):
+        """Geliştirilmiş model eğitimi"""
+        try:
+            df = pd.DataFrame(self.training_data)
+            X = df[self.feature_names].values
+            y = df['target'].values
+            
+            self.scaler.fit(X)
+            X_scaled = self.scaler.transform(X)
+            
+            self.model = RandomForestClassifier(
+                n_estimators=100,  
+                max_depth=8,       
+                min_samples_split=3,
+                min_samples_leaf=2,
+                random_state=42
+            )
+            
+            self.model.fit(X_scaled, y)
+            self.is_trained = True
+            
+            accuracy = self.model.score(X_scaled, y)
+            self.model_stats['accuracy'] = accuracy
+            self.model_stats['last_training'] = datetime.now(LOCAL_TZ).isoformat()
+            
+            log.info(f"🎯 Geliştirilmiş AI modeli eğitildi: Accuracy={accuracy:.2%}")
+            self.save_model()
+            
+        except Exception as e:
+            log.error(f"Model eğitim hatası: {e}")
+    
+    def create_features(self, metrics: dict) -> np.array:
+        """ML features oluştur"""
+        features = {}
+        
+        features['run_count'] = min(metrics.get('run_count', 0), 10)
+        features['run_perc'] = min(abs(metrics.get('run_perc', 0.0) or 0.0), 20.0)
+        features['gauss_run'] = min(metrics.get('gauss_run', 0.0), 100.0)
+        features['gauss_run_perc'] = min(abs(metrics.get('gauss_run_perc', 0.0) or 0.0), 1000.0)
+        features['vol_ratio'] = min(metrics.get('vol_ratio', 1.0) or 1.0, 10.0)
+        features['hh_vol_streak'] = min(metrics.get('hh_vol_streak', 0), 10)
+        features['deviso_ratio'] = max(-50, min(50, metrics.get('deviso_ratio', 0.0)))
+        
+       
+        run_type = metrics.get('run_type', 'none')
+        deviso_ratio = metrics.get('deviso_ratio', 0.0)
+        features['trend_alignment'] = 1 if (
+            (run_type == 'long' and deviso_ratio > 0) or
+            (run_type == 'short' and deviso_ratio < 0)
+        ) else 0
+        
+        feature_array = np.array([features[name] for name in self.feature_names], dtype=np.float32)
+        feature_array = np.nan_to_num(feature_array, nan=0.0)
+        
+        return feature_array.reshape(1, -1)
+    
+    def predict_score(self, metrics: dict) -> float:
+        """Geliştirilmiş AI skorunu hesaplar"""
+        if not self.is_trained:
+            return self._fallback_score(metrics)
+        
+        try:
+            features = self.create_features(metrics)
+            features_scaled = self.scaler.transform(features)
+            
+            if hasattr(self.model, 'predict_proba'):
+                
+                prob = self.model.predict_proba(features_scaled)[0][1]
+                base_score = prob * 100
+            else:
+                pred = self.model.predict(features_scaled)[0]
+                base_score = pred * 100
+            
+           
+            bonus_score = self._calculate_manual_bonus(metrics)
+            final_score = base_score + bonus_score
+            
+            return float(np.clip(final_score, 0.0, 100.0))
+            
+        except Exception as e:
+            log.debug(f"AI skor hesaplama hatası: {e}")
+            return self._fallback_score(metrics)
+    
+    def _fallback_score(self, metrics: dict) -> float:
+        """Model yokken kullanılacak yedek skorlama"""
+        score = 0.0
+        
+       
+        run_count = metrics.get('run_count', 0)
+        if run_count >= 5:
+            score += 25
+        elif run_count >= 3:
+            score += 15
+        
+        
+        run_perc = abs(metrics.get('run_perc', 0) or 0)
+        if run_perc >= 3.0:
+            score += 25
+        elif run_perc >= 1.0:
+            score += 15
+        
+        
+        vol_ratio = metrics.get('vol_ratio')
+        if vol_ratio and vol_ratio >= 2.0:
+            score += 20
+        elif vol_ratio and vol_ratio >= 1.5:
+            score += 10
+        
+       
+        deviso_ratio = metrics.get('deviso_ratio', 0)
+        run_type = metrics.get('run_type', 'none')
+        if ((run_type == 'long' and deviso_ratio > 2.0) or 
+            (run_type == 'short' and deviso_ratio < -2.0)):
+            score += 20
+        
+        
+        hh_vol_streak = metrics.get('hh_vol_streak', 0)
+        if hh_vol_streak >= 3:
+            score += 10
+        
+        return min(score, 100.0)
+    
+    def _calculate_manual_bonus(self, metrics: dict) -> float:
+        """Manuel bonus/ceza hesaplama"""
+        bonus = 0.0
+        
+       
+        deviso_ratio = metrics.get('deviso_ratio', 0)
+        run_type = metrics.get('run_type', 'none')
+        
+        if run_type == 'long' and deviso_ratio > 5.0:
+            bonus += 15  
+        elif run_type == 'short' and deviso_ratio < -5.0:
+            bonus += 15  
+        
+       
+        vol_ratio = metrics.get('vol_ratio')
+        if vol_ratio and vol_ratio > 3.0:
+            bonus += 10  
+        
+       
+        run_count = metrics.get('run_count', 0)
+        if run_count >= 6:
+            bonus += 10  
+        
+       
+        run_perc = abs(metrics.get('run_perc', 0) or 0)
+        if run_perc >= 5.0:
+            bonus += 10  
+        
+        return bonus
+    
+    def save_model(self):
+        """Model kaydet"""
+        try:
+            model_data = {
+                'model': self.model,
+                'scaler': self.scaler,
+                'is_trained': self.is_trained,
+                'feature_names': self.feature_names,
+                'model_stats': self.model_stats
+            }
+            joblib.dump(model_data, 'crypto_improved_ai_model.pkl')  
+        except Exception as e:
+            log.debug(f"Model kaydetme hatası: {e}")
+    
+    def load_model(self):
+        """Model yükle"""
+        try:
+            model_data = joblib.load('crypto_improved_ai_model.pkl')  
+            self.model = model_data['model']
+            self.scaler = model_data['scaler']
+            self.is_trained = model_data['is_trained']
+            self.feature_names = model_data['feature_names']
+            self.model_stats = model_data.get('model_stats', self.model_stats)
+            log.info(f"✅ Geliştirilmiş AI modeli yüklendi: Accuracy={self.model_stats['accuracy']:.2%}")
+        except:
+            
+            raise FileNotFoundError("Model dosyası bulunamadı")
+
+
+
+ai_model = CryptoMLModel()
+
+
+
+def crossunder(a, b): 
+    return (a < b) & (a.shift(1) >= b.shift(1))
+
+def crossover(a, b):  
+    return (a > b) & (a.shift(1) <= b.shift(1))
+
+def cross(a, b):
+    return ((a > b) & (a.shift(1) <= b.shift(1))) | ((a < b) & (a.shift(1) >= b.shift(1)))
+
+def pine_sma(src, length):
+    """Pine Script ta.sma equivalent - SİZİN KODUNUZDAN AYNEN"""
+    result = []
+    valid_values = []
+    
+    for i in range(len(src)):
+        if not pd.isna(src.iloc[i]):
+            valid_values.append(src.iloc[i])
+        
+        if len(valid_values) > length:
+            valid_values = valid_values[-length:]
+        
+        if len(valid_values) > 0:
+            result.append(np.mean(valid_values))
+        else:
+            result.append(np.nan)
+    
+    return pd.Series(result, index=src.index)
+
+def calculate_zigzag_high(high_series, period):
+    """SİZİN KODUNUZDAN AYNEN"""
+    result = []
+    for i in range(len(high_series)):
+        if i < period - 1:
+            result.append(np.nan)
+        else:
+            window = high_series.iloc[i-period+1:i+1]
+            if high_series.iloc[i] == window.max():
+                result.append(high_series.iloc[i])
+            else:
+                result.append(np.nan)
+    return pd.Series(result, index=high_series.index)
+
+def calculate_zigzag_low(low_series, period):
+    """SİZİN KODUNUZDAN AYNEN"""
+    result = []
+    for i in range(len(low_series)):
+        if i < period - 1:
+            result.append(np.nan)
+        else:
+            window = low_series.iloc[i-period+1:i+1]
+            if low_series.iloc[i] == window.min():
+                result.append(low_series.iloc[i])
+            else:
+                result.append(np.nan)
+    return pd.Series(result, index=low_series.index)
+
+def calculate_deviso_ratio(df, 
+                          zigzag_high_period=10,
+                          zigzag_low_period=10,
+                          min_movement_pct=0.160,
+                          ma_period=20,
+                          std_mult=2.0,
+                          ma_length=10):
+    """
+    Deviso ratio hesaplama - SİZİN KODUNUZDAN AYNEN
+    """
+    
+    
+    zigzag_high = calculate_zigzag_high(df['high'], zigzag_high_period)
+    zigzag_low = calculate_zigzag_low(df['low'], zigzag_low_period)
+    
+   
+    min_movement = df['close'] * min_movement_pct / 100
+
+ 
+    long_mumu = []
+    short_mumu = []
+
+    for i in range(len(df)):
+        long_condition = False
+        short_condition = False
+        
+    
+        if not pd.isna(zigzag_high.iloc[i]):
+            prev_indices = []
+            for j in range(i-1, -1, -1):
+                if not pd.isna(zigzag_high.iloc[j]):
+                    prev_indices.append(j)
+                if len(prev_indices) >= 1:
+                    break
+            
+            if len(prev_indices) >= 1:
+                prev_idx = prev_indices[0]
+                prev_zigzag_high = zigzag_high.iloc[prev_idx]
+                prev_close = df['close'].iloc[prev_idx]
+                
+                long_condition = (zigzag_high.iloc[i] > prev_zigzag_high and
+                                df['close'].iloc[i] - prev_close >= min_movement.iloc[i])
+        
+     
+        if not pd.isna(zigzag_low.iloc[i]):
+            prev_indices = []
+            for j in range(i-1, -1, -1):
+                if not pd.isna(zigzag_low.iloc[j]):
+                    prev_indices.append(j)
+                if len(prev_indices) >= 1:
+                    break
+            
+            if len(prev_indices) >= 1:
+                prev_idx = prev_indices[0]
+                prev_zigzag_low = zigzag_low.iloc[prev_idx]
+                prev_close = df['close'].iloc[prev_idx]
+                
+                short_condition = (zigzag_low.iloc[i] < prev_zigzag_low and
+                                 prev_close - df['close'].iloc[i] >= min_movement.iloc[i])
+        
+        long_mumu.append(long_condition)
+        short_mumu.append(short_condition)
+
+    
+    ma = df['close'].rolling(ma_period).mean()
+    upper_band = ma + std_mult * df['close'].rolling(ma_period).std()
+    lower_band = ma - std_mult * df['close'].rolling(ma_period).std()
+
+  
+    long_mumu_float = pd.Series(np.where(long_mumu, df['close'], np.nan))
+    short_mumu_float = pd.Series(np.where(short_mumu, df['close'], np.nan))
+
+
+    long_mumu_ma = pine_sma(long_mumu_float, 2)
+    short_mumu_ma = pine_sma(short_mumu_float, 2)
+
+ 
+    long_pullback_level = df['close'].where(long_mumu).ffill()
+    short_pullback_level = df['close'].where(short_mumu).ffill()
+
+    
+    short_potential_candles = ((df['close'] > ma) & 
+                              crossunder(df['close'], long_pullback_level) & 
+                              (~crossunder(df['close'], upper_band)))
+
+    long_potential_candles2 = (crossover(df['close'], short_pullback_level) & 
+                              crossover(df['close'], short_mumu_ma) & 
+                              (df['close'] < ma))
+
+   
+    all_signals_values = []
+    for i in range(len(df)):
+        if long_mumu[i]:
+            all_signals_values.append(df['low'].iloc[i])
+        elif short_mumu[i]:
+            all_signals_values.append(df['high'].iloc[i])
+        else:
+            all_signals_values.append(np.nan)
+
+    all_signals = pd.Series(all_signals_values, index=df.index)
+
+   
+    all_signals2_values = []
+    for i in range(len(df)):
+        if short_potential_candles.iloc[i]:
+            all_signals2_values.append(df['low'].iloc[i])
+        elif long_potential_candles2.iloc[i]:
+            all_signals2_values.append(df['high'].iloc[i])
+        else:
+            all_signals2_values.append(np.nan)
+
+    all_signals2 = pd.Series(all_signals2_values, index=df.index)
+
+    
+    ma_all_signals = pine_sma(all_signals, ma_length)      
+    ma_all_signals2 = pine_sma(all_signals2, ma_length)   
+    ma_mid = (ma_all_signals + ma_all_signals2) / 2        
+
+   
+    long_crossover_signal = crossover(df['close'], ma_all_signals)
+    short_crossover_signal = crossunder(df['close'], ma_all_signals)
+
+    
+    var_long_pullback_level2 = pd.Series(index=df.index, dtype=float)
+    var_short_pullback_level2 = pd.Series(index=df.index, dtype=float)
+    is_after_short_flag = pd.Series([False] * len(df), index=df.index)
+    
+    
+    var_long_pullback_level2.iloc[0] = np.nan
+    var_short_pullback_level2.iloc[0] = np.nan
+    is_after_short = False
+    
+    for i in range(1, len(df)):
+        
+        var_long_pullback_level2.iloc[i] = var_long_pullback_level2.iloc[i-1]
+        var_short_pullback_level2.iloc[i] = var_short_pullback_level2.iloc[i-1]
+        is_after_short_flag.iloc[i] = is_after_short
+        
+        
+        if short_crossover_signal.iloc[i]:
+            var_short_pullback_level2.iloc[i] = df['high'].iloc[i]
+            var_long_pullback_level2.iloc[i] = var_short_pullback_level2.iloc[i]
+            is_after_short = True
+        
+       
+        if long_crossover_signal.iloc[i]:
+            if pd.isna(var_long_pullback_level2.iloc[i]):
+                var_long_pullback_level2.iloc[i] = df['low'].iloc[i]
+            elif is_after_short:
+                var_long_pullback_level2.iloc[i] = df['low'].iloc[i]
+                is_after_short = False
+
+    
+    diff_percent = pd.Series(index=df.index, dtype=float)
+    
+    for i in range(len(df)):
+        current_pullback_level = var_long_pullback_level2.iloc[i]
+        current_price = df['close'].iloc[i]
+        
+        if pd.isna(current_pullback_level) or current_pullback_level == 0:
+            diff_percent.iloc[i] = np.nan
+        else:
+            diff_percent.iloc[i] = ((current_price - current_pullback_level) / current_pullback_level) * 100
+
+   
+    return diff_percent.iloc[-1] if not pd.isna(diff_percent.iloc[-1]) else 0.0
+
+
+def compute_consecutive_metrics(df: pd.DataFrame) -> dict:
+    """
+    Pine Script mantığıyla TAMAMEN AYNI hesaplama
+    """
+    if df is None or df.empty:
+        return {}
+
+   
+    count_long = 0.0
+    long_start_low = None  
+    count_short = 0.0
+    short_start_high = None
+
+    
+    for i in range(len(df)):
+        o, h, l, c = df.iloc[i][['open', 'high', 'low', 'close']]
+        
+       
+        is_long = c > o
+        
+        is_short = c < o
+        
+       
+        if is_long:
+           
+            count_long = count_long + 1.0
+           
+            if long_start_low is None or count_long == 1.0:
+                long_start_low = l
+        else:
+            
+            count_long = 0.0
+            long_start_low = None  
+        
+      
+        if is_short:
+            
+            count_short = count_short + 1.0
+            
+            if short_start_high is None or count_short == 1.0:
+                short_start_high = h
+        else:
+             
+            count_short = 0.0
+            short_start_high = None  
+
+   
+    last_high = df.iloc[-1]['high']
+    last_low = df.iloc[-1]['low']
+
+   
+    long_perc = None
+    short_perc = None
+    
+   
+    if count_long > 0 and long_start_low is not None:
+        long_perc = (last_high - long_start_low) / long_start_low * 100.0
+    
+   
+    if count_short > 0 and short_start_high is not None:
+        short_perc = (short_start_high - last_low) / short_start_high * 100.0
+
+    
+    if count_long > 0:
+        run_type = 'long'
+        run_count = int(count_long)
+        run_perc = long_perc
+       
+        gauss_run = gauss_sum(count_long)
+        
+        if long_perc is not None:
+            gauss_run_perc = gauss_sum(round(long_perc, 2))
+        else:
+            gauss_run_perc = None
+    elif count_short > 0:
+        run_type = 'short'
+        run_count = int(count_short)
+        run_perc = short_perc
+      
+        gauss_run = gauss_sum(count_short)
+       
+        if short_perc is not None:
+            gauss_run_perc = gauss_sum(round(short_perc, 2))
+        else:
+            gauss_run_perc = None
+    else:
+        run_type = 'none'
+        run_count = 0
+        run_perc = None
+        gauss_run = 0.0
+        gauss_run_perc = None
+
+   
+    vol = df['volume'].astype(float)
+    
+    vol_positive_mask = vol > 0
+    if not vol_positive_mask.any():
+        vol_ratio = None
+        hh_streak = 0
+    else:
+        valid_count = vol_positive_mask.sum()
+        if valid_count < VOL_SMA_LEN:
+            vol_ratio = None
+        else:
+            log_vol = pd.Series(index=vol.index, dtype=float)
+            log_vol[vol_positive_mask] = vol[vol_positive_mask].apply(safe_log)
+            
+            log_vol_sma = log_vol.rolling(VOL_SMA_LEN, min_periods=VOL_SMA_LEN).mean()
+            
+            last_valid_indices = vol_positive_mask[vol_positive_mask].index
+            if len(last_valid_indices) > 0:
+                last_valid_idx = last_valid_indices[-1]
+                last_log_vol = log_vol[last_valid_idx]
+                last_log_sma = log_vol_sma[last_valid_idx]
+                
+                if pd.notna(last_log_sma):
+                    log_ratio = last_log_vol - last_log_sma
+                    vol_ratio = math.exp(log_ratio)
+                else:
+                    vol_ratio = None
+            else:
+                vol_ratio = None
+
+        hh_streak = 0
+        if valid_count > 1:
+            vol_positive_values = vol[vol_positive_mask]
+            log_vol_positive = vol_positive_values.apply(safe_log)
+            
+            for i in range(len(log_vol_positive) - 1, 0, -1):
+                if log_vol_positive.iloc[i] > log_vol_positive.iloc[i - 1]:
+                    hh_streak += 1
+                else:
+                    break
+        else:
+            hh_streak = 0
+
+    
+    try:
+        deviso_ratio = calculate_deviso_ratio(
+            df,
+            DEVISO_PARAMS['zigzag_high_period'],
+            DEVISO_PARAMS['zigzag_low_period'],
+            DEVISO_PARAMS['min_movement_pct'],
+            DEVISO_PARAMS['ma_period'],
+            DEVISO_PARAMS['std_mult'],
+            DEVISO_PARAMS['ma_length']
+        )
+    except Exception as e:
+        log.debug(f"Deviso ratio hesaplama hatası: {e}")
+        deviso_ratio = 0.0
+
+    return {
+        'run_type': run_type,
+        'run_count': run_count,
+        'run_perc': float(run_perc) if run_perc is not None else None,
+        'gauss_run': float(gauss_run),
+        'gauss_run_perc': float(gauss_run_perc) if gauss_run_perc is not None else None,
+        'vol_ratio': float(vol_ratio) if vol_ratio is not None else None,
+        'hh_vol_streak': int(hh_streak),
+        'deviso_ratio': float(deviso_ratio)
+    }
+
+
+
+
+saved_signals = {}  
+
+def get_usdt_perp_symbols() -> list:
+    """USDT-M perpetual sembolleri - SİZİN KODUNUZDAN AYNEN"""
+    with session.get(EXCHANGE_INFO, timeout=TIMEOUT) as r:
+        r.raise_for_status()
+        data = r.json()
+    symbols = []
+    for s in data.get('symbols', []):
+        if (
+            s.get('quoteAsset') == 'USDT' and
+            s.get('status') == 'TRADING' and
+            s.get('contractType') == 'PERPETUAL'
+        ):
+            symbols.append(s['symbol'])
+    symbols = sorted(set(symbols))
+    if SYMBOL_LIMIT:
+        symbols = symbols[:SYMBOL_LIMIT]
+    return symbols
+
+
+def fetch_klines(symbol: str, interval: str) -> pd.DataFrame:
+    """Kline verisi çeker - SİZİN KODUNUZDAN AYNEN"""
+    params = {
+        'symbol': symbol,
+        'interval': interval,
+        'limit': LIMIT
+    }
+    with session.get(KLINES, params=params, timeout=TIMEOUT) as r:
+        r.raise_for_status()
+        arr = r.json()
+    cols = ['open_time','open','high','low','close','volume','close_time','qav','trades','taker_base','taker_quote','ignore']
+    df = pd.DataFrame(arr, columns=cols)
+    for c in ['open','high','low','close','volume']:
+        df[c] = df[c].astype(float)
+    df['open_time'] = pd.to_datetime(df['open_time'], unit='ms').dt.tz_localize('UTC').dt.tz_convert(LOCAL_TZ)
+    df['close_time'] = pd.to_datetime(df['close_time'], unit='ms').dt.tz_localize('UTC').dt.tz_convert(LOCAL_TZ)
+    return df[['open_time','open','high','low','close','volume','close_time']]
+
+
+def get_current_price(symbol: str) -> float:
+    """Sembolün mevcut fiyatını al"""
+    try:
+        time.sleep(0.02)
+        url = f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={symbol}"
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        return float(data['price'])
+    except Exception as e:
+        log.error(f"Fiyat alma hatası {symbol}: {e}")
+        return None
+
+
+def analyze_symbol_with_ai(symbol: str, interval: str) -> dict:
+    """AI skoru ile sembol analizi - DOĞRU HESAPLAMALARLA"""
+    try:
+        time.sleep(REQ_SLEEP)
+        df = fetch_klines(symbol, interval)
+        metrics = compute_consecutive_metrics(df)
+        if not metrics or metrics['run_type'] == 'none':
+            return {}
+        
+        
+        streak_type = metrics['run_type']
+        deviso_ratio = metrics['deviso_ratio']
+        
+        
+        direction_match = False
+        if streak_type == 'long' and deviso_ratio > 0:
+            direction_match = True
+        elif streak_type == 'short' and deviso_ratio < 0:
+            direction_match = True
+        
+        
+        if not direction_match:
+            return {}
+        
+     
+        ai_score = ai_model.predict_score(metrics)
+        
+        
+        if ai_score < (DEFAULT_MIN_AI_SCORE * 100):
+            return {}
+        
+        last_row = df.iloc[-1]
+        last_close = float(last_row['close'])
+        last_update = last_row['close_time']
+       
+      
+        
+        return {
+            'symbol': symbol,
+            'timeframe': interval,
+            'last_close': last_close,
+            'run_type': metrics['run_type'],
+            'run_count': metrics['run_count'],
+            'run_perc': metrics['run_perc'],
+            'gauss_run': metrics['gauss_run'],
+            'gauss_run_perc': metrics['gauss_run_perc'],
+            'vol_ratio': metrics['vol_ratio'],
+            'hh_vol_streak': metrics['hh_vol_streak'],
+            'deviso_ratio': metrics['deviso_ratio'],
+            'ai_score': ai_score,  
+            'last_update': last_update.strftime('%Y-%m-%d %H:%M:%S %Z'),
+            
+        }
+    except Exception as e:
+        log.warning(f"analyze_symbol error {symbol}: {e}")
+        return {}
+
+
+def batch_analyze_with_ai(interval: str) -> pd.DataFrame:
+    """
+    🔥 GÜNCELLENMİŞ: AI skoru düşen sinyaller silinmez, sadece skoru azalır
+    Sinyaller tabloda kalır ve skor değişimine göre yukarı/aşağı hareket eder
+    """
+    global saved_signals
+    
+    start_time = time.time()
+    
+    symbols = get_usdt_perp_symbols()
+    if not symbols:
+        log.error("Sembol listesi boş!")
+        return pd.DataFrame()
+    
+    log.info(f"🤖 {len(symbols)} sembol için AI analiz başlatılıyor...")
+    
+    
+    fresh_results = []
+    processed_count = 0
+    
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+        futures = {ex.submit(analyze_symbol_with_ai, sym, interval): sym for sym in symbols}
+        for fut in as_completed(futures):
+            symbol = futures[fut]
+            processed_count += 1
+            
+            try:
+                res = fut.result()
+                if res:  
+                    fresh_results.append(res)
+                    
+                    saved_signals[symbol] = {
+                        'data': res,
+                        'last_seen': datetime.now(LOCAL_TZ)
+                    }
+                    
+                if processed_count % 100 == 0:
+                    elapsed = time.time() - start_time
+                    rate = processed_count / elapsed
+                    log.info(f"🤖 İşlenen: {processed_count}/{len(symbols)} - Hız: {rate:.1f} s/sn - AI Onaylı: {len(fresh_results)}")
+                    
+            except Exception as e:
+                log.debug(f"Future hatası {symbol}: {e}")
+
+   
+    current_time = datetime.now(LOCAL_TZ)
+    fresh_symbols = {r['symbol'] for r in fresh_results} 
+    
+   
+    protected_count = 0
+    for symbol, saved_info in list(saved_signals.items()):
+       
+        minutes_old = (current_time - saved_info['last_seen']).total_seconds() / 60.0
+        if minutes_old > 10:
+            del saved_signals[symbol]
+            continue
+        
+       
+        if symbol not in fresh_symbols:
+            old_data = saved_info['data'].copy()
+            original_score = old_data['ai_score']
+            
+          
+            if minutes_old <= 2:
+                penalty = 15  
+            elif minutes_old <= 5:
+                penalty = 30 
+            else:
+                penalty = 50  
+            
+            new_score = max(5, original_score - penalty)  
+            old_data['ai_score'] = new_score
+            old_data['score_status'] = f"📉-{penalty}"  
+            
+            
+            fresh_results.append(old_data)
+            protected_count += 1
+            
+            log.debug(f"📉 {symbol}: {original_score:.0f} → {new_score:.0f} (yaş: {minutes_old:.1f}dk)")
+
+    elapsed_time = time.time() - start_time
+    total_rate = len(symbols) / elapsed_time if elapsed_time > 0 else 0
+    
+   
+    new_signals = len(fresh_symbols)
+    total_signals = len(fresh_results)
+    
+    log.info(f"✅ AI Analiz tamamlandı:")
+    log.info(f"   🆕 Yeni sinyal: {new_signals}")
+    log.info(f"   📉 Korunan sinyal: {protected_count}")
+    log.info(f"   🎯 Toplam sinyal: {total_signals}")
+    log.info(f"   ⏱️ Süre: {elapsed_time:.1f}s - Hız: {total_rate:.1f} s/sn")
+    
+    if not fresh_results:
+        return pd.DataFrame()
+        
+    
+    df = pd.DataFrame(fresh_results)
+    df = df.sort_values(by=['ai_score', 'run_perc', 'gauss_run', 'vol_ratio'], ascending=[False, False, False, False])
+    
+    if len(df) > 0:
+        log.info(f"🏆 En yüksek AI skoru: {df.iloc[0]['ai_score']:.0f}% - {df.iloc[0]['symbol']}")
+        if protected_count > 0:
+            log.info(f"📉 Korunan sinyaller skor düşüşü ile aşağı kaydı")
+    
+    return df
+
+
+
+def setup_csv_files():
+    """CSV dosyalarını hazırla"""
+    if not os.path.exists(TRADES_CSV):
+        with open(TRADES_CSV, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                'timestamp', 'symbol', 'side', 'quantity', 'entry_price', 'exit_price',
+                'invested_amount', 'current_value', 'pnl', 'commission', 'ai_score',
+                'run_type', 'run_count', 'run_perc', 'gauss_run', 'vol_ratio', 'deviso_ratio',
+                'stop_loss', 'take_profit', 'close_reason', 'status'
+            ])
+    
+    if not os.path.exists(CAPITAL_CSV):
+        with open(CAPITAL_CSV, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(['timestamp', 'capital', 'open_positions', 'total_invested', 'unrealized_pnl'])
+
+def log_trade_to_csv(trade_data):
+    """Trade'i CSV'ye kaydet"""
+    try:
+        with open(TRADES_CSV, 'a', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                trade_data.get('timestamp', ''),
+                trade_data.get('symbol', ''),
+                trade_data.get('side', ''),
+                trade_data.get('quantity', 0),
+                trade_data.get('entry_price', 0),
+                trade_data.get('exit_price', 0),
+                trade_data.get('invested_amount', 0),
+                trade_data.get('current_value', 0),
+                trade_data.get('pnl', 0),
+                trade_data.get('commission', 0),  
+                trade_data.get('ai_score', 0),
+                trade_data.get('run_type', ''),
+                trade_data.get('run_count', 0),
+                trade_data.get('run_perc', 0),
+                trade_data.get('gauss_run', 0),
+                trade_data.get('vol_ratio', 0),
+                trade_data.get('deviso_ratio', 0),
+                trade_data.get('stop_loss', 0),
+                trade_data.get('take_profit', 0),
+                trade_data.get('close_reason', ''),
+                trade_data.get('status', '')
+            ])
+    except Exception as e:
+        log.error(f"CSV yazma hatası: {e}")
+
+def log_capital_to_csv():
+    """Sermaye durumunu CSV'ye kaydet"""
+    try:
+        total_invested = sum(pos.get('invested_amount', 0) for pos in open_positions.values())
+        total_unrealized_pnl = 0
+        
+        for symbol, pos in open_positions.items():
+            current_price = get_current_price(symbol)
+            if current_price:
+                if pos['side'] == 'LONG':
+                    unrealized_pnl = (current_price - pos['entry_price']) * pos['quantity']
+                else:
+                    unrealized_pnl = (pos['entry_price'] - current_price) * pos['quantity']
+                total_unrealized_pnl += unrealized_pnl
+        
+        with open(CAPITAL_CSV, 'a', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                datetime.now(LOCAL_TZ).strftime('%Y-%m-%d %H:%M:%S'),
+                current_capital,
+                len(open_positions),
+                total_invested,
+                total_unrealized_pnl
+            ])
+    except Exception as e:
+        log.error(f"Capital CSV yazma hatası: {e}")
+
+def calculate_position_size(price: float) -> float:
+    """
+    🔥 DEĞİŞTİRİLDİ: Pozisyon büyüklüğünü hesapla - TOPLAM PARAYI 3'E BÖL
+    """
+    try:
+     
+        position_value = current_capital / MAX_OPEN_POSITIONS
+        
+       
+        if position_value <= 0:
+            return 0
+        
+        quantity = position_value / price
+        return round(quantity, 6)
+    except Exception as e:
+        log.error(f"Pozisyon büyüklüğü hesaplama hatası: {e}")
+        return 0
+
+def open_position(signal: dict) -> bool:
+    """🔥 DEĞİŞTİRİLDİ: Paper trading pozisyon aç - KOMİSYON KALDIRILDI"""
+    global current_capital
+    
+    try:
+        symbol = signal['symbol']
+        side = signal['run_type'].upper()
+        
+        if symbol in open_positions:
+            log.warning(f"⚠️ {symbol} için zaten açık pozisyon var")
+            return False
+        
+        if len(open_positions) >= MAX_OPEN_POSITIONS:
+            log.warning(f"⚠️ Maksimum pozisyon sayısına ulaşıldı: {MAX_OPEN_POSITIONS}")
+            return False
+        
+        current_price = get_current_price(symbol)
+        if not current_price:
+            log.error(f"❌ {symbol} için fiyat alınamadı")
+            return False
+        
+        quantity = calculate_position_size(current_price)
+        if quantity <= 0:
+            log.error(f"❌ {symbol} için geçersiz pozisyon büyüklüğü")
+            return False
+        
+        invested_amount = quantity * current_price
+       
+        total_cost = invested_amount 
+        
+        if current_capital < total_cost:
+            log.warning(f"⚠️ {symbol}: Yetersiz sermaye! Mevcut: ${current_capital:.2f}, Gerekli: ${total_cost:.2f}")
+            return False
+        
+       
+        if side == 'LONG':
+            stop_loss = current_price * (1 - STOP_LOSS_PCT)
+            take_profit = current_price * (1 + TAKE_PROFIT_PCT)
+        else:
+            stop_loss = current_price * (1 + STOP_LOSS_PCT)
+            take_profit = current_price * (1 - TAKE_PROFIT_PCT)
+        
+        
+        position_data = {
+            'symbol': symbol,
+            'side': side,
+            'quantity': quantity,
+            'entry_price': current_price,
+            'invested_amount': invested_amount,
+            'stop_loss': stop_loss,
+            'take_profit': take_profit,
+            'entry_time': datetime.now(LOCAL_TZ),
+            'commission': 0.0,  
+            'signal_data': signal
+        }
+        
+        open_positions[symbol] = position_data
+        current_capital -= total_cost
+        
+        log.info(f"✅ PAPER TRADE AÇILDI: {symbol} {side} {quantity} @ ${current_price:.6f}")
+        log.info(f"💰 Yatırılan: ${invested_amount:.2f} | Kalan sermaye: ${current_capital:.2f}")
+        log.info(f"📊 SL: ${stop_loss:.6f} | TP: ${take_profit:.6f} | AI Score: {signal['ai_score']:.0f}%")
+        
+       
+        trade_data = {
+            'timestamp': position_data['entry_time'].strftime('%Y-%m-%d %H:%M:%S'),
+            'symbol': symbol,
+            'side': side,
+            'quantity': quantity,
+            'entry_price': current_price,
+            'invested_amount': invested_amount,
+            'commission': 0.0, 
+            'ai_score': signal['ai_score'],
+            'run_type': signal['run_type'],
+            'run_count': signal['run_count'],
+            'run_perc': signal['run_perc'],
+            'gauss_run': signal['gauss_run'],
+            'vol_ratio': signal['vol_ratio'],
+            'deviso_ratio': signal['deviso_ratio'],
+            'stop_loss': stop_loss,
+            'take_profit': take_profit,
+            'status': 'OPEN'
+        }
+        log_trade_to_csv(trade_data)
+        log_capital_to_csv()
+        
+        return True
+        
+    except Exception as e:
+        log.error(f"❌ Pozisyon açma hatası: {e}")
+        return False
+
+def close_position(symbol: str, close_reason: str) -> bool:
+    """🔥 DEĞİŞTİRİLDİ: Paper trading pozisyon kapat - KOMİSYON KALDIRILDI"""
+    global current_capital
+    
+    try:
+        if symbol not in open_positions:
+            log.warning(f"⚠️ {symbol} için açık pozisyon bulunamadı")
+            return False
+        
+        position = open_positions[symbol]
+        
+        current_price = get_current_price(symbol)
+        if not current_price:
+            log.error(f"❌ {symbol} için çıkış fiyatı alınamadı")
+            return False
+        
+        current_value = position['quantity'] * current_price
+        
+        
+        
+        if position['side'] == 'LONG':
+            gross_pnl = (current_price - position['entry_price']) * position['quantity']
+        else:
+            gross_pnl = (position['entry_price'] - current_price) * position['quantity']
+        
+        net_pnl = gross_pnl  
+        
+        
+        total_return = current_value
+        current_capital += total_return
+        
+        log.info(f"✅ PAPER TRADE KAPANDI: {symbol} {position['side']}")
+        log.info(f"💲 Giriş: ${position['entry_price']:.6f} → Çıkış: ${current_price:.6f}")
+        log.info(f"💰 P&L: ${net_pnl:.4f} (Komisyonsuz)")
+        log.info(f"🏦 Güncel sermaye: ${current_capital:.2f} | Sebep: {close_reason}")
+        
+       
+        trade_data = {
+            'timestamp': datetime.now(LOCAL_TZ).strftime('%Y-%m-%d %H:%M:%S'),
+            'symbol': symbol,
+            'side': position['side'],
+            'quantity': position['quantity'],
+            'entry_price': position['entry_price'],
+            'exit_price': current_price,
+            'invested_amount': position['invested_amount'],
+            'current_value': current_value,
+            'pnl': net_pnl,
+            'commission': 0.0,  
+            'ai_score': position['signal_data']['ai_score'],
+            'run_type': position['signal_data']['run_type'],
+            'run_count': position['signal_data']['run_count'],
+            'run_perc': position['signal_data']['run_perc'],
+            'gauss_run': position['signal_data']['gauss_run'],
+            'vol_ratio': position['signal_data']['vol_ratio'],
+            'deviso_ratio': position['signal_data']['deviso_ratio'],
+            'stop_loss': position['stop_loss'],
+            'take_profit': position['take_profit'],
+            'close_reason': close_reason,
+            'status': 'CLOSED'
+        }
+        log_trade_to_csv(trade_data)
+        log_capital_to_csv()
+        
+        del open_positions[symbol]
+        return True
+        
+    except Exception as e:
+        log.error(f"❌ Pozisyon kapatma hatası {symbol}: {e}")
+        return False
+
+def monitor_positions():
+    """Açık pozisyonları izle ve SL/TP kontrol et"""
+    try:
+        if not open_positions:
+            return
+        
+        log.info(f"📊 {len(open_positions)} açık pozisyon izleniyor...")
+        closed_positions = []
+        
+        for symbol in list(open_positions.keys()):
+            position = open_positions[symbol]
+            
+            current_price = get_current_price(symbol)
+            if current_price is None:
+                log.error(f"❌ {symbol} için fiyat alınamadı - pozisyon bu döngüde atlanıyor!")
+                continue
+            
+            should_close = False
+            close_reason = ""
+            
+            
+            if position['side'] == 'LONG':
+                if current_price <= position['stop_loss']:
+                    should_close = True
+                    close_reason = "Stop Loss"
+                    log.info(f"🛑 {symbol} Long Stop Loss: ${current_price:.6f} <= ${position['stop_loss']:.6f}")
+                elif current_price >= position['take_profit']:
+                    should_close = True
+                    close_reason = "Take Profit"
+                    log.info(f"🎯 {symbol} Long Take Profit: ${current_price:.6f} >= ${position['take_profit']:.6f}")
+            else:  
+                if current_price >= position['stop_loss']:
+                    should_close = True
+                    close_reason = "Stop Loss"
+                    log.info(f"🛑 {symbol} Short Stop Loss: ${current_price:.6f} >= ${position['stop_loss']:.6f}")
+                elif current_price <= position['take_profit']:
+                    should_close = True
+                    close_reason = "Take Profit"
+                    log.info(f"🎯 {symbol} Short Take Profit: ${current_price:.6f} <= ${position['take_profit']:.6f}")
+            
+            if should_close:
+                success = close_position(symbol, close_reason)
+                if success:
+                    closed_positions.append(symbol)
+        
+        
+        if closed_positions:
+            new_count = len(open_positions)
+            log.info(f"🔄 {len(closed_positions)} pozisyon kapandı. Yeni durum: {new_count}/{MAX_OPEN_POSITIONS}")
+            log.info(f"ℹ️ Yeni pozisyon açma ana döngüde yapılacak - çakışma önlendi")
+                
+    except Exception as e:
+        log.error(f"❌ Pozisyon izleme hatası: {e}")
+
+def fill_empty_positions():
+    """
+    TÜM SİNYALLER tablosundaki filtrelenmiş sonuçlardan en iyileri seç.
+    (Tabloda görünmeyen hiçbir sembol seçilmez.)
+    """
+    global trading_active, current_data, current_settings
+
+    try:
+        if not trading_active:
+            log.debug("ℹ️ Trading durdurulmuş - Yeni pozisyon açılmıyor")
+            return
+
+        current_positions = len(open_positions)
+        if current_positions >= MAX_OPEN_POSITIONS:
+            log.debug(f"✅ Tüm pozisyon slotları dolu: {current_positions}/{MAX_OPEN_POSITIONS}")
+            return
+
+        needed_positions = MAX_OPEN_POSITIONS - current_positions
+
+        if current_data is None or current_data.empty:
+            log.warning("❌ TÜM SİNYALLER tablosu boş - Otomatik tarama başlatın!")
+            return
+
+       
+        df = current_data.copy()
+
+        min_streak = int(current_settings.get('min_streak', DEFAULT_MIN_STREAK))
+        min_pct    = float(current_settings.get('min_pct',    DEFAULT_MIN_PCT))
+        min_volr   = float(current_settings.get('min_volr',   DEFAULT_MIN_VOLR))
+        min_ai_pct = float(current_settings.get('min_ai',     DEFAULT_MIN_AI_SCORE*100))
+
+        
+        if min_ai_pct < 90:
+            min_ai_pct = 90.0
+
+        df = df[
+            (df['run_count'] >= min_streak) &
+            (df['run_perc']  >= min_pct)    &
+            (df['ai_score']  >= min_ai_pct)
+        ]
+
+        
+        if 'vol_ratio' in df.columns:
+            df = df[df['vol_ratio'].fillna(0) >= min_volr]
+
+        if df.empty:
+            log.warning("⚠️ Filtre sonrası uygun sinyal yok - seçim yapılmadı")
+            return
+
+       
+        exclude_symbols = set(open_positions.keys())
+        df = df[~df['symbol'].isin(exclude_symbols)]
+        if df.empty:
+            log.info("ℹ️ Uygun yeni sembol yok (hepsi açık pozisyonlarda)")
+            return
+
+       
+        df = df.sort_values(by=['ai_score', 'run_perc', 'gauss_run', 'vol_ratio'],
+                            ascending=[False, False, False, False])
+
+        top_signals = df.head(needed_positions)
+
+        log.info(f"🎯 TÜM SİNYALLER (filtrelenmiş, AI≥90) arasından seçilen {len(top_signals)} sinyal:")
+        for _, s in top_signals.iterrows():
+            log.info(f"   🚀 {s['symbol']}: AI={s['ai_score']:.0f}%, run={s['run_count']}, move={s['run_perc']:.2f}%")
+
+        opened_count = 0
+        for _, signal in top_signals.iterrows():
+            if not trading_active:
+                break
+            success = open_position(signal.to_dict())
+            if success:
+                opened_count += 1
+
+        log.info(f"🏆 SONUÇ: {opened_count} yeni pozisyon | Toplam: {len(open_positions)}/{MAX_OPEN_POSITIONS}")
+
+    except Exception as e:
+        log.error(f"❌ fill_empty_positions hatası: {e}")
+
+def paper_trading_loop():
+    """Ana paper trading döngüsü - SADECE current_data kullan"""
+    global trading_active
+    
+    log.info("🚀 Paper Trading döngüsü başlatıldı")
+    log.info("🔒 SADECE TÜM SİNYALLER tablosundan beslenecek!")
+    loop_count = 0
+    
+    while trading_active:
+        try:
+            loop_count += 1
+            loop_start = time.time()
+            
+            current_position_count = len(open_positions)
+            log.info(f"🔄 Döngü #{loop_count} - Pozisyon: {current_position_count}/{MAX_OPEN_POSITIONS}")
+            
+           
+            if current_data is None or current_data.empty:
+                log.warning(f"⚠️ Döngü #{loop_count}: TÜM SİNYALLER tablosu boş - otomatik tarama başlatın!")
+            else:
+                log.info(f"📊 Döngü #{loop_count}: TÜM SİNYALLER tablosunda {len(current_data)} sinyal mevcut")
+            
+           
+            fill_empty_positions()
+            
+           
+            monitor_positions()
+            
+           
+            log_capital_to_csv()
+            
+           
+            total_unrealized_pnl = 0
+            total_invested = 0
+            
+            for symbol, pos in open_positions.items():
+                current_price = get_current_price(symbol) or pos['entry_price']
+                
+                if pos['side'] == 'LONG':
+                    unrealized_pnl = (current_price - pos['entry_price']) * pos['quantity']
+                else:
+                    unrealized_pnl = (pos['entry_price'] - current_price) * pos['quantity']
+                
+                total_unrealized_pnl += unrealized_pnl
+                total_invested += pos['invested_amount']
+            
+            effective_capital = current_capital + total_unrealized_pnl
+            loop_time = time.time() - loop_start
+            
+            log.info(f"⏱️ Döngü #{loop_count}: {loop_time:.2f}s | Sermaye: ${current_capital:.2f} | P&L: ${total_unrealized_pnl:.2f}")
+            
+            if open_positions:
+                positions_summary = ", ".join([f"{symbol}" for symbol in open_positions.keys()])
+                log.info(f"🔥 Açık pozisyonlar: {positions_summary}")
+                log.info(f"📊 Bu pozisyonlar TÜM SİNYALLER tablosundan seçildi ✅")
+            
+            time.sleep(SCAN_INTERVAL)
+            
+        except Exception as e:
+            log.error(f"❌ Paper Trading döngüsü hatası: {e}")
+            time.sleep(30)
+    
+    log.info("ℹ️ Paper Trading döngüsü sonlandırıldı")
+
+def start_paper_trading():
+    """Paper Trading'i başlat"""
+    global trading_active, paper_trade_thread
+    
+    if trading_active:
+        log.warning("⚠️ Paper Trading zaten aktif")
+        return False
+    
+    log.info("🚀 Paper Trading başlatılıyor...")
+    log.info(f"💰 Başlangıç sermayesi: ${INITIAL_CAPITAL:.2f}")
+    log.info(f"📊 Maksimum pozisyon: {MAX_OPEN_POSITIONS} (TÜM SİNYALLER tablosundan EN İYİLER)")
+    log.info(f"⏰ Tarama aralığı: {SCAN_INTERVAL} saniye")
+    log.info(f"🛑 Stop Loss: %{STOP_LOSS_PCT*100}")
+    log.info(f"🎯 Take Profit: %{TAKE_PROFIT_PCT*100}")
+    log.info(f"💳 Komisyon: KALDIRILDI (Kafa karıştırıcı olduğu için)")
+    log.info(f"💰 Pozisyon Büyüklüğü: Toplam sermaye ÷ 3")
+    
+    setup_csv_files()
+    trading_active = True
+    
+    paper_trade_thread = threading.Thread(target=paper_trading_loop, daemon=True)
+    paper_trade_thread.start()
+    log.info("✅ Paper Trading başlatıldı")
+    return True
+
+def stop_paper_trading():
+    """🔥 DEĞİŞTİRİLDİ: Paper Trading'i durdur - KOMİSYON KALDIRILDI"""
+    global trading_active, current_capital
+    
+    if not trading_active:
+        log.info("💤 Paper Trading zaten durdurulmuş")
+        return
+    
+    log.info("🛑 Paper Trading durduruluyor...")
+    trading_active = False
+    
+    if open_positions:
+        position_count = len(open_positions)
+        log.info(f"📚 {position_count} açık pozisyon toplu olarak kapatılıyor...")
+        
+        
+        total_invested_before = sum(pos.get('invested_amount', 0) for pos in open_positions.values())
+        log.info(f"💰 Kapanış öncesi toplam yatırılan: ${total_invested_before:.2f}")
+        log.info(f"🏦 Kapanış öncesi mevcut sermaye: ${current_capital:.2f}")
+        
+        closed_positions = []
+        total_returned = 0
+        
+        
+        for symbol in list(open_positions.keys()):
+            position = open_positions[symbol]
+            
+            current_price = get_current_price(symbol)
+            if current_price is None:
+                log.error(f"❌ {symbol} için fiyat alınamadı - pozisyon atlanıyor!")
+                continue
+            
+            current_value = position['quantity'] * current_price
+            
+            
+            if position['side'] == 'LONG':
+                gross_pnl = (current_price - position['entry_price']) * position['quantity']
+            else:
+                gross_pnl = (position['entry_price'] - current_price) * position['quantity']
+            
+            net_pnl = gross_pnl  
+            total_return_when_closed = current_value  
+            
+            current_capital += total_return_when_closed
+            total_returned += total_return_when_closed
+            
+            
+            trade_data = {
+                'timestamp': datetime.now(LOCAL_TZ).strftime('%Y-%m-%d %H:%M:%S'),
+                'symbol': symbol,
+                'side': position['side'],
+                'quantity': position['quantity'],
+                'entry_price': position['entry_price'],
+                'exit_price': current_price,
+                'invested_amount': position['invested_amount'],
+                'current_value': current_value,
+                'pnl': net_pnl,
+                'commission': 0.0,  
+                'ai_score': position['signal_data']['ai_score'],
+                'run_type': position['signal_data']['run_type'],
+                'run_count': position['signal_data']['run_count'],
+                'run_perc': position['signal_data']['run_perc'],
+                'gauss_run': position['signal_data']['gauss_run'],
+                'vol_ratio': position['signal_data']['vol_ratio'],
+                'deviso_ratio': position['signal_data']['deviso_ratio'],
+                'stop_loss': position['stop_loss'],
+                'take_profit': position['take_profit'],
+                'close_reason': "Trading Stopped",
+                'status': 'CLOSED'
+            }
+            log_trade_to_csv(trade_data)
+            
+            closed_positions.append(symbol)
+            log.info(f"✅ {symbol} kapatıldı: ${total_return_when_closed:.2f} iade edildi (komisyonsuz)")
+        
+        
+        for symbol in closed_positions:
+            del open_positions[symbol]
+        
+      
+        log_capital_to_csv()
+        
+       
+        log.info(f"✅ TOPLU KAPANIŞ TAMAMLANDI:")
+        log.info(f"   📊 Kapatılan pozisyon: {len(closed_positions)}")
+        log.info(f"   💰 Toplam iade edilen: ${total_returned:.2f}")
+        log.info(f"   🏦 Final sermaye: ${current_capital:.2f}")
+        log.info(f"   📈 Net değişim: ${total_returned - total_invested_before:.2f}")
+    
+    log.info("✅ Paper Trading durduruldu")
+
+def load_trades_from_csv():
+    """CSV'den trade geçmişini yükle"""
+    try:
+        if os.path.exists(TRADES_CSV):
+            df = pd.read_csv(TRADES_CSV)
+            return df
+        else:
+            return pd.DataFrame()
+    except Exception as e:
+        log.error(f"❌ Trades CSV yükleme hatası: {e}")
+        return pd.DataFrame()
+
+def load_capital_history_from_csv():
+    """CSV'den sermaye geçmişini yükle"""
+    try:
+        if os.path.exists(CAPITAL_CSV):
+            df = pd.read_csv(CAPITAL_CSV)
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            return df
+        else:
+            return pd.DataFrame()
+    except Exception as e:
+        log.error(f"❌ Capital CSV yükleme hatası: {e}")
+        return pd.DataFrame()
+
+def calculate_performance_metrics():
+    """🔥 DEĞİŞTİRİLDİ: Performans metriklerini hesapla - TOPLAM KAR EKLENDİ"""
+    try:
+        trades_df = load_trades_from_csv()
+        
+        if trades_df.empty:
+            return {
+                'total_trades': 0,
+                'win_rate': 0,
+                'total_pnl': 0,
+                'current_capital': current_capital,
+                'effective_capital': current_capital,
+                'total_return': 0,
+                'total_loss': 0,
+                'total_gain': 0,
+                'active_positions': len(open_positions),
+                'total_commission': 0,
+                'total_invested': 0,
+                'total_unrealized_pnl': 0,
+                'realized_total_profit': 0  
+            }
+        
+        closed_trades = trades_df[trades_df['status'] == 'CLOSED']
+        
+        if closed_trades.empty:
+            total_pnl = 0
+            win_rate = 0
+            total_trades = 0
+            total_loss = 0
+            total_gain = 0
+            total_commission = 0
+            realized_total_profit = 0  
+        else:
+            total_pnl = closed_trades['pnl'].sum()
+            win_trades = len(closed_trades[closed_trades['pnl'] > 0])
+            total_trades = len(closed_trades)
+            win_rate = (win_trades / total_trades * 100) if total_trades > 0 else 0
+            
+            loss_trades = closed_trades[closed_trades['pnl'] < 0]
+            gain_trades = closed_trades[closed_trades['pnl'] > 0]
+            total_loss = abs(loss_trades['pnl'].sum()) if not loss_trades.empty else 0
+            total_gain = gain_trades['pnl'].sum() if not gain_trades.empty else 0
+            
+            total_commission = closed_trades['commission'].sum()  
+            
+           
+            realized_total_profit = closed_trades['pnl'].sum()
+        
+       
+        total_invested = 0
+        for symbol, pos in open_positions.items():
+            total_invested += pos.get('invested_amount', 0)
+        
+       
+        total_unrealized_pnl = 0
+        for symbol, pos in open_positions.items():
+            current_price = get_current_price(symbol) or pos['entry_price']
+            
+            if pos['side'] == 'LONG':
+                unrealized_pnl = (current_price - pos['entry_price']) * pos['quantity']
+            else:
+                unrealized_pnl = (pos['entry_price'] - current_price) * pos['quantity']
+            
+            total_unrealized_pnl += unrealized_pnl
+        
+        effective_capital = current_capital + total_unrealized_pnl
+        total_return = ((effective_capital - INITIAL_CAPITAL) / INITIAL_CAPITAL * 100)
+        
+        return {
+            'total_trades': total_trades,
+            'win_rate': win_rate,
+            'total_pnl': total_pnl,
+            'current_capital': current_capital,
+            'effective_capital': effective_capital,
+            'total_return': total_return,
+            'total_loss': total_loss,
+            'total_gain': total_gain,
+            'active_positions': len(open_positions),
+            'total_commission': total_commission,
+            'total_invested': total_invested,
+            'total_unrealized_pnl': total_unrealized_pnl,
+            'realized_total_profit': realized_total_profit  
+        }
+        
+    except Exception as e:
+        log.error(f"❌ Metrik hesaplama hatası: {e}")
+        return {
+            'total_trades': 0,
+            'win_rate': 0,
+            'total_pnl': 0,
+            'current_capital': current_capital,
+            'effective_capital': current_capital,
+            'total_return': 0,
+            'total_loss': 0,
+            'total_gain': 0,
+            'active_positions': len(open_positions),
+            'total_commission': 0,
+            'total_invested': 0,
+            'total_unrealized_pnl': 0,
+            'realized_total_profit': 0 
+        }
+
+
+
+
+
+auto_scan_active = False
+current_data = pd.DataFrame()
+current_settings = {
+    'timeframe': DEFAULT_TIMEFRAME,
+    'min_streak': DEFAULT_MIN_STREAK,
+    'min_pct': DEFAULT_MIN_PCT,
+    'min_volr': DEFAULT_MIN_VOLR,
+    'min_ai': DEFAULT_MIN_AI_SCORE * 100
+}
+
+def auto_scan_worker():
+    """Otomatik tarama işleyicisi - 1 saniyede bir çalışır"""
+    global auto_scan_active, current_data
+    
+    while auto_scan_active:
+        try:
+            log.info("🔄 Otomatik tarama başlatılıyor...")
+            current_data = batch_analyze_with_ai(current_settings['timeframe'])
+            log.info(f"✅ Otomatik tarama tamamlandı - {len(current_data)} sinyal bulundu")
+            
+            
+            for i in range(AUTO_REFRESH_INTERVAL):
+                if not auto_scan_active:  
+                    return
+                time.sleep(1)
+                
+        except Exception as e:
+            log.error(f"Otomatik tarama hatası: {e}")
+            time.sleep(5)  
+
+
+def start_auto_scan():
+    """Otomatik taramayı başlat"""
+    global auto_scan_active
+    
+    if not auto_scan_active:
+        auto_scan_active = True
+        thread = threading.Thread(target=auto_scan_worker, daemon=True)
+        thread.start()
+        log.info(f"🚀 Otomatik tarama başlatıldı - {AUTO_REFRESH_INTERVAL} saniye aralıklarla")
+
+
+def stop_auto_scan():
+    """Otomatik taramayı durdur"""
+    global auto_scan_active
+    auto_scan_active = False
+    log.info("⛔ Otomatik tarama durduruldu")
+
+
+
+
+app = dash.Dash(__name__)
+app.title = "🤖 AI Crypto Analytics + Paper Trading"
+
+
+import logging
+dash_logger = logging.getLogger('werkzeug')
+dash_logger.setLevel(logging.WARNING)
+
+
+
+def create_ai_score_bar(score):
+    """Unicode karakterlerle progress bar - dolu kısım renkli"""
+    score = float(score)
+    
+    bar_length = 10
+    filled_length = int(bar_length * score / 100)
+    
+    if score >= 70:
+        filled_char = '🟩'  
+        emoji = '🟢'
+    elif score >= 50:
+        filled_char = '🟨' 
+        emoji = '🟡'
+    elif score >= 30:
+        filled_char = '🟧' 
+        emoji = '🟠'
+    else:
+        filled_char = '🟥' 
+        emoji = '🔴'
+    
+    empty_char = '⬜'  
+    
+    bar = filled_char * filled_length + empty_char * (bar_length - filled_length)
+    
+    return f"{emoji} {bar} {score:.0f}%"
+
+
+app.index_string = '''
+<!DOCTYPE html>
+<html>
+    <head>
+        {%metas%}
+        <title>{%title%}</title>
+        {%favicon%}
+        {%css%}
+
+        
+        <style>
+            body {
+                background-color: #1a1a1a;
+                color: #ffffff;
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                margin: 0;
+                padding: 0;
+            }
+            
+            .Select-control, .Select-menu-outer, .Select-option {
+                background-color: #2a2a2a !important;
+                color: #ffffff !important;
+                border-color: #404040 !important;
+            }
+            .Select-option:hover {
+                background-color: #404040 !important;
+                color: #ffffff !important;
+            }
+            .Select-value-label, .Select-placeholder {
+                color: #ffffff !important;
+            }
+            .Select-arrow-zone {
+                color: #ffffff !important;
+            }
+            
+            .stats-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+                gap: 1rem;
+                margin-bottom: 1.5rem;
+            }
+            
+            .stat-card {
+                background: linear-gradient(135deg, #2a2a2a 0%, #363636 100%);
+                padding: 1rem;
+                border-radius: 8px;
+                text-align: center;
+                border: 1px solid #404040;
+            }
+            
+            .stat-value {
+                font-size: 1.5rem;
+                font-weight: bold;
+                color: #22c55e;
+                margin-bottom: 0.25rem;
+            }
+            
+            .stat-label {
+                font-size: 0.875rem;
+                color: #cccccc;
+            }
+            
+            .control-button {
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                border: none;
+                padding: 12px 24px;
+                color: white;
+                font-weight: 600;
+                cursor: pointer;
+                border-radius: 6px;
+                font-size: 14px;
+                transition: all 0.3s ease;
+                margin: 5px;
+            }
+            
+            .control-button:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+            }
+            
+            .auto-button {
+                background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+            }
+            
+            .auto-button.active {
+                background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+            }
+            
+            .trading-button {
+                background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+            }
+        </style>
+    </head>
+    <body>
+        {%app_entry%}
+        <footer>
+            {%config%}
+            {%scripts%}
+            {%renderer%}
+        </footer>
+    </body>
+</html>
+'''
+
+app.layout = html.Div([
+   
+    html.Div([
+        html.H1(" Panel", style={
+            'textAlign': 'center',
+            'margin': '0 0 0.5rem 0',
+            'fontSize': '2rem',
+            'fontWeight': '700'
+        }),
+        html.P(f"", style={
+            'textAlign': 'center',
+            'margin': '0 0 2rem 0',
+            'color': '#cccccc'
+        })
+    ], style={'padding': '2rem 0 1rem 0'}),
+    
+  
+    html.Div([
+        html.Div([
+            html.Label("Timeframe"),
+            dcc.Dropdown(
+                id='dd-timeframe',
+                options=[
+                    {'label': '1m', 'value': '1m'},
+                    {'label': '5m', 'value': '5m'},
+                    {'label': '15m', 'value': '15m'},
+                    {'label': '1h', 'value': '1h'},
+                    {'label': '4h', 'value': '4h'},
+                ],
+                value=DEFAULT_TIMEFRAME,
+                clearable=False
+            )
+        ], style={'minWidth': '120px'}),
+        
+        html.Div([
+            html.Label("Min Streak"),
+            dcc.Input(
+                id='inp-min-streak',
+                type='number',
+                value=DEFAULT_MIN_STREAK,
+                min=1,
+                style={'width': '80px', 'backgroundColor': '#2a2a2a', 'border': '1px solid #404040', 'color': '#ffffff', 'padding': '8px'}
+            )
+        ], style={'minWidth': '100px'}),
+        
+        html.Div([
+            html.Label("Min Move %"),
+            dcc.Input(
+                id='inp-min-pct',
+                type='number',
+                value=DEFAULT_MIN_PCT,
+                step=0.1,
+                min=0,
+                style={'width': '80px', 'backgroundColor': '#2a2a2a', 'border': '1px solid #404040', 'color': '#ffffff', 'padding': '8px'}
+            )
+        ], style={'minWidth': '100px'}),
+        
+        html.Div([
+            html.Label("Min Vol Ratio"),
+            dcc.Input(
+                id='inp-min-volr',
+                type='number',
+                value=DEFAULT_MIN_VOLR,
+                step=0.1,
+                min=0,
+                style={'width': '80px', 'backgroundColor': '#2a2a2a', 'border': '1px solid #404040', 'color': '#ffffff', 'padding': '8px'}
+            )
+        ], style={'minWidth': '100px'}),
+        
+        html.Div([
+            html.Label("Min AI %"),
+            dcc.Input(
+                id='inp-min-ai',
+                type='number',
+                value=DEFAULT_MIN_AI_SCORE * 100,
+                min=0,
+                max=100,
+                style={'width': '80px', 'backgroundColor': '#2a2a2a', 'border': '1px solid #404040', 'color': '#ffffff', 'padding': '8px'}
+            )
+        ], style={'minWidth': '100px'}),
+        
+        
+        html.Button("🔄 Otomatik Başlat", id='btn-auto', n_clicks=0, className='control-button auto-button'),
+        html.Button("💰 Paper Trading Başlat", id='btn-start-trading', n_clicks=0, className='control-button trading-button'),
+        html.Button("🛑 Paper Trading Durdur", id='btn-stop-trading', n_clicks=0, className='control-button trading-button'),
+    ], style={
+        'display': 'flex',
+        'gap': '1rem',
+        'alignItems': 'end',
+        'justifyContent': 'center',
+        'marginBottom': '2rem',
+        'flexWrap': 'wrap'
+    }),
+    
+    
+    html.Div([
+        html.Span(id='trading-status', style={'fontSize': '1.1rem', 'fontWeight': 'bold'})
+    ], style={
+        'textAlign': 'center',
+        'marginBottom': '1rem',
+        'padding': '1rem',
+        'backgroundColor': '#2a2a2a',
+        'borderRadius': '6px',
+        'border': '1px solid #404040'
+    }),
+    
+    
+    html.Div([
+        html.H3("📊 Paper Trading Performance", style={'textAlign': 'center', 'margin': '0 0 1rem 0'}),
+        html.Div(id='performance-metrics', style={'marginBottom': '2rem'})
+    ]),
+    
+   
+    html.Div([
+        html.H3("Açık Pozisyonlar", style={'textAlign': 'center'}),
+        dash_table.DataTable(
+            id='positions-table',
+            columns=[
+                {"name": "Symbol", "id": "symbol"},
+                {"name": "Side", "id": "side"},
+                {"name": "Quantity", "id": "quantity", "type": "numeric", "format": {"specifier": ".6f"}},
+                {"name": "Entry Price", "id": "entry_price", "type": "numeric", "format": {"specifier": ".6f"}},
+                {"name": "Current Price", "id": "current_price", "type": "numeric", "format": {"specifier": ".6f"}},
+                {"name": "Invested $", "id": "invested_amount", "type": "numeric", "format": {"specifier": ".2f"}},
+                {"name": "Current Value $", "id": "current_value", "type": "numeric", "format": {"specifier": ".2f"}},
+                {"name": "Unrealized P&L $", "id": "unrealized_pnl", "type": "numeric", "format": {"specifier": ".2f"}},
+                {"name": "Stop Loss", "id": "stop_loss", "type": "numeric", "format": {"specifier": ".6f"}},
+                {"name": "Take Profit", "id": "take_profit", "type": "numeric", "format": {"specifier": ".6f"}},
+                {"name": "Score", "id": "ai_score", "type": "numeric", "format": {"specifier": ".0f"}},
+                
+            ],
+            style_cell={'textAlign': 'center', 'padding': '10px', 'fontSize': '12px', 'backgroundColor': '#2a2a2a', 'color': '#ffffff', 'border': '1px solid #404040'},
+            style_header={'backgroundColor': '#1a1a1a', 'fontWeight': 'bold'},
+            style_data_conditional=[
+                {
+                    'if': {'column_id': 'unrealized_pnl', 'filter_query': '{unrealized_pnl} > 0'},
+                    'backgroundColor': '#22c55e',
+                    'color': '#000000',
+                    'fontWeight': 'bold'
+                },
+                {
+                    'if': {'column_id': 'unrealized_pnl', 'filter_query': '{unrealized_pnl} < 0'},
+                    'backgroundColor': '#ef4444',
+                    'color': '#ffffff',
+                    'fontWeight': 'bold'
+                },
+                {
+                    'if': {'column_id': 'side', 'filter_query': '{side} = LONG'},
+                    'backgroundColor': '#059669',
+                    'color': '#ffffff',
+                    'fontWeight': 'bold'
+                },
+                {
+                    'if': {'column_id': 'side', 'filter_query': '{side} = SHORT'},
+                    'backgroundColor': '#dc2626',
+                    'color': '#ffffff',
+                    'fontWeight': 'bold'
+                }
+            ]
+        )
+    ], style={'marginBottom': '2rem'}),
+
+    html.Div([
+        html.P([
+            "⚠️ ",
+            html.Strong("UYARI: "),
+            "Bu kod yatırım tavsiyesi değildir, eğitim amaçlıdır."
+        ], style={
+            'textAlign': 'center',
+            'fontSize': '14px',
+            'color': '#fbbf24',
+            'margin': '20px 0',
+            'padding': '15px',
+            'backgroundColor': '#2a2a2a',
+            'borderRadius': '6px',
+            'border': '1px solid #f59e0b'
+        })
+    ]),
+    
+ 
+    html.Div(id='stats-panel', style={'marginBottom': '2rem'}),
+    
+  
+    html.Div([
+        html.Span(id='status-text', style={'fontSize': '0.9rem', 'color': '#cccccc'})
+    ], style={
+        'textAlign': 'center',
+        'marginBottom': '2rem',
+        'padding': '1rem',
+        'backgroundColor': '#2a2a2a',
+        'borderRadius': '6px',
+        'border': '1px solid #404040'
+    }),
+
+
+    html.Div([
+        html.H3("📊 Panel", style={
+            'textAlign': 'center',
+            'margin': '0 0 1rem 0',
+            'fontSize': '1.3rem',
+            'fontWeight': '600'
+        }),
+        dash_table.DataTable(
+            id='signals-table',
+            columns=[
+                {"name": "Coin", "id": "symbol"},
+                
+                {"name": "Side", "id": "side"},
+                {"name": "Ardışık(n)", "id": "run_count", 'type': 'numeric'},
+                {"name": "Ardışık %", "id": "run_perc", 'type': 'numeric', 'format': {"specifier": ".2f"}},
+                {"name": "Gauss(n)", "id": "gauss_run", 'type': 'numeric', 'format': {"specifier": ".1f"}},
+                {"name": "Gauss(%)", "id": "gauss_run_perc", 'type': 'numeric', 'format': {"specifier": ".1f"}},
+                {"name": "Vol/SMA", "id": "vol_ratio", 'type': 'numeric', 'format': {"specifier": ".2f"}},
+                {"name": "HH Vol", "id": "hh_vol_streak", 'type': 'numeric'},
+                {"name": "Deviso %", "id": "deviso_ratio", 'type': 'numeric', 'format': {"specifier": ".2f"}},
+                {"name": "AI Skor", "id": "ai_score"},  
+                {"name": "Time", "id": "timestamp"}
+            ],
+            data=[],
+            page_size=20,
+            sort_action='native',
+            style_table={'overflowX': 'auto'},
+            style_header={
+                'backgroundColor': '#1a1a1a',
+                'color': '#ffffff',
+                'fontWeight': '600',
+                'fontSize': '0.85rem',
+                'textAlign': 'center',
+                'border': '1px solid #404040'
+            },
+            style_cell={
+                'backgroundColor': '#2a2a2a',
+                'color': '#ffffff',
+                'border': '1px solid #404040',
+                'textAlign': 'center',
+                'fontSize': '0.8rem',
+                'padding': '6px'
+            },
+            style_data_conditional=[
+               
+                {
+                    'if': {'column_id': 'side', 'filter_query': '{side} = LONG'},
+                    'backgroundColor': '#059669',
+                    'color': '#ffffff',
+                    'fontWeight': 'bold'
+                },
+                {
+                    'if': {'column_id': 'side', 'filter_query': '{side} = SHORT'},
+                    'backgroundColor': '#dc2626',
+                    'color': '#ffffff',
+                    'fontWeight': 'bold'
+                },
+                
+             
+                {
+                    'if': {'column_id': 'deviso_ratio', 'filter_query': '{deviso_ratio} > 0'},
+                    'backgroundColor': '#059669',
+                    'color': '#ffffff',
+                    'fontWeight': 'bold'
+                },
+                {
+                    'if': {'column_id': 'deviso_ratio', 'filter_query': '{deviso_ratio} < 0'},
+                    'backgroundColor': '#dc2626',
+                    'color': '#ffffff',
+                    'fontWeight': 'bold'
+                }
+            ],
+            
+        )
+    ], style={'marginBottom': '2rem'}),
+    
+   
+    html.Div([
+        html.H3("📋 Paper Trading Geçmişi", style={'textAlign': 'center'}),
+        dash_table.DataTable(
+            id='trades-table',
+            columns=[
+                {"name": "Time", "id": "timestamp"},
+                {"name": "Symbol", "id": "symbol"},
+                {"name": "Side", "id": "side"},
+                {"name": "Quantity", "id": "quantity", "type": "numeric", "format": {"specifier": ".6f"}},
+                {"name": "Entry Price", "id": "entry_price", "type": "numeric", "format": {"specifier": ".6f"}},
+                {"name": "Exit Price", "id": "exit_price", "type": "numeric", "format": {"specifier": ".6f"}},
+                {"name": "P&L $", "id": "pnl", "type": "numeric", "format": {"specifier": ".2f"}},
+                
+                {"name": "AI Score", "id": "ai_score", "type": "numeric", "format": {"specifier": ".0f"}},
+                {"name": "Close Reason", "id": "close_reason"},
+                {"name": "Status", "id": "status"}
+            ],
+            data=[],
+            page_size=20,
+            sort_action='native',
+            style_table={'overflowX': 'auto'},
+            style_header={
+                'backgroundColor': '#1a1a1a',
+                'color': '#ffffff',
+                'fontWeight': '600',
+                'fontSize': '0.85rem',
+                'textAlign': 'center',
+                'border': '1px solid #404040'
+            },
+            style_cell={
+                'backgroundColor': '#2a2a2a',
+                'color': '#ffffff',
+                'border': '1px solid #404040',
+                'textAlign': 'center',
+                'fontSize': '0.8rem',
+                'padding': '6px'
+            },
+            style_data_conditional=[
+                {
+                    'if': {'column_id': 'pnl', 'filter_query': '{pnl} > 0'},
+                    'backgroundColor': '#22c55e',
+                    'color': '#000000',
+                    'fontWeight': 'bold'
+                },
+                {
+                    'if': {'column_id': 'pnl', 'filter_query': '{pnl} < 0'},
+                    'backgroundColor': '#ef4444',
+                    'color': '#ffffff',
+                    'fontWeight': 'bold'
+                },
+                {
+                    'if': {'column_id': 'status', 'filter_query': '{status} = OPEN'},
+                    'backgroundColor': '#3b82f6',
+                    'color': '#ffffff',
+                    'fontWeight': 'bold'
+                },
+                {
+                    'if': {'column_id': 'status', 'filter_query': '{status} = CLOSED'},
+                    'backgroundColor': '#6b7280',
+                    'color': '#ffffff',
+                    'fontWeight': 'bold'
+                }
+            ]
+        )
+    ]),
+
+    dcc.Interval(
+        id='interval-component',
+        interval=2000,  
+        n_intervals=0
+    )
+    
+], style={
+    'maxWidth': '1400px',
+    'margin': '0 auto',
+    'padding': '0 1rem 2rem 1rem',
+    'backgroundColor': '#1a1a1a',
+    'minHeight': '100vh'
+})
+
+
+@app.callback(
+    [Output('btn-auto', 'children'),
+     Output('btn-auto', 'className')],
+    Input('btn-auto', 'n_clicks')
+)
+def toggle_auto_scan(n_clicks):
+    """Otomatik tarama butonunu kontrol et"""
+    global auto_scan_active
+    
+    if n_clicks > 0:
+        if auto_scan_active:
+            stop_auto_scan()
+            return "🔄 Otomatik Başlat", "control-button auto-button"
+        else:
+            start_auto_scan()
+            return "⛔ Otomatik Durdur", "control-button auto-button active"
+    
+    return "🔄 Otomatik Başlat", "control-button auto-button"
+
+@app.callback(
+    Output('trading-status', 'children'),
+    [Input('btn-start-trading', 'n_clicks'),
+     Input('btn-stop-trading', 'n_clicks')]
+)
+def control_paper_trading(start_clicks, stop_clicks):
+    """Paper Trading kontrolü"""
+    ctx = dash.callback_context
+    
+    if not ctx.triggered:
+        status = "🔴 Paper Trading Durduruldu" if not trading_active else "🟢 Paper Trading Aktif"
+        return status
+    
+    trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
+    
+    if trigger_id == 'btn-start-trading' and start_clicks > 0:
+        success = start_paper_trading()
+        if success:
+            return "🟢 Paper Trading Başarıyla Başlatıldı ✅ (Komisyonsuz)"
+        else:
+            return "❌ Paper Trading Başlatılamadı"
+    
+    elif trigger_id == 'btn-stop-trading' and stop_clicks > 0:
+        stop_paper_trading()
+        return "🔴 Paper Trading Durduruldu - Tüm pozisyonlar kapatıldı (Komisyonsuz)"
+    
+    return "🔴 Paper Trading Durduruldu" if not trading_active else "🟢 Paper Trading Aktif"
+
+@app.callback(
+    Output('performance-metrics', 'children'),
+    [Input('interval-component', 'n_intervals')]
+)
+def update_performance_metrics(n_intervals):
+    """🔥 DEĞİŞTİRİLDİ: Performans metriklerini güncelle - TOPLAM KAR EKLENDİ"""
+    metrics = calculate_performance_metrics()
+    
+    return html.Div([
+        html.Div([
+            html.H4("💰 Mevcut Sermaye", style={'margin': '0', 'fontSize': '14px', 'color': '#22c55e'}),
+            html.H2(f"${metrics['current_capital']:.2f}", style={'color': '#22c55e', 'margin': '5px 0', 'fontSize': '18px'})
+        ], style={
+            'width': '16%', 'display': 'inline-block', 'textAlign': 'center', 
+            'margin': '0.5%', 'padding': '15px', 'border': '2px solid #22c55e', 
+            'borderRadius': '10px', 'backgroundColor': '#f8fff8'
+        }),
+        
+        html.Div([
+            html.H4("📈 Efektif Sermaye", style={'margin': '0', 'fontSize': '14px', 'color': '#3b82f6'}),
+            html.H2(f"${metrics['effective_capital']:.2f}", style={'color': '#3b82f6', 'margin': '5px 0', 'fontSize': '18px'})
+        ], style={
+            'width': '16%', 'display': 'inline-block', 'textAlign': 'center', 
+            'margin': '0.5%', 'padding': '15px', 'border': '2px solid #3b82f6', 
+            'borderRadius': '10px', 'backgroundColor': '#f0f8ff'
+        }),
+        
+        html.Div([
+            html.H4("📊 Gerçekleşmemiş P&L", style={'margin': '0', 'fontSize': '14px', 'color': '#f59e0b'}),
+            html.H2(f"${metrics['total_unrealized_pnl']:.2f}", style={
+                'color': '#22c55e' if metrics['total_unrealized_pnl'] >= 0 else '#ef4444', 
+                'margin': '5px 0', 'fontSize': '18px'
+            })
+        ], style={
+            'width': '16%', 'display': 'inline-block', 'textAlign': 'center', 
+            'margin': '0.5%', 'padding': '15px', 'border': '2px solid #f59e0b', 
+            'borderRadius': '10px', 'backgroundColor': '#fef9e7'
+        }),
+        
+        
+        html.Div([
+            html.H4("🎯 Toplam Kar", style={'margin': '0', 'fontSize': '14px', 'color': '#8b5cf6'}),
+            html.H2(f"${metrics['realized_total_profit']:.2f}", style={
+                'color': '#22c55e' if metrics['realized_total_profit'] >= 0 else '#ef4444', 
+                'margin': '5px 0', 'fontSize': '18px'
+            })
+        ], style={
+            'width': '16%', 'display': 'inline-block', 'textAlign': 'center', 
+            'margin': '0.5%', 'padding': '15px', 'border': '2px solid #8b5cf6', 
+            'borderRadius': '10px', 'backgroundColor': '#faf5ff'
+        }),
+        
+        html.Div([
+            html.H4("📋 Toplam İşlem", style={'margin': '0', 'fontSize': '14px', 'color': '#6b7280'}),
+            html.H2(f"{metrics['total_trades']}", style={'color': '#6b7280', 'margin': '5px 0', 'fontSize': '18px'})
+        ], style={
+            'width': '16%', 'display': 'inline-block', 'textAlign': 'center', 
+            'margin': '0.5%', 'padding': '15px', 'border': '2px solid #6b7280', 
+            'borderRadius': '10px', 'backgroundColor': '#f9fafb'
+        }),
+        
+        html.Div([
+            html.H4("🏆 Kazanma Oranı", style={'margin': '0', 'fontSize': '14px', 'color': '#10b981'}),
+            html.H2(f"{metrics['win_rate']:.1f}%", style={'color': '#10b981', 'margin': '5px 0', 'fontSize': '18px'})
+        ], style={
+            'width': '16%', 'display': 'inline-block', 'textAlign': 'center', 
+            'margin': '0.5%', 'padding': '15px', 'border': '2px solid #10b981', 
+            'borderRadius': '10px', 'backgroundColor': '#f0fdf4'
+        })
+        
+    ])
+
+@app.callback(
+    [Output('positions-table', 'data'),
+     Output('trades-table', 'data')],
+    [Input('interval-component', 'n_intervals')]
+)
+def update_trading_tables(n_intervals):
+    """🔥 DEĞİŞTİRİLDİ: Trading tablolarını güncelle - KOMİSYON KALDIRILDI"""
+    positions_data = []
+    
+    
+    try:
+        for symbol, position in open_positions.items():
+            current_price = get_current_price(symbol)
+            if current_price is None:
+                current_price = position['entry_price']
+            
+            current_value = position['quantity'] * current_price
+            
+            if position['side'] == 'LONG':
+                unrealized_pnl = (current_price - position['entry_price']) * position['quantity']
+            else:
+                unrealized_pnl = (position['entry_price'] - current_price) * position['quantity']
+            
+            positions_data.append({
+                'symbol': symbol,
+                'side': position['side'],
+                'quantity': position['quantity'],
+                'entry_price': position['entry_price'],
+                'current_price': current_price,
+                'invested_amount': position['invested_amount'],
+                'current_value': current_value,
+                'unrealized_pnl': unrealized_pnl,
+                'stop_loss': position['stop_loss'],
+                'take_profit': position['take_profit'],
+                'ai_score': position['signal_data']['ai_score']
+                
+            })
+    except Exception as e:
+        log.error(f"❌ Pozisyon tablosu güncelleme hatası: {e}")
+    
+   
+    try:
+        trades_df = load_trades_from_csv()
+        if not trades_df.empty:
+           
+            trades_data = []
+            for _, row in trades_df.sort_values('timestamp', ascending=False).head(50).iterrows():
+                trades_data.append({
+                    'timestamp': row.get('timestamp', ''),
+                    'symbol': row.get('symbol', ''),
+                    'side': row.get('side', ''),
+                    'quantity': row.get('quantity', 0),
+                    'entry_price': row.get('entry_price', 0),
+                    'exit_price': row.get('exit_price', 0),
+                    'pnl': row.get('pnl', 0),
+                    
+                    'ai_score': row.get('ai_score', 0),
+                    'close_reason': row.get('close_reason', ''),
+                    'status': row.get('status', '')
+                })
+        else:
+            trades_data = []
+    except Exception as e:
+        log.error(f"❌ Trade tablosu güncelleme hatası: {e}")
+        trades_data = []
+    
+    return positions_data, trades_data
+
+@app.callback(
+    [Output('signals-table', 'data'),
+     Output('status-text', 'children'),
+     Output('stats-panel', 'children')],
+    [Input('interval-component', 'n_intervals')],  
+    [State('dd-timeframe', 'value'),
+     State('inp-min-streak', 'value'),
+     State('inp-min-pct', 'value'),
+     State('inp-min-volr', 'value'),
+     State('inp-min-ai', 'value')]
+)
+def update_signals(n_intervals, tf, min_streak, min_pct, min_volr, min_ai_pct):  
+    global current_data, current_settings, DEFAULT_MIN_AI_SCORE
+    
+    tf = tf or DEFAULT_TIMEFRAME
+    min_streak = int(min_streak or DEFAULT_MIN_STREAK)
+    min_pct = float(min_pct or DEFAULT_MIN_PCT)
+    min_volr = float(min_volr or DEFAULT_MIN_VOLR)
+    min_ai_score = float(min_ai_pct or 30) / 100
+    DEFAULT_MIN_AI_SCORE = min_ai_score
+    
+    current_settings.update({
+        'timeframe': tf,
+        'min_streak': min_streak,
+        'min_pct': min_pct,
+        'min_volr': min_volr,
+        'min_ai': min_ai_pct
+    })
+    
+  
+    
+    if current_data is None or current_data.empty:
+        status_text = "Otomatik tarama aktif - Veri bekleniyor..." if auto_scan_active else "Otomatik tarama başlatın"
+        return [], status_text, []
+    
+   
+    df = current_data.copy()
+    original_count = len(df)
+    
+   
+    if min_ai_pct > 70:
+        df = df[df['ai_score'] >= min_ai_pct]
+        
+    if min_streak > 6:
+        df = df[df['run_count'] >= min_streak]
+        
+    if min_pct > 3.0:
+        df = df[df['run_perc'] >= min_pct]
+
+    if min_volr > 3.0:
+        df = df[(df['vol_ratio'].isna()) | (df['vol_ratio'] >= min_volr)]
+    
+   
+    df = df.sort_values(by=['ai_score', 'run_perc', 'gauss_run', 'vol_ratio'], 
+                       ascending=[False, False, False, False])
+    
+    if df.empty:
+        status_text = f"Filtreler çok sıkı! {original_count} sinyal var."
+        if auto_scan_active:
+            status_text += f" | Otomatik aktif"
+        return [], status_text, []
+    
+    table_data = []
+    for _, row in df.iterrows():
+        symbol_link = row['symbol']
+        
+       
+        ai_score_unicode = create_ai_score_bar(row['ai_score'])
+        
+        table_data.append({
+            'symbol': symbol_link,
+            'timeframe': row['timeframe'].upper(),
+            'side': row['run_type'].upper(),
+            'run_count': row['run_count'],
+            'run_perc': row['run_perc'],
+            'gauss_run': row['gauss_run'],
+            'gauss_run_perc': row['gauss_run_perc'] if row['gauss_run_perc'] is not None else 0,
+            'vol_ratio': row['vol_ratio'] if row['vol_ratio'] is not None else 0,
+            'hh_vol_streak': row['hh_vol_streak'],
+            'deviso_ratio': row['deviso_ratio'],
+            'ai_score': ai_score_unicode,  
+            'timestamp': datetime.now(LOCAL_TZ).strftime('%H:%M')
+        })
+    
+    long_count = len(df[df['run_type'] == 'long'])
+    short_count = len(df[df['run_type'] == 'short'])
+    
+    top_3_df = df.head(3)
+    top_3_info = f"(En iyi 3: {', '.join(top_3_df['symbol'].tolist())})" if len(top_3_df) > 0 else ""
+    
+   
+    stats_panel = html.Div([
+        html.Div([
+            html.Div(f"{len(df)}", className="stat-value"),
+            html.Div("Sinyal", className="stat-label")
+        ], className="stat-card"),
+        html.Div([
+            html.Div(f"{long_count}", className="stat-value", style={'color': '#22c55e'}), 
+            html.Div("Long", className="stat-label")
+        ], className="stat-card"),
+        html.Div([
+            html.Div(f"{short_count}", className="stat-value", style={'color': '#ef4444'}),  
+            html.Div("Short", className="stat-label")
+        ], className="stat-card"),
+    ], className="stats-grid")
+    
+  
+    status = f"{len(df)}/{original_count} SİNYAL: (L:{long_count}, S:{short_count}) | {datetime.now(LOCAL_TZ).strftime('%H:%M:%S')}"
+    if auto_scan_active:
+        status += f" | 🔄 Otomatik aktif"
+    if trading_active:
+        status += f" | 💰 Trading aktif ({len(open_positions)}/{MAX_OPEN_POSITIONS})"
+    status += f" {top_3_info}"
+    
+    return table_data, status, stats_panel
+
+
+if __name__ == "__main__":
+    setup_csv_files()
+    app.run(debug=False, host="127.0.0.1", port=8050)

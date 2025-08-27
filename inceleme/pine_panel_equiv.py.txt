@@ -1,0 +1,248 @@
+from __future__ import annotations
+
+import math
+from typing import Literal, Optional, Tuple
+
+import numpy as np
+import pandas as pd
+
+"""
+Pine eşleniği metrikler (TradingView v5) – panel.txt ile birebir uyum hedefi
+
+Bu modül, Pine Script'teki aşağıdaki fonksiyon/kalıpları Python ile 1:1 taklit eder:
+- ta.ema(src, len)
+- ta.stdev(src, len)  -> sample stdev (ddof=1)
+- ta.crossover(a, b)  -> (a[1] <= b[1] and a > b)
+- ta.crossunder(a, b) -> (a[1] >= b[1] and a < b)
+- ta.valuewhen(cond, series, 0) -> son True olduğunda series değerini taşır (stateful carry)
+- ta.barssince(cond) -> son True’dan bu yana bar sayısı
+
+Üstüne;
+- Z-Score tabanlı ratio: (close - EMA(len)) / stdev(len) * 100
+- Momentum ROC (kesişim barına göre):
+  Long: ((close_at_cross) / (previous_close_at_cross)) - 1) * 100
+  Short: benzeri crossunder için
+- R-Score: Sharpe/Sortino/Calmar/Omega ağırlıklarla (0.10/0.40/0.20/0.30)
+
+Notlar:
+- Girdiler pandas Series olmalı (float). Çıktılar Series döner.
+- NaN güvenliği için tip dönüşümleri yapılır.
+"""
+
+# ----------------------
+# Pine primitive equivalents
+# ----------------------
+
+def ema(series: pd.Series, length: int) -> pd.Series:
+    """Pine ta.ema eşleniği.
+    Pine davranışı: ilk EMA değeri ilgili barın fiyatına eşit kabul edilir; SMA ile tohumlama yapılmaz.
+    EMA_t = alpha * price_t + (1 - alpha) * EMA_{t-1}, alpha = 2/(len+1)
+    """
+    s = pd.to_numeric(series, errors="coerce")
+    out = pd.Series(np.nan, index=s.index, dtype=float)
+    if length <= 0 or s.empty:
+        return out
+    alpha = 2.0 / (length + 1.0)
+    # İlk geçerli fiyatı bul ve EMA'yı fiyatla başlat
+    first_valid = s.first_valid_index()
+    if first_valid is None:
+        return out
+    pos0_arr = s.index.get_indexer([first_valid])
+    i0 = int(pos0_arr[0]) if pos0_arr.size > 0 else 0
+    out.iloc[i0] = s.loc[first_valid]
+    # İleri yönde klasik EMA rekuransı
+    for i in range(i0 + 1, len(s)):
+        prev = out.iloc[i - 1]
+        price = s.iloc[i]
+        out.iloc[i] = alpha * price + (1.0 - alpha) * prev
+    return out
+
+
+def stdev(series: pd.Series, length: int) -> pd.Series:
+    """Pine ta.stdev eşleniği: rolling population std (ddof=0)."""
+    s = pd.to_numeric(series, errors="coerce")
+    return s.rolling(window=length, min_periods=length).std(ddof=0)
+
+
+def crossover(a: pd.Series, b: pd.Series) -> pd.Series:
+    a = pd.to_numeric(a, errors="coerce")
+    b = pd.to_numeric(b, errors="coerce")
+    # Pine: ta.crossover(a,b) -> a[1] <= b[1] and a > b
+    prev_lt = a.shift(1) <= b.shift(1)
+    now_gt = a > b
+    return (prev_lt & now_gt).fillna(False)
+
+
+def crossunder(a: pd.Series, b: pd.Series) -> pd.Series:
+    a = pd.to_numeric(a, errors="coerce")
+    b = pd.to_numeric(b, errors="coerce")
+    # Pine: ta.crossunder(a,b) -> a[1] >= b[1] and a < b
+    prev_gt = a.shift(1) >= b.shift(1)
+    now_lt = a < b
+    return (prev_gt & now_lt).fillna(False)
+
+
+def valuewhen(cond: pd.Series, series: pd.Series) -> pd.Series:
+    """ta.valuewhen(cond, series, 0) eşleniği: son True anındaki series değerini taşır.
+    cond: bool Series
+    series: float Series
+    """
+    cond = cond.fillna(False)
+    series = pd.to_numeric(series, errors="coerce")
+
+    out = pd.Series(np.nan, index=series.index, dtype=float)
+    last_val: Optional[float] = np.nan
+    for idx in range(len(series)):
+        if bool(cond.iloc[idx]):
+            last_val = series.iloc[idx]
+        out.iloc[idx] = last_val
+    return out
+
+
+def barssince(cond: pd.Series) -> pd.Series:
+    """ta.barssince(cond) eşleniği: son True’dan bu yana geçen bar sayısı.
+    İlk True yoksa sayacı artırır, True geldiği barı 0 yapar.
+    """
+    cond = cond.fillna(False)
+    out = pd.Series(np.nan, index=cond.index, dtype=float)
+    counter = np.nan
+    for i in range(len(cond)):
+        if cond.iloc[i]:
+            counter = 0.0
+        else:
+            counter = (counter + 1.0) if not math.isnan(counter) else np.nan
+        out.iloc[i] = counter
+    return out
+
+
+# ----------------------
+# Derived metrics per panel.txt
+# ----------------------
+
+def zscore_ratio_percent(close: pd.Series, length: int) -> pd.Series:
+    """(close - EMA(len)) / stdev(len) * 100"""
+    e = ema(close, length)
+    sd = stdev(close, length)
+    z = (pd.to_numeric(close, errors="coerce") - e) / sd
+    return z * 100.0
+
+
+def momentum_roc_on_cross(close: pd.Series, length: int, side: Literal["long", "short"]) -> pd.Series:
+    """Kesişim anına göre ROC. Pine formülünü izler.
+    - long: crossover(close, ema)
+    - short: crossunder(close, ema)
+    momentumROC = ((crossClose / valuewhen(cross, close[1])) - 1) * 100
+    """
+    c = pd.to_numeric(close, errors="coerce")
+    e = ema(c, length)
+    if side == "long":
+        cross = crossover(c, e)
+    else:
+        cross = crossunder(c, e)
+
+    cross_close = valuewhen(cross, c)
+    prev_close_at_cross = valuewhen(cross, c.shift(1))
+
+    with np.errstate(divide='ignore', invalid='ignore'):
+        roc = (cross_close / prev_close_at_cross) - 1.0
+    return roc * 100.0
+
+
+def bars_since_cross(close: pd.Series, length: int, side: Literal["long", "short"]) -> pd.Series:
+    c = pd.to_numeric(close, errors="coerce")
+    e = ema(c, length)
+    cond = crossover(c, e) if side == "long" else crossunder(c, e)
+    return barssince(cond)
+
+
+# ----------------------
+# R-Score (Sharpe/Sortino/Calmar/Omega) – panel.txt davranışı
+# ----------------------
+
+def _log_returns(close: pd.Series) -> pd.Series:
+    c = pd.to_numeric(close, errors="coerce")
+    return np.log(c / c.shift(1))
+
+
+def _sma(series: pd.Series, length: int) -> pd.Series:
+    s = pd.to_numeric(series, errors="coerce")
+    return s.rolling(window=length, min_periods=length).mean()
+
+
+def r_score(close: pd.Series, length: int, rf: float) -> pd.Series:
+    """Pine panelindeki ağırlıklarla R-Score üretir.
+    returns = log(close/close[1])
+    average_return = sma(returns, len)
+    stddev_return = stdev(returns, len)
+    Sharpe  = (avg - rf) / std
+    Sortino = (avg - rf) / stdev(neg_returns, len)
+    Calmar  = avg / (highest(close,len) - lowest(close,len))
+    Omega   = sum(max(returns-rf,0),len) / sum(max(rf-returns,0),len)
+    R-Score = 0.40*Sortino + 0.30*Omega + 0.20*Calmar + 0.10*Sharpe
+    """
+    ret = _log_returns(close)
+    avg_ret = _sma(ret, length)
+    std_ret = stdev(ret, length)
+
+    # Sharpe
+    sharpe = (avg_ret - rf) / std_ret
+
+    # Sortino (Pine eşleniği): ta.stdev( ta.valuewhen(returns < 0, returns, 0), len )
+    # -> son negatif return değeri taşınır, diğer barlarda aynı değer sürer; bunun rolling std'u alınır.
+    cond_neg = ret < 0
+    carried_neg_ret = valuewhen(cond_neg.fillna(False), ret)
+    # Pine ta.stdev nüfus (population) std dev kullanır; ddof=0
+    sortino_den = carried_neg_ret.rolling(window=length, min_periods=length).std(ddof=0)
+    sortino = (avg_ret - rf) / sortino_den
+
+    # Calmar: avg_ret / (highest - lowest)
+    highest = pd.to_numeric(close, errors="coerce").rolling(window=length, min_periods=length).max()
+    lowest = pd.to_numeric(close, errors="coerce").rolling(window=length, min_periods=length).min()
+    draw = highest - lowest
+    calmar = avg_ret / draw.replace(0, np.nan)
+
+    # Omega (Pine eşleniği):
+    # num = sum( valuewhen(returns >= rf, returns - rf, 0), len )
+    # den = sum( valuewhen(returns <  rf, rf - returns, 0), len )
+    cond_ge = ret >= rf
+    cond_lt = ret < rf
+    carried_gain = valuewhen(cond_ge.fillna(False), (ret - rf))
+    carried_loss = valuewhen(cond_lt.fillna(False), (rf - ret))
+    num = carried_gain.rolling(window=length, min_periods=length).sum()
+    den = carried_loss.rolling(window=length, min_periods=length).sum()
+    omega = num / den.replace(0, np.nan)
+
+    return 0.40 * sortino + 0.30 * omega + 0.20 * calmar + 0.10 * sharpe
+
+
+# ----------------------
+# Toplu hesaplayıcı (tek sembol)
+# ----------------------
+
+def compute_all_for_symbol(close: pd.Series, length_ema: int = 200, r_period: int = 14, rf: float = 0.02) -> pd.DataFrame:
+    """Pine panelindeki temel sütunları üretir.
+    Dönen kolonlar:
+    - ema: EMA(length_ema)
+    - ratio_percent: Z-Score * 100
+    - mROC_long, mROC_short: kesişim anı ROC%
+    - msince_long, msince_short: kesişimden bu yana bar sayısı
+    - r_score: ağırlıklı rasyo
+    """
+    close = pd.to_numeric(close, errors="coerce")
+    df = pd.DataFrame(index=close.index)
+    df["close"] = close
+    df["ema"] = ema(close, length_ema)
+    df["ratio_percent"] = zscore_ratio_percent(close, length_ema)
+    df["mROC_long"] = momentum_roc_on_cross(close, length_ema, "long")
+    df["mROC_short"] = momentum_roc_on_cross(close, length_ema, "short")
+    df["msince_long"] = bars_since_cross(close, length_ema, "long")
+    df["msince_short"] = bars_since_cross(close, length_ema, "short")
+    df["r_score"] = r_score(close, r_period, rf)
+    return df
+
+
+if __name__ == "__main__":
+    # Mini self-check (sentetik seri):
+    s = pd.Series(np.linspace(100, 120, 300)) + pd.Series(np.random.normal(0, 1, 300)).cumsum()
+    out = compute_all_for_symbol(s, length_ema=200, r_period=14, rf=0.02)
+    print(out.tail(5))

@@ -1,0 +1,14 @@
+Bu kod, TradingView platformunda Pine Script dili kullanılarak yazılmış bir teknik analiz göstergesi (indicator) olup, üç farklı kripto varlığın (RPL, TRB ve ZEN) performansını izleyerek çeşitli metriklerde karşılaştırmalı olarak değerlendirip bunları görselleştirmektedir.
+
+Temel Tasarım Amacı:
+Bu kodun amacı; RPL, TRB ve ZEN sembolleri üzerindeki fiyat, hacim, volatilite, RSI, momentum gibi teknik verileri işleyerek her bir varlık için:
+
+Günlük bazlı kümülatif getiri (cumulative change) ,
+Fark oranları (% değişimi) ,
+Risk/return oranları (Sharpe, Sortino, Calmar, Omega) hesaplamaları yapmak,
+Bu verileri normalize ederek zaman içinde düzleştirmek (sma ile),
+En iyi performans gösterenleri sıralamak ve
+Alım/satım sinyallerini takip ederek en güçlü sinyalleri öne çıkarmak.
+
+Sonuç:
+Bu script, çoklu varlık üzerinde aynı anda hem teknik hem de nicel analiz yaparak hangi varlığın daha güçlü olduğunu görsel ve sayısal olarak sunar. Özellikle portföy yönetimi veya kısa vadeli pozisyon alma kararlarında yardımcı olabilecek yapılandırılmış ve dinamik bir gösterge sunmaktadır.
