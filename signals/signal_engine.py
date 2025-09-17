@@ -133,7 +133,7 @@ class SignalEngine:
             f"Signal TS Debug | ot_utc={ot_utc} | inferred_delta={inferred_delta} | "
             f"close_utc={close_utc} | close_local={close_local} | now_local={now_local} | tz={tz_name}"
         )
-        current_time = close_local.strftime("%Y-%m-%d %H:%M:%S")
+        current_time = close_local.replace(tzinfo=None).to_pydatetime()  # timezone-naive datetime nesnesi
 
         # ADX değerlerini güvenli bir şekilde al
         adx = (
@@ -188,7 +188,7 @@ class SignalEngine:
 
         signal_data = {
             "signal_type": signal_type,
-            "signal_time": current_time,
+            "timestamp": current_time,
             "price": df[COL_CLOSE].iloc[-1],
             "pullback_level": effective_pullback,
             "strength": strength,

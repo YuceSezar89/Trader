@@ -4,7 +4,7 @@ from typing import List, Dict, Any, Optional
 from utils.logger import get_logger
 from signals.signal_engine import signal_engine
 from utils.financial_metrics import calculate_metrics
-from database.crud import create_signal
+from signals.signal_lifecycle_manager import signal_lifecycle_manager
 from config import Config
 from indicators.core import calculate_rsi, calculate_macd
 from utils.data_provider import fetch_ohlcv
@@ -212,7 +212,8 @@ async def process_and_enrich_signals(
                 }
 
                 logger.info(f"[{symbol}] Veritabanına kaydedilecek sinyal bulundu: {signal_name} - {enriched_signal.get('signal_type')}")
-                await create_signal(enriched_signal)
+                signal_id = await signal_lifecycle_manager.add_new_signal(enriched_signal)
+                logger.info(f"[{symbol}] Sinyal lifecycle manager ile kaydedildi: ID {signal_id}")
 
             except Exception as e:
                 logger.error(f"[{symbol}] Sinyal veritabanına kaydedilirken hata: {e}", exc_info=True)

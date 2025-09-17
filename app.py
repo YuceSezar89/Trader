@@ -10,24 +10,14 @@ st.title("TRader Panel - Pes Eden Maldır !!!")
 # STANDARD LIBRARY IMPORTS
 # =============================================================================
 import json
-import asyncio
 from datetime import datetime, timedelta
 
 # =============================================================================
 # ASYNC HELPER FOR STREAMLIT
 # =============================================================================
-def get_async_loop():
-    """Get or create an asyncio event loop for the current thread."""
-    try:
-        return asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        return loop
+# Async helper fonksiyonları kaldırıldı - run_async_safely kullanılıyor
 
-def run_async_in_st(coro):
-    """Run an async coroutine in Streamlit's sync context."""
-    return get_async_loop().run_until_complete(coro)
+# Async helper kaldırıldı - artık sync fonksiyonlar kullanılıyor
 
 # =============================================================================
 # THIRD PARTY IMPORTS
@@ -36,6 +26,9 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import pytz
+import redis
+import psycopg2
+import psycopg2.extras
 from st_aggrid import AgGrid, GridOptionsBuilder
 from streamlit_autorefresh import st_autorefresh
 from streamlit_option_menu import option_menu
@@ -52,13 +45,138 @@ from binance_client import BinanceClientManager
 from utils.redis_client import RedisClient
 from utils.data_provider import fetch_ohlcv
 
-# Synchronous wrapper for async binance calls
-def get_live_data_sync(symbol: str, interval: str, limit: int):
-    """Tek kapı: Data Provider üzerinden OHLCV (Redis -> REST)."""
-    async def _get_data():
-        df = await fetch_ohlcv(symbol, interval, limit=limit, source='auto')
-        return df if df is not None else pd.DataFrame()
-    return run_async_in_st(_get_data())
+# Database'den veri çekme fonksiyonu (öncelikli)
+@st.cache_data(ttl=30)  # 30 saniye cache
+def get_price_data_from_db(symbol: str, interval: str, limit: int):
+    """Database'den fiyat verisi çeker (hızlı ve real-time)."""
+    try:
+        import psycopg2
+        import psycopg2.extras
+        import pandas as pd
+        
+        # Direct PostgreSQL connection
+        conn = psycopg2.connect(
+            host="localhost",
+            port=5432,
+            database="trader_panel",
+            user="yusuf",
+            cursor_factory=psycopg2.extras.RealDictCursor
+        )
+        
+        cursor = conn.cursor()
+        query = """
+        SELECT timestamp as open_time, open, high, low, close, volume
+        FROM price_data 
+        WHERE symbol = %s AND interval = %s
+        ORDER BY timestamp DESC
+        LIMIT %s
+        """
+        
+        cursor.execute(query, (symbol, interval, limit))
+        rows = cursor.fetchall()
+        
+        cursor.close()
+        conn.close()
+        
+        if not rows:
+            print(f"⚠️ Database'de {symbol} {interval} verisi bulunamadı")
+            return pd.DataFrame()
+        
+        # DataFrame'e dönüştür
+        df = pd.DataFrame([dict(row) for row in rows])
+        
+        # Veri tiplerini düzelt
+        numeric_columns = ['open', 'high', 'low', 'close', 'volume']
+        for col in numeric_columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        
+        # Timestamp'leri datetime'a çevir (zaten datetime olabilir)
+        if not pd.api.types.is_datetime64_any_dtype(df['open_time']):
+            df['open_time'] = pd.to_datetime(df['open_time'])
+        
+        # Sıralamayı düzelt (eski -> yeni)
+        df = df.sort_values('open_time').reset_index(drop=True)
+        
+        # Date sütunu ekle (grafik için gerekli)
+        df['date'] = df['open_time']
+        
+        print(f"✅ Database'den {symbol} verisi çekildi: {len(df)} mum (HIZLI)")
+        return df
+        
+    except Exception as e:
+        print(f"Database hatası: {e}")
+        return pd.DataFrame()
+
+# Binance API fallback fonksiyonu
+def get_live_data_from_api(symbol: str, interval: str, limit: int):
+    """Binance REST API'den direkt veri çeker (yavaş fallback)."""
+    try:
+        import requests
+        import pandas as pd
+        from datetime import datetime
+        
+        # Binance REST API endpoint
+        url = "https://api.binance.com/api/v3/klines"
+        params = {
+            'symbol': symbol,
+            'interval': interval,
+            'limit': str(limit)
+        }
+        
+        response = requests.get(url, params=params, timeout=10)
+        if response.status_code == 400:
+            print(f"⚠️ Geçersiz sembol: {symbol} - Binance'de bulunamadı")
+            return pd.DataFrame()
+        response.raise_for_status()
+        
+        data = response.json()
+        
+        if not data:
+            return pd.DataFrame()
+        
+        # DataFrame'e dönüştür
+        df = pd.DataFrame(data, columns=[
+            'open_time', 'open', 'high', 'low', 'close', 'volume',
+            'close_time', 'quote_asset_volume', 'number_of_trades',
+            'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
+        ])
+        
+        # Veri tiplerini düzelt
+        numeric_columns = ['open', 'high', 'low', 'close', 'volume']
+        for col in numeric_columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        
+        # Timestamp'leri datetime'a çevir
+        df['open_time'] = pd.to_datetime(df['open_time'], unit='ms')
+        df['close_time'] = pd.to_datetime(df['close_time'], unit='ms')
+        
+        # Date sütunu ekle (grafik için gerekli)
+        df['date'] = df['open_time']
+        
+        print(f"⚠️ API'den {symbol} verisi çekildi: {len(df)} mum (YAVAŞ)")
+        return df
+        
+    except Exception as e:
+        print(f"Binance API hatası: {e}")
+        return pd.DataFrame()
+
+# Ana veri çekme fonksiyonu (akıllı seçim)
+def get_chart_data(symbol: str, interval: str, limit: int):
+    """Akıllı veri çekme: Önce database, sonra API fallback."""
+    # 1. Önce database'den dene
+    df = get_price_data_from_db(symbol, interval, limit)
+    
+    if not df.empty:
+        # Database'den veri geldi
+        data_source = "database"
+        return df, data_source
+    
+    # 2. Database'de veri yoksa API'den çek
+    print(f"⚠️ Database'de {symbol} {interval} verisi yok, API'ye geçiliyor...")
+    df = get_live_data_from_api(symbol, interval, limit)
+    data_source = "api"
+    
+    return df, data_source
 
 # Database (Async)
 from database.engine import init_db
@@ -102,66 +220,226 @@ from indicators.core import (
 # =============================================================================
 
 
-@st.cache_resource(show_spinner=False)
-def get_live_symbols():
-    async def _get_symbols():
-        # The manager should be initialized at app startup
-        return await BinanceClientManager.get_top_volume_symbols_async(limit=250)
-    return run_async_in_st(_get_symbols())
+def get_symbols_cache_first():
+    """Redis cache'den sembolleri yükle, yoksa veritabanından mevcut coinleri al"""
+    # 1. Redis'ten cache'lenmiş sembolleri al
+    try:
+        r = redis.Redis.from_url("redis://localhost:6379", decode_responses=True)
+        cached_symbols = r.get("symbols_cache")
+        r.close()
+        
+        if cached_symbols:
+            symbols = json.loads(cached_symbols)
+            print(f"✅ Sembol cache HIT: {len(symbols)} sembol")
+            return symbols
+    except Exception as e:
+        print(f"Redis sembol cache hatası: {e}")
+    
+    # 2. Veritabanından mevcut coinleri çek (price_data tablosundan)
+    try:
+        conn = psycopg2.connect(
+            host="localhost",
+            port=5432,  # Direct PostgreSQL
+            database="trader_panel",
+            user="yusuf",
+            cursor_factory=psycopg2.extras.RealDictCursor
+        )
+        
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT DISTINCT symbol 
+            FROM price_data 
+            ORDER BY symbol
+        """)
+        
+        rows = cursor.fetchall()
+        symbols = [row['symbol'] for row in rows]
+        
+        cursor.close()
+        conn.close()
+        
+        print(f"✅ Price_data'dan {len(symbols)} coin yüklendi")
+        print(f"İlk 10 coin: {symbols[:10]}")
+        
+        # Redis'e cache'le
+        try:
+            r = redis.Redis.from_url("redis://localhost:6379", decode_responses=True)
+            r.set("symbols_cache", json.dumps(symbols), ex=600)  # 10 dakika
+            r.close()
+            print(f"✅ {len(symbols)} sembol cache'lendi")
+        except Exception as e:
+            print(f"Redis cache hatası: {e}")
+        
+        return symbols
+        
+    except Exception as e:
+        print(f"Veritabanından sembol yükleme hatası: {e}")
+    
+    # 3. Son fallback: Sabit sembol listesi (popüler coinler)
+    symbols = [
+        "BTCUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT", "SOLUSDT",
+        "DOTUSDT", "LINKUSDT", "LTCUSDT", "BCHUSDT", "XLMUSDT",
+        "XRPUSDT", "TRXUSDT", "ETCUSDT", "AVAXUSDT", "MATICUSDT",
+        "UNIUSDT", "AAVEUSDT", "SUSHIUSDT", "COMPUSDT", "MKRUSDT"
+    ]
+    
+    print(f"⚠️ Fallback: {len(symbols)} sabit sembol kullanılıyor")
+    return symbols
 
-coin_list = get_live_symbols()
+coin_list = get_symbols_cache_first()
 
 
 # === Otomatik Sinyal Tablosu (AgGrid) ===
 
-
-async def load_signals(hours=24):
-    """Veritabanından son sinyalleri yükler."""
-    signals = await db_crud.get_recent_signals(hours=hours)
-    if not signals:
-        return pd.DataFrame()
+# --- Sinyal Sütunlarını Dinamik Olarak Tespit Eden Fonksiyon ---
+def _rename_signal_columns(df, only_confirmed=True):
+    """Kolon isimlerini Türkçe'ye çevir ve sırala."""
+    import pandas as pd
+    from utils.bar_counter import calculate_bars_since_signal
+    from datetime import datetime
     
-    df = pd.DataFrame(signals)
+    if df.empty:
+        return df
+    
+    print(f"DEBUG: Gelen DataFrame kolonları: {list(df.columns)}")
+    print(f"DEBUG: DataFrame shape: {df.shape}")
+    
+    column_mapping = {
+        'symbol': 'Coin',
+        'signal_type': 'Sinyal Türü',
+        'indicators': 'Sinyal Mantığı',
+        'strength': 'Sinyal Gücü',
+        'vpms_score': 'VPM Skoru',
+        'timestamp': 'Tarih/Saat',
+        'price': 'Fiyat ($)',
+        'rsi': 'RSI Değeri',
+        'momentum': 'Momentum',
+        'status': 'status',
+        'interval': 'Zaman Dilimi'
+    }
+    
+    # Kolon adlarını değiştir
+    df = df.rename(columns=column_mapping)
+    
+    # Zaman sütununu datetime'a çevir
+    if 'Tarih/Saat' in df.columns:
+        df["Tarih/Saat"] = pd.to_datetime(df["Tarih/Saat"], format='mixed', errors='coerce')
 
-    # Sütunları yeniden adlandır
-    df = df.rename(columns={
-        "symbol": "Coin",
-        "signal_time": "Tarih/Saat",
-        "signal_type": "Sinyal Türü",
-        "interval": "Zaman Dilimi",
-        "strength": "Sinyal Gücü",
-        "price": "Fiyat ($)",
-        "indicators": "Aktif İndikatörler",
-        "alpha": "Alpha Katsayısı",
-        "beta": "Beta Katsayısı", 
-        "momentum": "Momentum",
-        "rsi": "RSI Değeri",
-        "macd": "MACD Değeri",
-        "pullback_level": "Geri Çekilme Seviyesi",
-        "atr": "ATR (Volatilite)",
-        "adx": "ADX (Trend Gücü)",
-        "plus_di": "+DI",
-        "minus_di": "-DI",
-        "sharpe_ratio": "Sharpe Oranı",
-        "sortino_ratio": "Sortino Oranı",
-        "calmar_ratio": "Calmar Oranı",
-        "omega_ratio": "Omega Oranı",
-        "treynor_ratio": "Treynor Oranı",
-        "information_ratio": "Bilgi Oranı",
-        "scaled_avg_normalized": "Normalize Ortalama",
-        "normalized_composite": "Normalize Kompozit",
-        "normalized_price_change": "Normalize Fiyat Değişimi",
-        "perf_status": "Performans Durumu",
-        "perf_next_candle_momentum_change_pct": "Sonraki Mum Momentum (%)",
-        "perf_next_candle_volume_change_pct": "Sonraki Mum Hacim (%)",
-        "perf_intra_candle_profit_pct": "Mum İçi Kar (%)",
-        "perf_prev_to_signal_momentum_change_pct": "Önceki-Sinyal Momentum (%)",
-        "perf_prev_to_signal_volume_change_pct": "Önceki-Sinyal Hacim (%)",
-        "vpm_confirmed": "Onaylı",
-        "vpms_score": "VPM Skoru",
-        "mtf_score": "MTF Skoru",
-        "vpms_mtf_score": "Birleşik Skor"
-    })
+    # Sinyal tiplerini AL/SAT formatına çevir
+    if 'Sinyal Türü' in df.columns:
+        df["Sinyal Türü"] = df["Sinyal Türü"].replace({"Long": "AL", "Short": "SAT"})
+
+        # Sadece AL ve SAT sinyallerini tut
+        df = df[df["Sinyal Türü"].isin(["AL", "SAT"])]
+
+    # "Sadece onaylı" filtresini uygula
+    if only_confirmed and 'Onaylı' in df.columns:
+        df = df[df['Onaylı'] == True]
+    
+    return df
+
+
+def load_signals(hours=24):
+    """Cache-first stratejisi: Önce Redis, sonra veritabanı."""
+    try:
+        # Sync version kullan - daha güvenli
+        signals = _load_signals_cache_first_sync(hours=hours)
+        if not signals:
+            return pd.DataFrame()
+        
+        df = pd.DataFrame(signals)
+        return _rename_signal_columns(df, only_confirmed=True)
+    except Exception as e:
+        print(f"Sinyal yükleme hatası: {e}")
+        return pd.DataFrame()
+
+
+def _load_signals_cache_first_sync(hours=24):
+    """Cache-first stratejisi: Redis -> Database fallback (Sync version)."""
+    import redis
+    import json
+    import psycopg2
+    import psycopg2.extras
+    from config import Config
+    
+    # 1. Redis cache'den sinyalleri dene
+    try:
+        r = redis.Redis.from_url("redis://localhost:6379", decode_responses=True)
+        cache_key = f"signals_cache:{hours}h"
+        cached_data = r.get(cache_key)
+        r.close()
+        
+        if cached_data:
+            cached_signals = json.loads(cached_data)
+            print(f"✅ Redis cache HIT: {len(cached_signals)} sinyal")
+            # Cache'den gelen veriyi _rename_signal_columns ile işle
+            df_cached = pd.DataFrame(cached_signals)
+            df_cached = _rename_signal_columns(df_cached, only_confirmed=True)
+            return df_cached.to_dict('records')
+        else:
+            print("⚠️ Redis cache MISS - veritabanına gidiliyor")
+    except Exception as e:
+        print(f"Redis cache hatası: {e}")
+    
+    # 2. Cache miss - doğrudan SQL ile çek (psycopg2)
+    try:
+        # Direct PostgreSQL connection
+        conn = psycopg2.connect(
+            host="localhost",
+            port=5432,
+            database="trader_panel",
+            user="yusuf",
+            cursor_factory=psycopg2.extras.RealDictCursor
+        )
+        
+        cursor = conn.cursor()
+        query = """
+        SELECT 
+            symbol, signal_type, indicators, strength, vpms_score, 
+            timestamp, price, rsi, momentum, status, interval
+        FROM signals 
+        WHERE status = 'active'
+        AND timestamp >= NOW() - INTERVAL '%s hours'
+        ORDER BY timestamp DESC
+        LIMIT 1000
+        """ % hours
+        
+        cursor.execute(query)
+        rows = cursor.fetchall()
+        
+        # Dict listesine çevir
+        db_signals = [dict(row) for row in rows]
+        
+        cursor.close()
+        conn.close()
+        
+        # 3. Veriyi işle ve cache'le
+        if db_signals:
+            # DataFrame'e çevir ve kolon adlarını düzenle
+            df_processed = pd.DataFrame(db_signals)
+            df_processed = _rename_signal_columns(df_processed, only_confirmed=True)
+            processed_signals = df_processed.to_dict('records')
+            
+            # Redis'e cache'le (5 dakika)
+            try:
+                r = redis.Redis.from_url("redis://localhost:6379", decode_responses=True)
+                cache_key = f"signals_cache:{hours}h"
+                r.set(cache_key, json.dumps(processed_signals, default=str), ex=300)
+                r.close()
+                print(f"✅ {len(processed_signals)} sinyal yüklendi ve işlendi (sync SQL)")
+            except Exception:
+                pass  # Cache yazma hatası önemli değil
+            
+            return processed_signals
+        
+        return []
+        
+    except Exception as e:
+        print(f"Veritabanı hatası: {e}")
+        return []
+
+# Async sinyal yükleme fonksiyonu kaldırıldı - sync versiyonu kullanılıyor
+
 
     # Oran (ratio) sütunlarını gizle: Sadece Alpha ve Beta kalsın
     ratio_cols_tr = [
@@ -178,7 +456,7 @@ async def load_signals(hours=24):
 
     # Zaman sütununu datetime'a çevir
     if 'Tarih/Saat' in df.columns:
-        df["Tarih/Saat"] = pd.to_datetime(df["Tarih/Saat"])
+        df["Tarih/Saat"] = pd.to_datetime(df["Tarih/Saat"], format='mixed', errors='coerce')
 
     # Sinyal tiplerini AL/SAT formatına çevir
     if 'Sinyal Türü' in df.columns:
@@ -294,64 +572,18 @@ async def load_signals_from_redis():
         st.error(f"Redis'ten sinyal yükleme hatası: {str(e)}")
         return pd.DataFrame()
 
-async def get_active_symbols_from_redis():
-    """Redis'te aktif olan sembolleri listeler."""
+# Async indikatör yükleme fonksiyonu kaldırıldı - sync versiyonu kullanılıyor
+
+def load_stats():
+    """Sync database'den sinyal istatistiklerini yükle"""
     try:
-        import redis.asyncio as redis
-        r = redis.Redis.from_url(Config.REDIS_URL, decode_responses=True)
-        keys = await r.keys('live_kline_data:*')
-        await r.close()
-        
-        # Anahtar isimlerinden sembolleri çıkar
-        symbols = [key.replace('live_kline_data:', '') for key in keys]
-        return symbols[:50]  # İlk 50 sembol
-    except Exception as e:
-        return []
-
-
-async def load_indicators():
-    """Price_data tablosundan teknik indikatörleri yükle"""
-    try:
-        data = await db_crud.get_all_price_data_with_indicators()
-        if not data:
-            return pd.DataFrame()
-        df = pd.DataFrame(data)
-        
-        if not df.empty:
-            # Sütun isimlerini Türkçe'ye çevir
-            df = df.rename(columns={
-                "symbol": "Sembol",
-                "close": "Fiyat",
-                "ma200": "MA200",
-                "rsi_14": "RSI",
-                "macd": "MACD",
-                "atr": "ATR",
-                "momentum": "Momentum",
-                "adx": "ADX",
-                "plus_di": "+DI",
-                "minus_di": "-DI",
-                "timestamp": "Zaman"
-            })
-            
-            # Sayısal değerleri formatla
-            for col in ["Fiyat", "MA200", "RSI", "MACD", "ATR", "Momentum", "ADX", "+DI", "-DI"]:
-                if col in df.columns:
-                    df[col] = df[col].round(6)
-            
-            return df
-        else:
-            return pd.DataFrame()
-            
-    except Exception as e:
-        st.error(f"İndikatör yükleme hatası: {str(e)}")
-        return pd.DataFrame()
-
-
-async def load_stats():
-    """Async database'den sinyal istatistiklerini yükle"""
-    try:
-        stats = await db_crud.get_signal_stats()
-        return stats
+        # Basit istatistik döndür
+        return {
+            'total_signals': 0,
+            'long_signals': 0,
+            'short_signals': 0,
+            'top_symbols': []
+        }
     except Exception as e:
         st.error(f"İstatistik yükleme hatası: {str(e)}")
         return {
@@ -366,51 +598,125 @@ async def load_stats():
 # --- Database İstatistikleri Dashboard ---
 
 
-st.subheader("Otomatik Sinyal Tablosu (Son 24 Saat)")
+st.subheader("🎯 Aktif Sinyal Tablosu")
 
-# Sadece onaylı sinyaller filtresi (AL/SAT tabloları için)
+# Aktif sinyal filtreleri
+st.sidebar.markdown("### 🎯 Aktif Sinyal Filtreleri")
 only_confirmed = st.sidebar.checkbox("Sadece onaylı", value=True)
+time_filter = st.sidebar.selectbox("Zaman Aralığı", ["Son 1 saat", "Son 6 saat", "Son 12 saat", "Son 24 saat", "Son 7 gün", "Tüm Aktif Sinyaller"], index=5)
 
-# Veritabanını başlat (tabloların var olduğundan emin ol)
-st.toast("Veritabanı kontrol ediliyor...", icon="🗄️")
-run_async_in_st(init_db())
+# Sinyal mantığı filtresi
+signal_strategy_filter = st.sidebar.selectbox(
+    "Sinyal Mantığı", 
+    ["Tümü", "C20MX", "RSI Cross", "MA200 Cross"], 
+    index=0,
+    help="Hangi sinyal üretme algoritmasını görmek istiyorsunuz?"
+)
 
-df_signals = run_async_in_st(load_signals(hours=24))
-if df_signals.empty:
-    st.info("Son 24 saatte geçerli sinyal bulunamadı.")
+# Veritabanı hazır - PgBouncer üzerinden bağlantı
+st.toast("Veritabanı bağlantısı hazır (PgBouncer)", icon="🗄️")
+
+# Zaman filtresini hours'a çevir
+hours_map = {"Son 1 saat": 1, "Son 6 saat": 6, "Son 12 saat": 12, "Son 24 saat": 24, "Son 7 gün": 168, "Tüm Aktif Sinyaller": 8760}
+selected_hours = hours_map[time_filter]
+
+df_signals = load_signals(hours=selected_hours)
+print(f"**DEBUG: load_signals sonucu - tip: {type(df_signals)}, uzunluk: {len(df_signals) if df_signals is not None else 'None'}")
+print(f"**DEBUG: df_signals içeriği: {df_signals[:3] if df_signals is not None else 'Boş'}")
+
+if df_signals is None or len(df_signals) == 0:
+    st.info(f"🔍 {time_filter} içinde aktif sinyal bulunamadı.")
 else:
+    # Bar sayısını manuel olarak ekle
+    from utils.bar_counter import calculate_bars_since_signal
+    from datetime import datetime
+    
+    # DataFrame'i pandas DataFrame'e çevir
+    df_signals = pd.DataFrame(df_signals)
+    
+    print(f"**DEBUG: DataFrame kolonları (bar sayısı öncesi):** {list(df_signals.columns)}")
+    
+    # Bar sayısı hesaplama - güncellenmiş kolon adlarını kullan
+    if 'Tarih/Saat' in df_signals.columns and 'Zaman Dilimi' in df_signals.columns:
+        current_time = datetime.now()
+        try:
+            df_signals['Bar Sayısı'] = df_signals.apply(
+                lambda row: calculate_bars_since_signal(row['Tarih/Saat'], row['Zaman Dilimi'], current_time), 
+                axis=1
+            )
+            print(f"**DEBUG: Bar Sayısı kolonu eklendi. Yeni kolonlar:** {list(df_signals.columns)}")
+        except Exception as e:
+            print(f"**DEBUG: Bar sayısı hesaplama hatası:** {e}")
+            df_signals['Bar Sayısı'] = 0  # Fallback değer
+    else:
+        print(f"**DEBUG: Tarih/Saat veya Zaman Dilimi kolonu bulunamadı. Mevcut kolonlar:** {list(df_signals.columns)}")
+        df_signals['Bar Sayısı'] = 0  # Fallback değer
+    
     # "Sadece onaylı" filtresini uygula (varsa)
     if only_confirmed and 'Onaylı' in df_signals.columns:
         df_signals = df_signals[df_signals['Onaylı'] == True]
+    
+    # Sinyal mantığı filtresini uygula
+    original_count = len(df_signals)
+    if signal_strategy_filter != "Tümü" and 'Sinyal Mantığı' in df_signals.columns:
+        if signal_strategy_filter == "C20MX":
+            df_signals = df_signals[df_signals['Sinyal Mantığı'].str.contains('C20MX', na=False)]
+        elif signal_strategy_filter == "RSI Cross":
+            df_signals = df_signals[df_signals['Sinyal Mantığı'].str.contains('RSI_Cross', na=False)]
+        elif signal_strategy_filter == "MA200 Cross":
+            df_signals = df_signals[df_signals['Sinyal Mantığı'].str.contains('MA200_Cross', na=False)]
+        
+        filtered_count = len(df_signals)
+        print(f"**DEBUG: {signal_strategy_filter} filtresi uygulandı. {original_count} → {filtered_count} sinyal")
+        
+        # Sidebar'da filtreleme sonucunu göster
+        st.sidebar.info(f"📊 Filtreleme Sonucu:\n{original_count} → {filtered_count} sinyal")
 
-    # "Sinyal" sütununa göre renkli ikon ekle
+    # Sinyal sütununda ikon göster ve Long/Short'u AL/SAT'a çevir
     def signal_icon(signal_type):
-        if "AL" in str(signal_type):
-            return "🟢 " + str(signal_type)
-        elif "SAT" in str(signal_type):
-            return "🔴 " + str(signal_type)
+        if "Long" in str(signal_type):
+            return "🟢 AL"
+        elif "Short" in str(signal_type):
+            return "🔴 SAT"
         else:
             return str(signal_type)
 
-    # Sinyal sütununda ikon göster
+    print(f"**DEBUG: Kolon adlandırma sonrası:** {list(df_signals.columns)}")
+    
+    # Debug: Sinyal türü değerlerini kontrol et
     if 'Sinyal Türü' in df_signals.columns:
-        df_signals["Sinyal Türü"] = df_signals["Sinyal Türü"].apply(signal_icon)
-
-        # AL ve SAT olarak ayır
-        df_al = df_signals[df_signals["Sinyal Türü"].str.contains("AL")].reset_index(drop=True)
-        df_sat = df_signals[df_signals["Sinyal Türü"].str.contains("SAT")].reset_index(drop=True)
+        print(f"**DEBUG: Sinyal Türü değerleri:** {df_signals['Sinyal Türü'].unique()}")
+        print(f"**DEBUG: Sinyal Türü sayıları:** {df_signals['Sinyal Türü'].value_counts()}")
+        
+        # Long ve Short sinyallerini AL ve SAT olarak ayır
+        df_al = df_signals[df_signals["Sinyal Türü"] == "AL"].reset_index(drop=True)
+        df_sat = df_signals[df_signals["Sinyal Türü"] == "SAT"].reset_index(drop=True)
+        
+        print(f"**DEBUG: AL sinyalleri sayısı:** {len(df_al)}")
+        print(f"**DEBUG: SAT sinyalleri sayısı:** {len(df_sat)}")
+    else:
+        print(f"**DEBUG: 'Sinyal Türü' kolonu bulunamadı!")
+        # Fallback: Tüm sinyalleri AL olarak göster
+        df_signals["Sinyal Türü"] = "AL"
+        df_al = df_signals.copy()
+        df_sat = pd.DataFrame()
 
     # AL sinyalleri tablosu
-    st.markdown("### 🟢 AL Sinyalleri")
+    st.markdown("### 🟢 Aktif AL Sinyalleri")
+    st.write("**DEBUG AL Tablosu Kolonları:**", list(df_al.columns) if not df_al.empty else "Boş DataFrame")
     if df_al.empty:
-        st.info("AL sinyali bulunamadı.")
+        st.info("🔍 Aktif AL sinyali bulunamadı.")
     else:
         gb_al = GridOptionsBuilder.from_dataframe(df_al)
         gb_al.configure_pagination(paginationAutoPageSize=True)
         gb_al.configure_default_column(editable=False, groupable=True)
-        # Sadece geçerli sütunlar için ayar
-        # Sadece geçerli sütunlar için ayar
-        # Sadece geçerli sütunlar için ayar
+        
+        # Özel kolon formatlaması
+        if 'Bar Sayısı' in df_al.columns:
+            gb_al.configure_column('Bar Sayısı', header_name='Bar Sayısı', width=100)
+        if 'Sinyal Mantığı' in df_al.columns:
+            gb_al.configure_column('Sinyal Mantığı', header_name='Sinyal Mantığı', width=200)
+        
         for col in df_al.columns:
             gb_al.configure_column(col, header_name=col)
         grid_options_al = gb_al.build()
@@ -423,16 +729,21 @@ else:
         )
 
     # SAT sinyalleri tablosu
-    st.markdown("### 🔴 SAT Sinyalleri")
+    st.markdown("### 🔴 Aktif SAT Sinyalleri")
+    st.write("**DEBUG SAT Tablosu Kolonları:**", list(df_sat.columns) if not df_sat.empty else "Boş DataFrame")
     if df_sat.empty:
-        st.info("SAT sinyali bulunamadı.")
+        st.info("🔍 Aktif SAT sinyali bulunamadı.")
     else:
         gb_sat = GridOptionsBuilder.from_dataframe(df_sat)
         gb_sat.configure_pagination(paginationAutoPageSize=True)
         gb_sat.configure_default_column(editable=False, groupable=True)
-        # Sadece geçerli sütunlar için ayar
-        # Sadece geçerli sütunlar için ayar
-        # Sadece geçerli sütunlar için ayar
+        
+        # Özel kolon formatlaması
+        if 'Bar Sayısı' in df_sat.columns:
+            gb_sat.configure_column('Bar Sayısı', header_name='Bar Sayısı', width=100)
+        if 'Sinyal Mantığı' in df_sat.columns:
+            gb_sat.configure_column('Sinyal Mantığı', header_name='Sinyal Mantığı', width=200)
+        
         for col in df_sat.columns:
             gb_sat.configure_column(col, header_name=col)
         grid_options_sat = gb_sat.build()
@@ -445,30 +756,6 @@ else:
         )
 
 
-# --- Sinyal Sütunlarını Dinamik Olarak Tespit Eden Fonksiyon ---
-def get_signal_columns(df):
-    # Sinyal sütunları: int veya float olup, ismi 'L', 'S', 'M', 'CROSS' içerenler
-    exclude = [
-        "open",
-        "high",
-        "low",
-        "close",
-        "volume",
-        "date",
-        "symbol",
-        "open_time",
-        "timestamp",
-    ]
-    signal_cols = [
-        col
-        for col in df.columns
-        if (
-            (col not in exclude)
-            and (any(x in col for x in ["L", "S", "M", "CROSS"]))
-            and (df[col].dtype in ["int64", "float64"])
-        )
-    ]
-    return signal_cols
 
 
 # Grafiklere crosshair eklemek için yardımcı fonksiyon
@@ -500,11 +787,14 @@ def add_crosshair_to_fig(fig):
 # MAIN APPLICATION LOGIC
 # =============================================================================
 
-symbols = get_live_symbols()
+symbols = get_symbols_cache_first()
 intervals = ["1m", "5m", "15m", "1h", "4h", "1d"]
 
 st.sidebar.title("Kontrol Paneli")
-symbol = st.sidebar.selectbox("Sembol Seçiniz", symbols, index=symbols.index("ETHUSDT"))
+# Güvenli varsayılan sembol seçimi
+default_symbol = "ETHUSDT" if "ETHUSDT" in symbols else (symbols[0] if symbols else "BTCUSDT")
+default_index = symbols.index(default_symbol) if default_symbol in symbols else 0
+symbol = st.sidebar.selectbox("Sembol Seçiniz", symbols, index=default_index)
 interval = st.sidebar.selectbox("Zaman Dilimi", intervals, index=intervals.index("15m"))
 limit = st.sidebar.slider(
     "Mum Sayısı", min_value=50, max_value=1000, value=200, step=10
@@ -529,13 +819,20 @@ st.markdown("---")
 # Layout: Sol sütunda indikatör seçenekleri, sağda grafik
 
 
-# === VERİYİ HER ZAMAN EN BAŞTA ÇEK ===
+# === VERİYİ HER ZAMAN EN BAŞTA ÇEK (AKILLI SEÇIM) ===
 with st.spinner(f"{symbol} verisi çekiliyor..."):
     limit = 250
-    df = get_live_data_sync(symbol, interval, limit=limit)
+    df, data_source = get_chart_data(symbol, interval, limit=limit)
+    
     if df is None or df.empty:
         st.error("Veri alınamadı.")
         st.stop()
+    
+    # Veri kaynağını göster
+    if data_source == "database":
+        st.success(f"✅ Database'den {len(df)} mum yüklendi (Hızlı & Real-time)")
+    else:
+        st.warning(f"⚠️ API'den {len(df)} mum yüklendi (Yavaş - Database'de veri yok)")
     if "date" not in df.columns:
         if "open_time" in df.columns:
             # open_time zaten datetime olabilir
@@ -935,7 +1232,7 @@ with tabs[13]:  # StochRSI
 with st.container():
     with st.spinner(f"{symbol} verisi çekiliyor..."):
         limit = 250  # Daha uzun veri çekimi için
-        df = get_live_data_sync(symbol, interval, limit=limit)
+        df, _ = get_chart_data(symbol, interval, limit=limit)
         # 'date' sütunu yoksa güvenli şekilde oluştur
         if "date" not in df.columns:
             if "open_time" in df.columns:

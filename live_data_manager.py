@@ -69,18 +69,25 @@ class LiveDataManager:
         self.symbols = list(dict.fromkeys(symbols)) # Duplike varsa kaldır
 
         self.interval = interval
-        # WebSocket istemcisi: tek bağlantı üzerinde combined-stream kullanacağız
-        self.ws_client = UMFuturesWebsocketClient(
-            on_message=self._handle_websocket_message,
-            on_close=self._handle_ws_close,
-            on_error=self._handle_ws_error
-        )
+        # WebSocket istemcisi: düzeltilmiş python-binance ile
+        self.ws_client = None
         self.is_ws_connected = False
         self.last_message_time: Optional[float] = None  # Son WebSocket mesajının zamanını takip et
         self.reconnect_attempt = 0  # Üstel backoff için sayaç
+        self.connection_reset_count = 0  # Connection reset sayacı
+        self.last_error_type = None  # Son hata türü
+        self.consecutive_errors = 0  # Ardışık hata sayısı
         self.db_lock = asyncio.Lock()  # Veritabanı yazma işlemleri için kilit
         self.kline_data: Dict[str, pd.DataFrame] = {symbol: pd.DataFrame() for symbol in symbols}
         self.processing_tasks: set[asyncio.Task] = set()
+        
+        # Batch insert için buffer sistemi
+        self.kline_buffer: List[Dict] = []  # Bekleyen kline verilerini toplar
+        self.buffer_lock = asyncio.Lock()  # Buffer erişimi için kilit
+        self.batch_size = 100  # Kaç kline toplandığında insert yapılacak
+        self.batch_timeout = 30  # Saniye - timeout sonrası zorla flush
+        self.last_flush_time: Optional[float] = None  # Son flush zamanı
+        
         try:
             self.loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -93,16 +100,33 @@ class LiveDataManager:
         - Her sembol için veritabanından son zaman damgasını alır.
         - Binance'ten son zaman damgasından bu yana eksik olan mumları çeker.
         - Çekilen verileri veritabanına kaydeder.
+        
+        Hızlı paralel işleme ile optimum performans.
         """
         logger.info("Tarihsel veri senkronizasyonu başlatılıyor...")
-        tasks = [self._sync_symbol_data(symbol) for symbol in self.symbols]
+        
+        # Paralel işleme - maksimum hız için
+        # Semaphore ile eşzamanlı istek sayısını kontrol et
+        semaphore = asyncio.Semaphore(20)  # Aynı anda max 20 istek
+        
+        async def sync_with_semaphore(symbol):
+            async with semaphore:
+                try:
+                    await self._sync_symbol_data(symbol)
+                    logger.info(f"[{symbol}] Tarihsel veri senkronizasyonu tamamlandı.")
+                    return True
+                except Exception as e:
+                    logger.error(f"[{symbol}] Tarihsel veri senkronizasyonu sırasında hata: {e}")
+                    return False
+        
+        # Tüm sembolleri paralel olarak işle
+        tasks = [sync_with_semaphore(symbol) for symbol in self.symbols]
         results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        for symbol, result in zip(self.symbols, results):
-            if isinstance(result, Exception):
-                logger.error(f"[{symbol}] Tarihsel veri senkronizasyonu sırasında kritik hata: {result}")
-            else:
-                logger.info(f"[{symbol}] Tarihsel veri senkronizasyonu tamamlandı.")
+        
+        successful_count = sum(1 for r in results if r is True)
+        failed_count = len(results) - successful_count
+        
+        logger.info(f"Tarihsel veri senkronizasyonu tamamlandı. Başarılı: {successful_count}, Başarısız: {failed_count}")
 
     async def _sync_symbol_data(self, symbol: str):
         """Helper method to sync historical data for a single symbol."""
@@ -116,12 +140,25 @@ class LiveDataManager:
             else:
                 logger.info(f"[{symbol}] Veritabanında kayıt bulunamadı. Son 1500 mum çekiliyor...")
 
-            df_missing = await BinanceClientManager.fetch_klines(
-                symbol=symbol,
-                interval=self.interval,
-                limit=1500,
-                startTime=start_time
-            )
+            # Hızlı retry mekanizması - sadece gerçekten gerektiğinde
+            max_retries = 2  # Daha az retry
+            for attempt in range(max_retries):
+                try:
+                    df_missing = await BinanceClientManager.fetch_klines(
+                        symbol=symbol,
+                        interval=self.interval,
+                        limit=1500,
+                        startTime=start_time
+                    )
+                    break  # Başarılı ise döngüden çık
+                except BinanceAPIError as e:
+                    if "Timeout" in str(e) and attempt < max_retries - 1:
+                        wait_time = 0.5  # Sabit kısa bekleme
+                        logger.warning(f"[{symbol}] Timeout hatası, {wait_time}s sonra tekrar denenecek (attempt {attempt + 1}/{max_retries})")
+                        await asyncio.sleep(wait_time)
+                        continue
+                    else:
+                        raise  # Son deneme veya farklı hata ise exception'ı fırlat
 
             if not df_missing.empty:
                 logger.info(f"[{symbol}] {len(df_missing)} adet yeni mum verisi bulundu. Veritabanına kaydediliyor...")
@@ -141,6 +178,70 @@ class LiveDataManager:
             logger.error(f"[{symbol}] Veri senkronizasyonunda beklenmedik hata: {e}", exc_info=True)
             raise
 
+    async def _add_to_batch_buffer(self, symbol: str, kline_row: Dict):
+        """Kline verisini batch buffer'a ekler ve gerekirse flush yapar."""
+        import time
+        
+        async with self.buffer_lock:
+            # Kline verisine symbol ve interval bilgisi ekle
+            kline_row['symbol'] = symbol
+            kline_row['interval'] = self.interval
+            
+            self.kline_buffer.append(kline_row)
+            
+            # İlk ekleme ise flush zamanını başlat
+            current_time = time.time()
+            if self.last_flush_time is None:
+                self.last_flush_time = current_time
+            
+            time_since_last_flush = current_time - self.last_flush_time
+            
+            # Buffer doldu veya timeout geçti ise flush yap
+            should_flush = (
+                len(self.kline_buffer) >= self.batch_size or 
+                time_since_last_flush >= self.batch_timeout
+            )
+            
+            if should_flush:
+                await self._flush_batch_buffer()
+
+    async def _flush_batch_buffer(self):
+        """Buffer'daki tüm kline verilerini veritabanına toplu olarak yazar."""
+        import time
+        
+        if not self.kline_buffer:
+            return
+            
+        buffer_copy = self.kline_buffer.copy()
+        self.kline_buffer.clear()
+        self.last_flush_time = time.time()
+        
+        try:
+            # Verileri symbol'e göre grupla
+            symbol_groups = {}
+            for kline in buffer_copy:
+                symbol = kline['symbol']
+                if symbol not in symbol_groups:
+                    symbol_groups[symbol] = []
+                symbol_groups[symbol].append(kline)
+            
+            # Her symbol için ayrı ayrı batch insert
+            for symbol, klines in symbol_groups.items():
+                df = pd.DataFrame(klines)
+                # symbol ve interval kolonlarını kaldır (bulk_insert_price_data bunları beklemez)
+                df = df.drop(['symbol', 'interval'], axis=1)
+                
+                async with self.db_lock:
+                    await bulk_insert_price_data(symbol, df, interval=self.interval)
+                
+                logger.info(f"[{symbol}] {len(klines)} adet kline toplu olarak veritabanına kaydedildi.")
+                
+        except Exception as e:
+            logger.error(f"Batch insert hatası: {e}", exc_info=True)
+            # Hata durumunda verileri tekrar buffer'a ekle
+            async with self.buffer_lock:
+                self.kline_buffer.extend(buffer_copy)
+
     async def _initialize_dataframes(self):
         """Initializes in-memory DataFrames with the last 500 klines for signal calculation."""
         logger.info("Sinyal hesaplaması için başlangıç verileri yükleniyor...")
@@ -156,7 +257,7 @@ class LiveDataManager:
                 # Son 24 saatlik (96 * 15dk) veride hacim kontrolü
                 recent_data = result.tail(96)
                 if recent_data['volume'].sum() < Config.MIN_VOLUME_THRESHOLD:
-                    logger.warning(f"[{symbol}] Düşük hacimli (son 24s hacim < {Config.MIN_VOLUME_THRESHOLD}), izlemeden çıkarılıyor.")
+                    logger.info(f"[{symbol}] Düşük hacimli (son 24s hacim < {Config.MIN_VOLUME_THRESHOLD}), izlemeden çıkarılıyor.")
                     symbols_to_remove.append(symbol)
                     # Bu sembol için veritabanından da temizlik yapalım
                     task = asyncio.create_task(self._purge_symbol_data(symbol))
@@ -232,13 +333,8 @@ class LiveDataManager:
             # Bellekteki veri setini belirli bir boyutta tut (örneğin son 1000 mum)
             self.kline_data[symbol] = self.kline_data[symbol].tail(1000)
 
-            # Önce yeni kapanan mumu (ham veri) veritabanına kaydet
-            try:
-                async with self.db_lock:
-                    await bulk_insert_price_data(symbol, new_df, interval=self.interval)
-                logger.info(f"[{symbol}] Yeni kapanan mum (ham veri) veritabanına kaydedildi.")
-            except Exception as db_err:
-                logger.error(f"[{symbol}] Canlı veri veritabanına kaydedilirken hata: {db_err}", exc_info=True)
+            # Yeni kline'ı buffer'a ekle (batch insert için)
+            await self._add_to_batch_buffer(symbol, new_row)
 
             # Hafızadaki veri üzerinde sinyal üretimi için göstergeleri hesapla
             self.kline_data[symbol] = add_all_indicators(self.kline_data[symbol])
@@ -250,7 +346,11 @@ class LiveDataManager:
             # Geriye uyum: eski anahtara da yaz (yakında kaldırılabilir)
             legacy_redis_key = f"{Config.REDIS_LIVE_DATA_KEY_PREFIX}:{symbol}"
             await RedisClient.set_df(legacy_redis_key, self.kline_data[symbol])
-            logger.info(f"[{symbol}] Canlı veri Redis'e yazıldı. Yeni: {new_redis_key} | Legacy: {legacy_redis_key}")
+            
+            # Hot cache'e de yaz (hızlı erişim için)
+            await RedisClient.set_hot_klines(symbol, self.kline_data[symbol])
+            
+            logger.info(f"[{symbol}] Canlı veri Redis'e yazıldı. Yeni: {new_redis_key} | Legacy: {legacy_redis_key} | Hot: hot_klines:{symbol}")
 
             task = asyncio.create_task(self._process_signal_for_symbol(symbol))
             self.processing_tasks.add(task)
@@ -270,14 +370,28 @@ class LiveDataManager:
         except Exception as e:
             logger.error(f"[{symbol}] Veritabanı temizliği sırasında hata: {e}")
 
-    def _handle_ws_close(self, _):
+    def _handle_ws_close(self, *args):
         """Callback function for when the websocket connection is closed."""
         logger.warning("WebSocket bağlantısı kapandı.")
         self.is_ws_connected = False
 
-    def _handle_ws_error(self, _, error):
+    def _handle_ws_error(self, error, *args):
         """Callback function for websocket errors."""
-        logger.error(f"WebSocket hatası: {error}", exc_info=True)
+        error_str = str(error)
+        
+        # Connection reset hatalarını özel olarak takip et
+        if "Connection reset by peer" in error_str or "[Errno 54]" in error_str:
+            self.connection_reset_count += 1
+            self.last_error_type = "connection_reset"
+            logger.error(f"WebSocket connection reset hatası (#{self.connection_reset_count}): {error}")
+        elif "timeout" in error_str.lower():
+            self.last_error_type = "timeout"
+            logger.error(f"WebSocket timeout hatası: {error}")
+        else:
+            self.last_error_type = "other"
+            logger.error(f"WebSocket genel hatası: {error}", exc_info=True)
+        
+        self.consecutive_errors += 1
         self.is_ws_connected = False
 
     async def _process_signal_for_symbol(self, symbol: str):
@@ -315,18 +429,38 @@ class LiveDataManager:
         # Combined stream (tek bağlantı) için stream listesi
         streams = [f"{s.lower()}@kline_{self.interval}" for s in self.symbols]
         
-        # Yeni bir ws istemcisi oluşturmak genellikle daha temiz bir yeniden bağlanma sağlar
-        self.ws_client = UMFuturesWebsocketClient(
-            on_message=self._handle_websocket_message,
-            on_close=self._handle_ws_close,
-            on_error=self._handle_ws_error
-        )
-        # Not: binance-futures-connector, bir liste geçildiğinde combined stream açar (tek WS).
-        # Ping/pong için client internal ayarları kullanır; watchdog'u biz üstten izliyoruz.
-        self.ws_client.subscribe(stream=streams, id=1)
-        self.is_ws_connected = True
-        self.reconnect_attempt = 0  # Başarılı bağlantıda backoff'u sıfırla
-        logger.info("Tüm WebSocket yayınlarına başarıyla abone olundu.")
+        try:
+            # Eski bağlantıyı güvenli şekilde kapat
+            await self._safe_close_websocket()
+            
+            # python-binance ile WebSocket client oluştur
+            self.ws_client = UMFuturesWebsocketClient(
+                on_message=self._handle_websocket_message,
+                on_close=self._handle_ws_close,
+                on_error=self._handle_ws_error,
+                is_combined=True  # Combined streams kullan
+            )
+            
+            # Tüm stream'leri tek seferde subscribe et
+            streams = [f"{s.lower()}@kline_{self.interval}" for s in self.symbols]
+            logger.info(f"Subscribe edilecek stream'ler: {streams[:5]}... (toplam {len(streams)})")
+            
+            # Combined stream olarak subscribe et
+            self.ws_client.subscribe(stream=streams, id=1)
+            
+            logger.info(f"Tüm semboller için combined stream başlatıldı.")
+            
+            # Bağlantı kurulduktan sonra kısa bir bekleme
+            await asyncio.sleep(1)
+            
+            self.is_ws_connected = True
+            self.reconnect_attempt = 0  # Başarılı bağlantıda backoff'u sıfırla
+            logger.info("Tüm WebSocket yayınlarına başarıyla abone olundu.")
+            
+        except Exception as e:
+            logger.error(f"WebSocket başlatma hatası: {e}", exc_info=True)
+            self.is_ws_connected = False
+            raise
 
     async def run(self):
         """Ana çalıştırma döngüsü."""
@@ -352,45 +486,62 @@ class LiveDataManager:
                     reconnect_reason = f"WebSocket zaman aşımına uğradı ({Config.WEBSOCKET_TIMEOUT}s)."
 
                 if reconnect_reason:
+                    # Connection reset hatalarında özel backoff stratejisi
+                    if (self.last_error_type == "connection_reset" and 
+                        self.connection_reset_count >= getattr(Config, 'WS_CONNECTION_RESET_THRESHOLD', 5)):
+                        # Çok fazla connection reset varsa daha uzun bekle
+                        base_delay = getattr(Config, 'WS_RECONNECT_BACKOFF_BASE', 2) * 3
+                        max_delay = getattr(Config, 'WS_RECONNECT_BACKOFF_MAX', 30) * 2
+                    else:
+                        base_delay = getattr(Config, 'WS_RECONNECT_BACKOFF_BASE', 2)
+                        max_delay = getattr(Config, 'WS_RECONNECT_BACKOFF_MAX', 30)
+                    
                     # Üstel backoff + jitter
-                    backoff_base = getattr(Config, 'WS_RECONNECT_BACKOFF_BASE', 5)
-                    backoff_max = getattr(Config, 'WS_RECONNECT_BACKOFF_MAX', 60)
-                    delay = min(backoff_max, backoff_base * (2 ** self.reconnect_attempt))
+                    delay = min(max_delay, base_delay * (2 ** min(self.reconnect_attempt, 6)))
                     # Basit jitter: +/- 20%
-                    jitter = max(1.0, delay * 0.2)
+                    jitter = max(0.5, delay * 0.2)
                     import random
                     sleep_for = max(1.0, delay + random.uniform(-jitter, jitter))
                     logger.warning(f"{reconnect_reason} {sleep_for:.1f} saniye içinde yeniden bağlanma denenecek... (attempt={self.reconnect_attempt})")
                     self.is_ws_connected = False  # Yeniden bağlanma sürecini başlatmak için
                     await asyncio.sleep(sleep_for)
                     try:
-                        # Eski istemciyi durdurmayı dene, ancak takılırsa devam et
-                        if self.ws_client:
-                           await asyncio.to_thread(self.ws_client.stop)
-                        
                         logger.info("Yeni WebSocket bağlantısı kuruluyor...")
                         await self.start_streams()
                         # Yeniden bağlandıktan sonra zamanı sıfırla
                         if self.is_ws_connected:
                            self.last_message_time = self.loop.time()
+                           # Başarılı bağlantıda sayaçları sıfırla
                            self.reconnect_attempt = 0
-                           logger.info("WebSocket bağlantısı başarıyla yeniden kuruldu.")
+                           self.consecutive_errors = 0
+                           # Connection reset sayacını kademeli olarak azalt
+                           if self.connection_reset_count > 0:
+                               self.connection_reset_count = max(0, self.connection_reset_count - 1)
+                           logger.info(f"WebSocket bağlantısı başarıyla yeniden kuruldu. Reset count: {self.connection_reset_count}")
                         else:
                            self.reconnect_attempt += 1
-                           logger.error("Yeniden bağlanma denemesi başarısız oldu.")
+                           logger.error(f"Yeniden bağlanma denemesi başarısız oldu. (Attempt: {self.reconnect_attempt})")
 
                     except Exception as e:
                         logger.error(f"WebSocket yeniden başlatma sırasında kritik hata: {e}", exc_info=True)
                         self.reconnect_attempt += 1
-                        # Hata durumunda da backoff uygulanır
-                        backoff_base = getattr(Config, 'WS_RECONNECT_BACKOFF_BASE', 5)
-                        backoff_max = getattr(Config, 'WS_RECONNECT_BACKOFF_MAX', 60)
-                        delay = min(backoff_max, backoff_base * (2 ** self.reconnect_attempt))
-                        jitter = max(1.0, delay * 0.2)
-                        import random
-                        sleep_for = max(1.0, delay + random.uniform(-jitter, jitter))
-                        logger.info(f"{sleep_for:.1f} saniye sonra tekrar denenecek.")
-                        await asyncio.sleep(sleep_for)
+                        self.consecutive_errors += 1
+                        
+                        # Çok fazla ardışık hata varsa daha uzun bekle
+                        if self.consecutive_errors >= getattr(Config, 'WS_MAX_RECONNECT_ATTEMPTS', 10):
+                            logger.warning(f"Çok fazla ardışık hata ({self.consecutive_errors}). Uzun bekleme moduna geçiliyor...")
+                            await asyncio.sleep(120)  # 2 dakika bekle
+                            self.consecutive_errors = 0  # Sayacı sıfırla
+                        else:
+                            # Normal backoff uygulanır
+                            base_delay = getattr(Config, 'WS_RECONNECT_BACKOFF_BASE', 2)
+                            max_delay = getattr(Config, 'WS_RECONNECT_BACKOFF_MAX', 30)
+                            delay = min(max_delay, base_delay * (2 ** min(self.reconnect_attempt, 6)))
+                            jitter = max(0.5, delay * 0.2)
+                            import random
+                            sleep_for = max(1.0, delay + random.uniform(-jitter, jitter))
+                            logger.info(f"{sleep_for:.1f} saniye sonra tekrar denenecek.")
+                            await asyncio.sleep(sleep_for)
                 else:
                     # Bağlantı sağlamsa, döngüyü tıkamadan bekle
                     # Ping/Pong watchdog: belirli aralıkla heartbeat kontrolü
@@ -400,12 +551,36 @@ class LiveDataManager:
         finally:
             await self.shutdown()
 
+    async def _safe_close_websocket(self):
+        """WebSocket bağlantısını güvenli şekilde kapatır."""
+        if self.ws_client:
+            try:
+                # Timeout ile güvenli kapatma
+                await asyncio.wait_for(
+                    asyncio.to_thread(self.ws_client.stop),
+                    timeout=5.0
+                )
+                logger.debug("WebSocket güvenli şekilde kapatıldı.")
+            except asyncio.TimeoutError:
+                logger.warning("WebSocket kapatma işlemi timeout oldu, zorla kapatılıyor.")
+            except Exception as e:
+                logger.warning(f"WebSocket kapatma sırasında hata (göz ardı edildi): {e}")
+            finally:
+                self.ws_client = None
+
     async def shutdown(self):
         """Tüm görevleri ve servisleri düzgünce kapatır."""
         logger.info("Kapatma işlemi başlatılıyor...")
-        # WebSocket istemcisini durdur (non-blocking)
-        if self.ws_client:
-            await asyncio.to_thread(self.ws_client.stop)
+        
+        # Buffer'daki kalan verileri flush et
+        try:
+            await self._flush_batch_buffer()
+            logger.info("Buffer verileri başarıyla kaydedildi.")
+        except Exception as e:
+            logger.error(f"Buffer flush hatası: {e}")
+        
+        # WebSocket istemcisini durdur
+        await self._safe_close_websocket()
         logger.info("WebSocket istemcisi durduruldu.")
 
         # Sadece bizim oluşturduğumuz işlem görevlerini iptal et

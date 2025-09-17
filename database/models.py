@@ -4,16 +4,21 @@ from sqlalchemy import (
     String,
     Float,
     Boolean,
+    DateTime,
     PrimaryKeyConstraint,
-    UniqueConstraint
+    UniqueConstraint,
+    ForeignKeyConstraint
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped
+from sqlalchemy.orm import DeclarativeBase, Mapped, relationship
+from datetime import datetime
+
 
 # SQLAlchemy 2.0 stili, mypy ve linter uyumluluğu için
 class Base(DeclarativeBase):
     def to_dict(self):
         """Converts the model instance to a dictionary."""
         return {c.name: getattr(self, c.name) for c in self.__table__.columns}
+
 
 # Modelinize to_dict gibi ortak metodlar eklemek isterseniz,
 # özel bir Base sınıfı oluşturup bunu kullanabilirsiniz.
@@ -23,31 +28,31 @@ class Base(DeclarativeBase):
 #
 # Base = declarative_base(cls=CustomBase)
 
+
 class PriceData(Base):
-    __tablename__ = 'price_data'
+    __tablename__ = "price_data"
 
     symbol = Column(String, primary_key=True)
-    timestamp = Column(String, primary_key=True)
+    timestamp = Column(DateTime, primary_key=True)
     interval = Column(String, nullable=True)
     open = Column(Float)
     high = Column(Float)
     low = Column(Float)
     close = Column(Float)
     volume = Column(Float)
-    rsi_14 = Column(Float, nullable=True)
-    ma200 = Column(Float, nullable=True)
 
     __table_args__ = (
-        PrimaryKeyConstraint('symbol', 'timestamp'),
-        UniqueConstraint('symbol', 'interval', 'timestamp'),
+        PrimaryKeyConstraint("symbol", "timestamp"),
+        UniqueConstraint("symbol", "interval", "timestamp"),
     )
 
-class Signal(Base):
-    __tablename__ = 'signals'
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    symbol = Column(String)
-    signal_time = Column(String)
+class Signal(Base):
+    __tablename__ = "signals"
+
+    id = Column(Integer, autoincrement=True, unique=True)  # Auto-increment unique ID
+    symbol = Column(String, primary_key=True)  # Eski primary key
+    timestamp = Column(DateTime, primary_key=True)  # Eski primary key
     signal_type = Column(String)
     interval = Column(String)
     price = Column(Float, nullable=True)
@@ -81,16 +86,14 @@ class Signal(Base):
     mtf_score = Column(Float, nullable=True)
     vpms_mtf_score = Column(Float, nullable=True)
 
-    # Sinyal Sonrası Anlık Performans Analizi
-    perf_status = Column(String, default='pending', nullable=False) # pending, completed
-    perf_next_candle_momentum_change_pct = Column(Float, nullable=True)
-    perf_next_candle_volume_change_pct = Column(Float, nullable=True)
-    perf_intra_candle_profit_pct = Column(Float, nullable=True) # Sinyal sonrası mumun kendi içindeki potansiyel kar yüzdesi
-
-    # Performance metrics comparing the candle BEFORE the signal to the signal candle
-    perf_prev_to_signal_momentum_change_pct = Column(Float, nullable=True)
-    perf_prev_to_signal_volume_change_pct = Column(Float, nullable=True)
+    # Lifecycle yönetimi kolonları
+    status = Column(String(20), nullable=True, default='active')
+    superseded_by = Column(Integer, nullable=True)
+    superseded_at = Column(DateTime, nullable=True)
+    performance_period = Column(Integer, nullable=True)
+    lifecycle_end_reason = Column(String(50), nullable=True)
 
     __table_args__ = (
-        UniqueConstraint('symbol', 'signal_time', 'signal_type', 'interval'),
+        PrimaryKeyConstraint("symbol", "timestamp"),
+        UniqueConstraint("symbol", "timestamp", "signal_type", "interval"),
     )

@@ -1,7 +1,7 @@
 from typing import List, Dict, Any, Optional
 import pandas as pd
 from sqlalchemy import func, select, update, insert, delete
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.exc import OperationalError
 import asyncio
 
@@ -27,10 +27,13 @@ async def get_last_timestamp(symbol: str, interval: Optional[str] = None) -> Opt
         last_timestamp_str = result.scalar_one_or_none()
 
         if last_timestamp_str:
-            # String formatındaki tarihi datetime nesnesine çevir
-            dt_obj = datetime.strptime(last_timestamp_str, '%Y-%m-%d %H:%M:%S')
-            # Milisaniye cinsinden tamsayıya dönüştür
-            return int(dt_obj.timestamp() * 1000)
+            # DateTime nesnesini milisaniye cinsinden tamsayıya dönüştür
+            if isinstance(last_timestamp_str, str):
+                dt_obj = datetime.strptime(last_timestamp_str, '%Y-%m-%d %H:%M:%S')
+                return int(dt_obj.timestamp() * 1000)
+            else:
+                # Zaten datetime nesnesi ise direkt dönüştür
+                return int(last_timestamp_str.timestamp() * 1000)
             
         return None
 
@@ -43,7 +46,7 @@ async def bulk_insert_price_data(symbol: str, df: pd.DataFrame, interval: Option
     df_copy['symbol'] = symbol
     if interval is not None:
         df_copy['interval'] = interval
-    df_copy['timestamp'] = pd.to_datetime(df_copy['open_time'], unit='ms').dt.tz_localize('UTC').dt.tz_convert('Europe/Istanbul').dt.strftime('%Y-%m-%d %H:%M:%S')
+    df_copy['timestamp'] = pd.to_datetime(df_copy['open_time'], unit='ms').dt.tz_localize('UTC').dt.tz_convert('Europe/Istanbul').dt.tz_localize(None)
     
     # Modele uygun sütunları seç ve 'open_time'ı hariç tut
     model_columns = [c.name for c in PriceData.__table__.columns]
@@ -58,16 +61,25 @@ async def bulk_insert_price_data(symbol: str, df: pd.DataFrame, interval: Option
         logger.warning(f"[{symbol}] Kaydedilecek geçerli sütun bulunamadı.")
         return
 
+    # Büyük veri setlerini parçalara böl (PostgreSQL parametre limiti için)
+    batch_size = 1000
+    total_inserted = 0
+    
     async with get_session() as session:
-        stmt = sqlite_insert(PriceData).values(records)
-        # ON CONFLICT...DO UPDATE
-        update_dict = {c.name: getattr(stmt.excluded, c.name) for c in PriceData.__table__.columns if not c.primary_key}
-        stmt = stmt.on_conflict_do_update(
-            index_elements=['symbol', 'interval', 'timestamp'],
-            set_=update_dict
-        )
-        await session.execute(stmt)
-        logger.info(f"[{symbol}] için {len(records)} adet fiyat verisi başarıyla kaydedildi/güncellendi.")
+        for i in range(0, len(records), batch_size):
+            batch = records[i:i + batch_size]
+            stmt = postgresql_insert(PriceData).values(batch)
+            # ON CONFLICT...DO UPDATE
+            update_dict = {c.name: getattr(stmt.excluded, c.name) for c in PriceData.__table__.columns if not c.primary_key}
+            stmt = stmt.on_conflict_do_update(
+                constraint='price_data_symbol_interval_timestamp_key',
+                set_=update_dict
+            )
+            await session.execute(stmt)
+            total_inserted += len(batch)
+        
+        await session.commit()
+        logger.info(f"[{symbol}] {total_inserted} adet fiyat verisi kaydedildi.")
 
 async def save_price_data_batch(data_map: Dict[str, pd.DataFrame], interval: Optional[str] = None):
     """
@@ -84,7 +96,7 @@ async def save_price_data_batch(data_map: Dict[str, pd.DataFrame], interval: Opt
         if interval is not None:
             df_copy['interval'] = interval
         # open_time'dan Europe/Istanbul zaman dilimine göre formatlanmış string oluştur
-        df_copy['timestamp'] = pd.to_datetime(df_copy['open_time'], unit='ms').dt.tz_localize('UTC').dt.tz_convert('Europe/Istanbul').dt.strftime('%Y-%m-%d %H:%M:%S')
+        df_copy['timestamp'] = pd.to_datetime(df_copy['open_time'], unit='ms').dt.tz_localize('UTC').dt.tz_convert('Europe/Istanbul').dt.tz_localize(None)
 
         # Sadece modelde olan sütunları tut
         model_columns = [c.name for c in PriceData.__table__.columns]
@@ -99,30 +111,41 @@ async def save_price_data_batch(data_map: Dict[str, pd.DataFrame], interval: Opt
         logger.warning("Toplu kaydetme için işlenecek veri bulunamadı.")
         return
 
+    # Büyük veri setlerini parçalara böl (PostgreSQL parametre limiti için)
+    batch_size = 1000
+    total_inserted = 0
+    
     async with get_session() as session:
-        # SQLite için 'upsert' ifadesi
-        stmt = sqlite_insert(PriceData).values(all_records)
+        for i in range(0, len(all_records), batch_size):
+            batch = all_records[i:i + batch_size]
+            # PostgreSQL için 'upsert' ifadesi
+            stmt = postgresql_insert(PriceData).values(batch)
+            
+            # ON CONFLICT...DO UPDATE ifadesini oluştur
+            # Primary key olmayan sütunları güncelle
+            update_dict = {
+                c.name: getattr(stmt.excluded, c.name) 
+                for c in PriceData.__table__.columns 
+                if not c.primary_key
+            }
+            
+            stmt = stmt.on_conflict_do_update(
+                constraint='price_data_symbol_interval_timestamp_key',
+                set_=update_dict
+            )
+            
+            await session.execute(stmt)
+            total_inserted += len(batch)
         
-        # ON CONFLICT...DO UPDATE ifadesini oluştur
-        # Primary key olmayan sütunları güncelle
-        update_dict = {
-            c.name: getattr(stmt.excluded, c.name) 
-            for c in PriceData.__table__.columns 
-            if not c.primary_key
-        }
-        
-        stmt = stmt.on_conflict_do_update(
-            index_elements=['symbol', 'interval', 'timestamp'],
-            set_=update_dict
-        )
-        
-        await session.execute(stmt)
-        logger.info(f"{len(all_records)} adet fiyat verisi başarıyla kaydedildi/güncellendi. interval={interval}")
+        await session.commit()
+        logger.info(f"Toplu kaydetme tamamlandı. {total_inserted} adet kayıt işlendi.")
 
 async def create_signal(signal_data: Dict[str, Any]):
     """Tek bir sinyal kaydeder. Var olan kaydı günceller."""
     async with get_session() as session:
-        stmt = sqlite_insert(Signal).values(signal_data)
+        from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+        
+        stmt = postgresql_insert(Signal).values(signal_data)
         # Sadece signal_data içinde gönderilen ve primary key olmayan alanları güncelle
         update_dict = {
             key: getattr(stmt.excluded, key)
@@ -130,7 +153,7 @@ async def create_signal(signal_data: Dict[str, Any]):
             if key in Signal.__table__.columns and not Signal.__table__.columns[key].primary_key
         }
         stmt = stmt.on_conflict_do_update(
-            index_elements=['symbol', 'signal_time', 'signal_type', 'interval'],
+            index_elements=['symbol', 'timestamp'],
             set_=update_dict
         )
 
@@ -154,13 +177,11 @@ async def get_recent_signals(hours: int = 24) -> List[Dict[str, Any]]:
     """Son 'hours' saat içindeki sinyalleri veritabanından çeker."""
     async with get_session() as session:
         time_threshold = datetime.now() - timedelta(hours=hours)
-        # Zaman damgalarını string olarak karşılaştırıyoruz, bu yüzden formatın tutarlı olması önemli
-        time_threshold_str = time_threshold.strftime('%Y-%m-%d %H:%M:%S')
 
         stmt = (
             select(Signal)
-            .where(Signal.signal_time >= time_threshold_str)
-            .order_by(Signal.signal_time.desc())
+            .where(Signal.timestamp >= time_threshold)
+            .order_by(Signal.timestamp.desc())
         )
         result = await session.execute(stmt)
         signals = result.scalars().all()

@@ -61,6 +61,25 @@ class RedisClient:
             await r.close()
 
     @classmethod
+    async def get_hot_klines(cls, symbol: str, limit: int = 500) -> Optional[pd.DataFrame]:
+        """Hot cache'den son N kline'ı getirir."""
+        cache_key = f"hot_klines:{symbol}"
+        df = await cls.get_df(cache_key)
+        
+        if df is not None and not df.empty:
+            # Son N satırı döndür
+            return df.tail(limit)
+        return None
+
+    @classmethod
+    async def set_hot_klines(cls, symbol: str, df: pd.DataFrame) -> None:
+        """Hot cache'e kline verilerini yazar (son 1000 satır)."""
+        cache_key = f"hot_klines:{symbol}"
+        # Sadece son 1000 satırı cache'le (memory tasarrufu)
+        hot_df = df.tail(1000) if len(df) > 1000 else df
+        await cls.set_df(cache_key, hot_df, ex=3600)  # 1 saat
+
+    @classmethod
     async def get_df(cls, key: str) -> Optional[pd.DataFrame]:
         """Redis'ten bir DataFrame'i okur."""
         r = cls.get_client()
@@ -69,7 +88,8 @@ class RedisClient:
             if data:
                 logger.debug(f"DataFrame Redis'ten okundu. Anahtar: {key}")
                 # 'split' formatında kaydedilen JSON'u DataFrame'e geri çevir
-                df = pd.read_json(data, orient="split")
+                from io import StringIO
+                df = pd.read_json(StringIO(data), orient="split")
                 if 'open_time' in df.columns:
                     df['open_time'] = pd.to_datetime(df['open_time'], unit='ms')
                 return df
@@ -81,16 +101,17 @@ class RedisClient:
             await r.close()
 
     @classmethod
-    async def set_json(cls, key: str, data: Any, ex: int = 3600) -> None:
-        """Herhangi bir Python nesnesini JSON olarak Redis'e yazar."""
-        r = cls.get_client()
+    async def set_json(cls, key: str, data: Any, ex: Optional[int] = None) -> bool:
+        """JSON verisini Redis'e yaz."""
         try:
-            await r.set(key, json.dumps(data), ex=ex)
-            logger.debug(f"JSON veri Redis'e yazıldı. Anahtar: {key}")
+            client = await cls.get_client()
+            # Datetime objelerini string'e çevir
+            json_data = json.dumps(data, ensure_ascii=False, default=str)
+            await client.set(key, json_data, ex=ex)
+            return True
         except Exception as e:
             logger.error(f"Redis'e JSON yazma hatası (Anahtar: {key}): {e}")
-        finally:
-            await r.close()
+            return False
 
     @classmethod
     async def get_json(cls, key: str) -> Optional[Any]:

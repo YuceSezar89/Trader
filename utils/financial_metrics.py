@@ -287,43 +287,36 @@ def calculate_metrics(df, ref_df=None, beta_window=50, alpha_window=20):
     df['normalized_signal_momentum'] = normalize_series(df['signal_momentum_percent'], index=df.index)
     df['smoothed_signal_momentum'] = smooth_series(df['normalized_signal_momentum'], index=df.index)
 
-    df.loc[:, 'buy_crossover'] = (df['smoothed_cumulative'] > 0) & (df['smoothed_cumulative'].shift(1) <= 0)
-    df.loc[:, 'sell_crossunder'] = (df['smoothed_cumulative'] < 0) & (df['smoothed_cumulative'].shift(1) >= 0)
+   # df.loc[:, 'buy_crossover'] = (df['smoothed_cumulative'] > 0) & (df['smoothed_cumulative'].shift(1) <= 0)
+    #df.loc[:, 'sell_crossunder'] = (df['smoothed_cumulative'] < 0) & (df['smoothed_cumulative'].shift(1) >= 0)
 
-    df.loc[:, 'is_buy_active'] = False
-    df.loc[:, 'is_sell_active'] = False
-    df.loc[:, 'buy_mum_sayisi'] = 0
-    df.loc[:, 'sell_mum_sayisi'] = 0
-    df.loc[:, 'saved_signal_momentum'] = np.nan
-    df.loc[:, 'buy_metin'] = ""
-    df.loc[:, 'sell_metin'] = ""
+    #df.loc[:, 'is_buy_active'] = False
+    #df.loc[:, 'is_sell_active'] = False
+    #df.loc[:, 'buy_mum_sayisi'] = 0
+    #df.loc[:, 'sell_mum_sayisi'] = 0
+    #df.loc[:, 'saved_signal_momentum'] = np.nan
+    #df.loc[:, 'buy_metin'] = ""
+    #df.loc[:, 'sell_metin'] = ""
 
-    for i in range(1, len(df)):
-        if df['buy_crossover'].iloc[i]:
-            df.loc[df.index[i], 'is_buy_active'] = True
-            df.loc[df.index[i], 'is_sell_active'] = False
-            df.loc[df.index[i], 'buy_mum_sayisi'] = 0
-            df.loc[df.index[i], 'sell_mum_sayisi'] = 0
-            df.loc[df.index[i], 'saved_signal_momentum'] = df['smoothed_signal_momentum'].iloc[i]
-        elif df['sell_crossunder'].iloc[i]:
-            df.loc[df.index[i], 'is_buy_active'] = False
-            df.loc[df.index[i], 'is_sell_active'] = True
-            df.loc[df.index[i], 'buy_mum_sayisi'] = 0
-            df.loc[df.index[i], 'sell_mum_sayisi'] = 0
-            df.loc[df.index[i], 'saved_signal_momentum'] = df['smoothed_signal_momentum'].iloc[i]
-        else:
-            df.loc[df.index[i], 'is_buy_active'] = df['is_buy_active'].iloc[i-1]
-            df.loc[df.index[i], 'is_sell_active'] = df['is_sell_active'].iloc[i-1]
-            df.loc[df.index[i], 'buy_mum_sayisi'] = df['buy_mum_sayisi'].iloc[i-1] + 1 if df['is_buy_active'].iloc[i-1] else 0
-            df.loc[df.index[i], 'sell_mum_sayisi'] = df['sell_mum_sayisi'].iloc[i-1] + 1 if df['is_sell_active'].iloc[i-1] else 0
-            df.loc[df.index[i], 'saved_signal_momentum'] = df['saved_signal_momentum'].iloc[i-1]
+    #for i in range(1, len(df)):
+    #    if df['buy_crossover'].iloc[i]:
+    #        df.loc[df.index[i], 'is_buy_active'] = True
+    #        df.loc[df.index[i], 'is_sell_active'] = False
+    #        df.loc[df.index[i], 'buy_mum_sayisi'] = 0
+    #        df.loc[df.index[i], 'sell_mum_sayisi'] = 0
+    #        df.loc[df.index[i], 'saved_signal_momentum'] = df['smoothed_signal_momentum'].iloc[i]
+    #    elif df['sell_crossunder'].iloc[i]:
 
-        if df['is_buy_active'].iloc[i]:
-            df.loc[df.index[i], 'buy_metin'] = f"{df['saved_signal_momentum'].iloc[i]:.2f}/{df['buy_mum_sayisi'].iloc[i]}"
-        if df['is_sell_active'].iloc[i]:
-            df.loc[df.index[i], 'sell_metin'] = f"{df['saved_signal_momentum'].iloc[i]:.2f}/{df['sell_mum_sayisi'].iloc[i]}"
+    # Rolling excess return ortalama
+    mean_excess_returns = excess_returns.rolling(window=max(30, LOOKBACK_COMMON), min_periods=30).mean()
 
-    logger.debug(f"buy_metin:\n{df['buy_metin'].tail(5)}")
-    logger.debug(f"sell_metin:\n{df['sell_metin'].tail(5)}")
+    # Information Ratio hesaplama: mean_excess_return / tracking_error
+    df['information_ratio'] = np.where(
+        (tracking_error.isna()) | (tracking_error == 0) | (tracking_error < 1e-8),
+        0.0,
+        mean_excess_returns / tracking_error
+    )
+    #logger.debug(f"buy_metin:\n{df['buy_metin'].tail(5)}")
+    #logger.debug(f"sell_metin:\n{df['sell_metin'].tail(5)}")
 
     return df

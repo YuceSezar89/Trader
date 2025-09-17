@@ -27,3 +27,5 @@ streamlit-aggrid>=0.3.4
 streamlit-echarts>=0.4.0
 nest_asyncio>=1.6.0
 pytz>=2023.3
+asyncpg>=0.29.0
+psycopg2-binary>=2.9.0

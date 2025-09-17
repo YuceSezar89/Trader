@@ -2,8 +2,7 @@
   "mcpServers": {
     "fetch": {
       "command": "mcp-server-fetch",
-      "args": [],
-      "transport": "stdio"
+      "args": []
     },
     "filesystem": {
       "command": "npx",
@@ -11,8 +10,49 @@
         "-y",
         "@modelcontextprotocol/server-filesystem",
         "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC"
-      ],
-      "transport": "stdio"
+      ]
+    },
+    "brave-search": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-brave-search"
+      ]
+    },
+    "github": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-github"
+      ]
+    },
+    "memory": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-memory"
+      ]
+    },
+    "everything": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-everything"
+      ]
+    },
+    "puppeteer": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-puppeteer"
+      ]
+    },
+    "shell": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-shell"
+      ]
     }
   }
 }

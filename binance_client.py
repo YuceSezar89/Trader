@@ -168,7 +168,7 @@ class BinanceClientManager:
             stats = await cls.get_24hr_ticker_stats()
             # Filter for USDT pairs with a minimum volume threshold
             initial_usdt_pairs = [s for s in stats if s['symbol'].endswith('USDT')]
-            volume_threshold = 10000.0  # Minimum 24hr volume in USDT
+            volume_threshold = Config.MIN_VOLUME_THRESHOLD  # Minimum 24hr volume in USDT
             
             valid_symbols = [
                 s for s in initial_usdt_pairs 
