@@ -146,9 +146,9 @@ def get_live_data_from_api(symbol: str, interval: str, limit: int):
         for col in numeric_columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
         
-        # Timestamp'leri datetime'a çevir
-        df['open_time'] = pd.to_datetime(df['open_time'], unit='ms')
-        df['close_time'] = pd.to_datetime(df['close_time'], unit='ms')
+        # Timestamp'leri datetime'a çevir (UTC olarak, sonra Türkiye saatine çevir)
+        df['open_time'] = pd.to_datetime(df['open_time'], unit='ms', utc=True).dt.tz_convert('Europe/Istanbul')
+        df['close_time'] = pd.to_datetime(df['close_time'], unit='ms', utc=True).dt.tz_convert('Europe/Istanbul')
         
         # Date sütunu ekle (grafik için gerekli)
         df['date'] = df['open_time']
@@ -312,10 +312,12 @@ def _rename_signal_columns(df, only_confirmed=True):
         'vpms_score': 'VPM Skoru',
         'timestamp': 'Tarih/Saat',
         'price': 'Fiyat ($)',
-        'rsi': 'RSI Değeri',
         'momentum': 'Momentum',
-        'status': 'status',
-        'interval': 'Zaman Dilimi'
+        'interval': 'Zaman Dilimi',
+        'normalized_composite': 'Ratio',
+        'alpha': 'Alpha',
+        'beta': 'Beta',
+        'zscore_ratio_percent': 'Z-Score %'
     }
     
     # Kolon adlarını değiştir
@@ -396,7 +398,8 @@ def _load_signals_cache_first_sync(hours=24):
         query = """
         SELECT 
             symbol, signal_type, indicators, strength, vpms_score, 
-            timestamp, price, rsi, momentum, status, interval
+            timestamp, price, momentum, interval, normalized_composite,
+            alpha, beta, zscore_ratio_percent
         FROM signals 
         WHERE status = 'active'
         AND timestamp >= NOW() - INTERVAL '%s hours'
@@ -828,6 +831,12 @@ with st.spinner(f"{symbol} verisi çekiliyor..."):
         st.error("Veri alınamadı.")
         st.stop()
     
+    # Minimum veri kontrolü
+    if len(df) < 20:
+        st.warning(f"Yetersiz veri: {len(df)} mum. En az 20 mum gerekiyor.")
+        st.info("Lütfen daha fazla veri olan bir sembol seçin veya bekleyin.")
+        st.stop()
+    
     # Veri kaynağını göster
     if data_source == "database":
         st.success(f"✅ Database'den {len(df)} mum yüklendi (Hızlı & Real-time)")
@@ -886,7 +895,12 @@ tabs = st.tabs(subchart_options)
 # Her sekme için ilgili grafiği oluştur
 with tabs[0]:  # RSI
     st.subheader("RSI (Relative Strength Index)")
-    rsi = calculate_rsi(df, period=Config.RSI_PERIOD_DEFAULT)
+    try:
+        rsi = calculate_rsi(df, period=Config.RSI_PERIOD_DEFAULT)
+    except Exception as e:
+        st.warning(f"RSI hesaplanamadı: {str(e)}")
+        st.info(f"Gerekli veri: {Config.RSI_PERIOD_DEFAULT}, Mevcut: {len(df)}")
+        rsi = pd.Series([50] * len(df))  # Varsayılan değer
     fig_rsi = go.Figure()
     fig_rsi.add_trace(
         go.Scatter(

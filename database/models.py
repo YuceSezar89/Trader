@@ -50,9 +50,9 @@ class PriceData(Base):
 class Signal(Base):
     __tablename__ = "signals"
 
-    id = Column(Integer, autoincrement=True, unique=True)  # Auto-increment unique ID
-    symbol = Column(String, primary_key=True)  # Eski primary key
-    timestamp = Column(DateTime, primary_key=True)  # Eski primary key
+    id = Column(Integer, primary_key=True, autoincrement=True)  # Auto-increment primary key
+    symbol = Column(String)  # Artık primary key değil
+    timestamp = Column(DateTime)  # Artık primary key değil
     signal_type = Column(String)
     interval = Column(String)
     price = Column(Float, nullable=True)
@@ -77,6 +77,7 @@ class Signal(Base):
     scaled_avg_normalized = Column(Float, nullable=True)
     normalized_composite = Column(Float, nullable=True)
     normalized_price_change = Column(Float, nullable=True)
+    zscore_ratio_percent = Column(Float, nullable=True)
 
     # V-P-M onay ve skor
     vpms_score = Column(Float, nullable=True)
@@ -94,6 +95,5 @@ class Signal(Base):
     lifecycle_end_reason = Column(String(50), nullable=True)
 
     __table_args__ = (
-        PrimaryKeyConstraint("symbol", "timestamp"),
         UniqueConstraint("symbol", "timestamp", "signal_type", "interval"),
     )

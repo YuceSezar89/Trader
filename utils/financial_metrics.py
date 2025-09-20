@@ -283,6 +283,12 @@ def calculate_metrics(df, ref_df=None, beta_window=50, alpha_window=20):
     # Scaled avg normalized (0-100) devisso uyumlu
     df['scaled_avg_normalized'] = (df[['sharpe_ratio','sortino_ratio','treynor_ratio','calmar_ratio','information_ratio']].apply(normalize_series, axis=0, index=df.index).mean(axis=1) * 100).fillna(0.0)
 
+    # Z-Score Ratio (Pine panel eşdeğeri): (close - EMA200) / stdev * 100
+    df.loc[:, 'ema200'] = df['close'].ewm(span=200, adjust=False).mean()
+    df.loc[:, 'price_stdev_200'] = df['close'].rolling(window=200, min_periods=200).std(ddof=0)  # Pine stdev (population)
+    df.loc[:, 'zscore_ratio_percent'] = ((df['close'] - df['ema200']) / df['price_stdev_200'].replace(0, np.nan)) * 100
+    df['zscore_ratio_percent'] = df['zscore_ratio_percent'].fillna(0.0)
+
     df.loc[:, 'signal_momentum_percent'] = ((df['price'] / df['open'].replace(0, 1)) - 1) * 100
     df['normalized_signal_momentum'] = normalize_series(df['signal_momentum_percent'], index=df.index)
     df['smoothed_signal_momentum'] = smooth_series(df['normalized_signal_momentum'], index=df.index)

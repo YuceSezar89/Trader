@@ -55,7 +55,7 @@ class Config:
     BINANCE_FUTURES_INFO_URL = 'https://fapi.binance.com/fapi/v1/exchangeInfo'
     API_TIMEOUT = 10  # saniye
     MAX_RETRIES = 3
-    KLINE_INTERVAL = "15m"  # Veri çekme ve sinyal üretme zaman aralığı
+    KLINE_INTERVAL = "1m"   # Veri çekme ve sinyal üretme zaman aralığı (hızlı test için 1m)
     MIN_VOLUME_THRESHOLD = 10000 # Bir sembolün izlenmesi için gereken minimum 24 saatlik hacim (USDT)
     DEFAULT_LIMIT = 75  # Scanner için varsayılan
     MA200_LIMIT = 250  # MA200 hesaplaması için minimum
@@ -173,7 +173,7 @@ class Config:
     # =============================================================================
     # LOGGING AYARLARI
     # =============================================================================
-    LOG_LEVEL = logging.INFO
+    LOG_LEVEL = logging.DEBUG
     LOG_FORMAT = '%(asctime)s [%(levelname)s] [%(name)s] %(message)s'
     LOG_DATE_FORMAT = '%Y-%m-%d %H:%M:%S'
     

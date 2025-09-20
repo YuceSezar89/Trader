@@ -153,7 +153,7 @@ async def create_signal(signal_data: Dict[str, Any]):
             if key in Signal.__table__.columns and not Signal.__table__.columns[key].primary_key
         }
         stmt = stmt.on_conflict_do_update(
-            index_elements=['symbol', 'timestamp'],
+            index_elements=['symbol', 'timestamp', 'signal_type', 'interval'],
             set_=update_dict
         )
 

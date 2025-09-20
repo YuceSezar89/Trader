@@ -97,7 +97,7 @@ class BinanceClientManager:
                 async with aiohttp.ClientSession() as session:
                     async with session.get(url) as resp:
                         return await resp.json()
-            data = await asyncio.wait_for(request(), timeout=15)
+            data = await asyncio.wait_for(request(), timeout=30)
             if isinstance(data, dict) and data.get("code"):
                 logger.warning(f"[{symbol}] Binance API Error: {data}")
                 return pd.DataFrame()

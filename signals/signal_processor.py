@@ -27,6 +27,8 @@ async def process_and_enrich_signals(
         ref_df (pd.DataFrame): Referans piyasanın (örn. 'BTCUSDT') mum verilerini içeren DataFrame.
         interval (str): Mum verisi aralığı (örn. '15m').
     """
+    logger.info(f"[{symbol}] Sinyal işleme başlatıldı - DataFrame boyutu: {len(df)}, Ref boyutu: {len(ref_df)}")
+    
     if df.empty or ref_df.empty:
         logger.warning(f"[{symbol}] Sinyal işleme için veri çerçevelerinden biri boş, atlanıyor.")
         return
@@ -58,17 +60,23 @@ async def process_and_enrich_signals(
 
     # 2. Teknik Sinyalleri Hesapla
     try:
+        logger.info(f"[{symbol}] Teknik sinyal hesaplama başlatılıyor...")
         technical_signals = await signal_engine.calculate_all_signals(df)
+        logger.info(f"[{symbol}] Teknik sinyal hesaplama tamamlandı - Sonuç: {len(technical_signals) if technical_signals else 0} sinyal türü")
     except Exception as e:
         logger.error(f"[{symbol}] Teknik sinyal hesaplama hatası: {e}", exc_info=True)
         return
 
     # 3. Sinyalleri Zenginleştir ve Kaydet
     if not technical_signals:
+        logger.info(f"[{symbol}] Teknik sinyal bulunamadı, işlem sonlandırılıyor.")
         return
 
+    logger.info(f"[{symbol}] Sinyal zenginleştirme ve kaydetme başlatılıyor - {len(technical_signals)} sinyal türü işlenecek")
+    
     for signal_name, signal_list in technical_signals.items():
         if not isinstance(signal_list, list) or not signal_list:
+            logger.debug(f"[{symbol}] {signal_name} sinyali boş veya geçersiz, atlanıyor")
             continue
 
         for signal_data in signal_list:
@@ -185,11 +193,12 @@ async def process_and_enrich_signals(
                 except Exception as mtf_err:
                     logger.warning(f"[{symbol}] MTF hesaplama atlandı: {mtf_err}")
 
-                # Temel sinyal verilerini hazırla
+                # Temel sinyal verilerini hazırla (id'yi çıkar, auto-increment olsun)
+                signal_data_clean = {k: v for k, v in signal_data.items() if k != 'id'}
                 enriched_signal = {
                     'symbol': symbol,
                     'interval': interval,
-                    **signal_data,
+                    **signal_data_clean,
                     'alpha': alpha,
                     'beta': beta,
                     'sharpe_ratio': latest_metrics.get('sharpe_ratio'),
@@ -201,6 +210,7 @@ async def process_and_enrich_signals(
                     'scaled_avg_normalized': latest_metrics.get('scaled_avg_normalized'),
                     'normalized_composite': latest_metrics.get('normalized_composite'),
                     'normalized_price_change': latest_metrics.get('normalized_price_diff'), # financial_metrics'teki 'normalized_price_diff'i DB'deki 'normalized_price_change'e mapliyoruz
+                    'zscore_ratio_percent': latest_metrics.get('zscore_ratio_percent'),
                     'vpms_score': float(vpms_score) if vpms_score is not None else None,
                     'vpm_confirmed': bool(vpm_confirmed) if vpm_confirmed is not None else None,
                     'mtf_score': float(mtf_score) if mtf_score is not None else 0.0,
