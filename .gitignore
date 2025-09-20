@@ -104,3 +104,26 @@ nx.json
 # --- Streamlit/Secrets (dosya varsa) ---
 .streamlit/secrets.toml
 .github/instructions/nx.instructions.md
+
+# --- Proje özel ---
+inceleme/
+pgbouncer.log
+pgbouncer.pid
+*.md
+tests/
+test_*/
+*_test.py
+
+# --- Log ve geçici dosyalar ---
+*.tmp
+temp/
+*.backup
+*.dump
+
+# --- Yerel konfigürasyonlar ---
+.env.local
+config.local.py
+
+# --- Database migration backups ---
+database/backups/
+*.sql.backup
