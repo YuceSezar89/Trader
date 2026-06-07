@@ -455,12 +455,7 @@ def _load_signals_cache_first_sync(hours=24, signal_types_filter=None, filter_ty
         
         # İndikatör türü filtresi ekle
         if signal_types_filter and len(signal_types_filter) > 0:
-            if filter_type == "C20MX_LIKE":
-                # C20MX için LIKE operatörü kullan (tüm C20MX alt türlerini yakala)
-                base_query += " AND indicators LIKE 'C20MX%'"
-                query = base_query + " ORDER BY timestamp DESC LIMIT 1000"
-                cursor.execute(query)
-            elif filter_type == "RSI_LIKE":
+            if filter_type == "RSI_LIKE":
                 # RSI için LIKE operatörü kullan
                 base_query += " AND indicators LIKE 'RSI_Cross%'"
                 query = base_query + " ORDER BY timestamp DESC LIMIT 1000"
@@ -722,8 +717,7 @@ if selected == "📊 Sinyal Analizi":
     # Gerçek veritabanı indikatörlerine göre filtreleme seçenekleri
     indicator_filter_options = {
         "🎯 Tüm İndikatörler": None,
-        "⚡ C20MX Sinyalleri": "C20MX",
-        "📈 RSI Cross Sinyalleri": "RSI_Cross", 
+        "📈 RSI Cross Sinyalleri": "RSI_Cross",
         "📊 MA200 Cross Sinyalleri": "MA200_Cross"
     }
     
@@ -739,10 +733,7 @@ if selected == "📊 Sinyal Analizi":
     selected_indicator_type = indicator_filter_options[selected_indicator_option]
     
     # Gerçek indikatör türüne göre filtreleme mantığı
-    if selected_indicator_type == "C20MX":
-        signal_filter_type = "C20MX_LIKE"  # C20MX:* için LIKE
-        selected_signal_types = ["C20MX"]
-    elif selected_indicator_type == "RSI_Cross":
+    if selected_indicator_type == "RSI_Cross":
         signal_filter_type = "RSI_LIKE"  # RSI_Cross(9,24) için LIKE
         selected_signal_types = ["RSI_Cross"]
     elif selected_indicator_type == "MA200_Cross":
@@ -879,9 +870,7 @@ if selected == "📊 Sinyal Analizi":
                     indicator_str = str(indicator)
                     
                     # Gerçek indikatör türlerine göre formatlama
-                    if 'C20MX' in indicator_str:
-                        return '🎯 C20MX'
-                    elif 'RSI_Cross' in indicator_str:
+                    if 'RSI_Cross' in indicator_str:
                         return '📈 RSI Cross'
                     elif 'MA200_Cross' in indicator_str:
                         return '📊 MA200 Cross'

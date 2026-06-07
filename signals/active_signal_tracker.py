@@ -4,7 +4,7 @@ Aktif Sinyal Takipçisi - Sadece aktif sinyalleri olan semboller için optimized
 
 Bu modül:
 1. Aktif sinyalleri veritabanından çeker
-2. Sadece bu semboller için WebSocket bağlantısı kurar  
+2. Sadece bu semboller için WebSocket bağlantısı kurar
 3. Real-time fiyat güncellemeleri alır
 4. Sinyal durumlarını otomatik günceller (hit/miss/expired)
 5. Performans metriklerini hesaplar
@@ -47,7 +47,7 @@ class ActiveSignalTracker:
         except Exception as e:
             logger.error(f"ActiveSignalTracker başlatma hatası: {e}")
             raise
-    
+
     async def load_active_signals(self) -> Dict[str, List[Dict]]:
         """Veritabanından aktif sinyalleri yükle"""
         try:

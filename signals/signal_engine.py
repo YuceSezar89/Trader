@@ -18,7 +18,6 @@ import numpy as np
 from utils.logger import get_logger
 from utils.exceptions import ValidationError, CalculationError
 from config import Config
-from signals.c20mx_core import compute_features as c20mx_compute_features, detect_signals as c20mx_detect_signals
 from indicators.core import calculate_rsi
 
 # Eşik değerlerini merkezi yapılandırmadan al
@@ -177,14 +176,7 @@ class SignalEngine:
             else None
         )
 
-        # Pullback level:
-        # - C20MX dışındaki sinyallerde pullback_level verilmemişse None bırak
-        # - C20MX sinyallerinde verilmemişse bar low/high fallback uygula
         effective_pullback = pullback_level
-        if effective_pullback is None and isinstance(indicators, str) and indicators.startswith("C20MX:"):
-            effective_pullback = (
-                df[COL_LOW].iloc[-1] if signal_type == "Long" else df[COL_HIGH].iloc[-1]
-            )
 
         signal_data = {
             "signal_type": signal_type,
@@ -286,72 +278,6 @@ class SignalEngine:
             )
         return []
 
-    
-
-    async def c20mx_signal(self, df: pd.DataFrame, interval: Optional[str] = None) -> List[Dict[str, Any]]:
-        """C20MX (RSI%Change + MACD-türevi) sinyallerini üretir ve pullback seviyesini yönüne göre yazar.
-        TradingView Pine ile uyumlu olacak şekilde kapalı mumda (i=-2) değerlendirme yapar.
-        """
-        base_required = ["open", "high", "low", "close", "open_time"]
-        if not self._validate_dataframe(df, base_required, min_len=3):
-            return []
-
-        try:
-            feat = c20mx_compute_features(df[["open", "high", "low", "close"]].copy())
-        except Exception as e:
-            self.logger.error(f"C20MX feature hesaplama hatası: {e}")
-            return []
-
-        i = -2
-        try:
-            codes = c20mx_detect_signals(feat, i=i, interval=interval)
-        except Exception as e:
-            self.logger.error(f"C20MX sinyal tespiti hatası: {e}")
-            return []
-
-        long_cnt = sum(1 for c in codes if c.endswith("L"))
-        short_cnt = sum(1 for c in codes if c.endswith("S"))
-        if long_cnt == 0 and short_cnt == 0:
-            return []
-
-        signal_type = "Long" if long_cnt >= short_cnt else "Short"
-
-        weights = {"C10": 1, "C20": 2, "L20": 2, "M2": 2, "M3": 3, "M4": 4, "M5": 5}
-        def side_code_weight(code: str) -> int:
-            for k, w in weights.items():
-                if code.startswith(k):
-                    return w
-            return 1
-        strength = sum(
-            side_code_weight(c)
-            for c in codes
-            if (c.endswith("L") and signal_type == "Long") or (c.endswith("S") and signal_type == "Short")
-        )
-        strength = max(1, int(strength))
-
-        pull_lvl: Optional[float] = None
-        try:
-            if signal_type == "Long" and "long_pullback_level" in feat.columns and pd.notna(feat["long_pullback_level"].iloc[i]):
-                pull_lvl = float(feat["long_pullback_level"].iloc[i])
-            elif signal_type == "Short" and "short_pullback_level" in feat.columns and pd.notna(feat["short_pullback_level"].iloc[i]):
-                pull_lvl = float(feat["short_pullback_level"].iloc[i])
-        except Exception:
-            pull_lvl = None
-
-        out_df = df.iloc[:-1].copy()
-        ind_str = "C20MX:" + "|".join([c for c in codes if not c.startswith("[")])
-        if interval:
-            ind_str += f"[{interval}]"
-
-        return self._create_signal_output(
-            df=out_df,
-            signal_type=signal_type,
-            indicators=ind_str,
-            strength=strength,
-            pullback_level=pull_lvl,
-        )
-
-
     async def calculate_all_signals(
         self, df: pd.DataFrame, signal_types: Optional[List[str]] = None
     ) -> Dict[str, Any]:
@@ -365,7 +291,6 @@ class SignalEngine:
         ] = {
             "rsi_crossover": self.rsi_crossover_signal,
             "ma200_crossover": self.ma200_crossover_signal,
-            "c20mx": self.c20mx_signal,
         }
 
         active_signals: List[str]
