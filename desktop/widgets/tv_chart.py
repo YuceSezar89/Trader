@@ -266,7 +266,7 @@ class TVChart(QWebEngineView):
 
     @staticmethod
     def _prepare(df: pd.DataFrame):
-        ts     = df["timestamp"].astype("int64") // 10**9
+        ts     = df["timestamp"].astype("int64") // 10**9 + 3 * 3600
         opens  = df["open"].astype(float)
         highs  = df["high"].astype(float)
         lows   = df["low"].astype(float)
