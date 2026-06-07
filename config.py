@@ -6,12 +6,16 @@ Bu dosya tüm sabit değerleri ve ayarları içerir.
 import os
 import logging
 from typing import Dict, Any
+from dotenv import load_dotenv
+
+# .env dosyasını yükle
+load_dotenv()
 
 
 class Config:
     # --- Genel Ayarlar ---
     MARKET_REFERENCE_SYMBOL = 'BTCUSDT'  # Alpha ve Beta hesaplamaları için referans sembol
-    SYMBOL_LIMIT = 100  # Binance'ten çekilecek en yüksek hacimli sembol sayısı
+    SYMBOL_LIMIT = 200  # Binance'ten çekilecek en yüksek hacimli sembol sayısı (200 × 6 TF = 1,200 stream → 6 connection)
 
     """Merkezi konfigürasyon sınıfı"""
     
@@ -22,11 +26,18 @@ class Config:
     TIMEZONE_OFFSET = '+03:00'
     
     # =============================================================================
-    # DATABASE AYARLARI
+    # DATABASE AYARLARI (PostgreSQL)
     # =============================================================================
+    DB_HOST = os.getenv('DB_HOST', 'localhost')
+    DB_PORT = int(os.getenv('DB_PORT', 5432))
+    DB_NAME = os.getenv('DB_NAME', 'trader_panel')
+    DB_USER = os.getenv('DB_USER', 'postgres')
+    DB_PASSWORD = os.getenv('DB_PASSWORD', '')
+    DB_TIMEOUT = 30  # saniye
+    
+    # Legacy SQLite (deprecated)
     DB_PATH = 'trader_signals.db'
     DB_BACKUP_DAYS = 7
-    DB_TIMEOUT = 30  # saniye
 
     # =============================================================================
     # REDIS AYARLARI
@@ -47,12 +58,34 @@ class Config:
     WS_PING_INTERVAL = 20            # Ping gönderme aralığı (saniye)
     WS_PONG_TIMEOUT = 10             # Pong yanıt bekleme süresi (saniye)
 
+    # =============================================================================
+    # MULTI-TIMEFRAME (MTF) AYARLARI
+    # =============================================================================
+    MTF_ENABLED = True  # MTF sistemini etkinleştir/devre dışı bırak
+    MTF_TIMEFRAMES = ['1m', '5m', '15m', '1h', '4h', '1d']  # Desteklenen timeframe'ler
+    MTF_BUFFER_LIMITS = {
+        '1m': 1000,   # 16+ hours of 1m data
+        '5m': 300,    # 25 hours of 5m data
+        '15m': 100,   # 25 hours of 15m data
+        '1h': 48,     # 48 hours of 1h data
+        '4h': 30,     # 5 days of 4h data
+        '1d': 30      # 30 days of 1d data
+    }
+
+    # WebSocket per-connection stream limit (tunable)
+    # Binance combined stream limits can change; lower this if you see server CLOSE frames.
+    WS_MAX_STREAMS_PER_CONNECTION = int(os.getenv('WS_MAX_STREAMS_PER_CONNECTION', 100))
+    
     
     # =============================================================================
     # BINANCE API AYARLARI
     # =============================================================================
     BINANCE_BASE_URL = 'https://fapi.binance.com'
     BINANCE_FUTURES_INFO_URL = 'https://fapi.binance.com/fapi/v1/exchangeInfo'
+    # WebSocket base URL to use for streaming. Updated for Binance new endpoint layout.
+    # By default point to the new announced market base so that library will form
+    # wss://<base>/stream or wss://<base>/ws depending on client usage.
+    BINANCE_WS_BASE = os.getenv('BINANCE_WS_BASE', 'wss://fstream.binance.com/market')
     API_TIMEOUT = 10  # saniye
     MAX_RETRIES = 3
     KLINE_INTERVAL = "1m"   # Veri çekme ve sinyal üretme zaman aralığı (hızlı test için 1m)
@@ -131,9 +164,9 @@ class Config:
             'M_MACD_HIST_DELTA_SHORT': -0.5,
         },
         'WEIGHTS': {
-            'P': 0.4,
+            'P': 0.2,
             'V': 0.3,
-            'M': 0.3,
+            'M': 0.5,
         },
         # MTF bonus ayarları
         'MTF': {
@@ -173,7 +206,7 @@ class Config:
     # =============================================================================
     # LOGGING AYARLARI
     # =============================================================================
-    LOG_LEVEL = logging.DEBUG
+    LOG_LEVEL = logging.INFO  # Keep-Alive sistem loglarını görmek için INFO'ya çekildi
     LOG_FORMAT = '%(asctime)s [%(levelname)s] [%(name)s] %(message)s'
     LOG_DATE_FORMAT = '%Y-%m-%d %H:%M:%S'
     

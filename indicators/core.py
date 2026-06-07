@@ -77,6 +77,8 @@ def calculate_rsi(df, period=Config.RSI_PERIOD_DEFAULT, price_col='close'):
         CalculationError: Hesaplama hatası
     """
     try:
+        # Defensive copy to avoid chained assignment issues on potential views
+        df = df.copy()
         # Input validation
         if df is None or df.empty:
             raise ValidationError("DataFrame boş veya None", field="df")
@@ -453,58 +455,68 @@ def add_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     SignalEngine'in ihtiyaç duyduğu tüm sütunları oluşturur.
     """
     try:
-        # MA200
-        if len(df) >= 200:
-            df['ma200'] = calculate_sma(df, period=200)
-        else:
-            df['ma200'] = np.nan
+        # Ensure we always work on a full copy to avoid SettingWithCopyWarning
+        df = df.copy(deep=True)
+        # Tüm kolon atamalarını chained_assignment uyarısını kapatarak yap
+        with pd.option_context('mode.chained_assignment', None):
+            # MA200
+            if len(df) >= 200:
+                df.loc[:, 'ma200'] = calculate_sma(df, period=200)
+            else:
+                df.loc[:, 'ma200'] = np.nan
 
-        # RSI (Dinamik periyotlar)
-        fast_rsi_period = Config.RSI_FAST_WINDOW
-        slow_rsi_period = Config.RSI_SLOW_WINDOW
-        fast_rsi_col = f'rsi_{fast_rsi_period}'
-        slow_rsi_col = f'rsi_{slow_rsi_period}'
+            # RSI (Dinamik periyotlar)
+            fast_rsi_period = Config.RSI_FAST_WINDOW
+            slow_rsi_period = Config.RSI_SLOW_WINDOW
+            fast_rsi_col = f'rsi_{fast_rsi_period}'
+            slow_rsi_col = f'rsi_{slow_rsi_period}'
 
-        if len(df) >= slow_rsi_period:
-            df[fast_rsi_col] = calculate_rsi(df, period=fast_rsi_period)
-            df[slow_rsi_col] = calculate_rsi(df, period=slow_rsi_period)
-            df['rsi_change'] = df[fast_rsi_col] - df[slow_rsi_col]
-        else:
-            df[fast_rsi_col] = np.nan
-            df[slow_rsi_col] = np.nan
-            df['rsi_change'] = np.nan
+            if len(df) >= slow_rsi_period:
+                df.loc[:, fast_rsi_col] = calculate_rsi(df, period=fast_rsi_period)
+                df.loc[:, slow_rsi_col] = calculate_rsi(df, period=slow_rsi_period)
+                df.loc[:, 'rsi_change'] = df[fast_rsi_col] - df[slow_rsi_col]
+            else:
+                df.loc[:, fast_rsi_col] = np.nan
+                df.loc[:, slow_rsi_col] = np.nan
+                df.loc[:, 'rsi_change'] = np.nan
 
-        # MACD
-        if len(df) >= 26:
-            df['macd'], df['macd_signal'], df['macd_hist'] = calculate_macd(df)
-            df['macd_change'] = df['macd'].diff()
-        else:
-            df['macd'] = np.nan
-            df['macd_signal'] = np.nan
-            df['macd_hist'] = np.nan
-            df['macd_change'] = np.nan
+            # MACD
+            if len(df) >= 26:
+                _macd, _macd_signal, _macd_hist = calculate_macd(df)
+                df.loc[:, 'macd'] = _macd
+                df.loc[:, 'macd_signal'] = _macd_signal
+                df.loc[:, 'macd_hist'] = _macd_hist
+                df.loc[:, 'macd_change'] = df['macd'].diff()
+            else:
+                df.loc[:, 'macd'] = np.nan
+                df.loc[:, 'macd_signal'] = np.nan
+                df.loc[:, 'macd_hist'] = np.nan
+                df.loc[:, 'macd_change'] = np.nan
 
-        # ADX
-        if len(df) >= 28: # ADX için genellikle 2*dilen kadar veri gerekir
-            df['adx'], df['plus_di'], df['minus_di'] = calculate_adx(df)
-        else:
-            df['adx'] = np.nan
-            df['plus_di'] = np.nan
-            df['minus_di'] = np.nan
+            # ADX
+            if len(df) >= 28: # ADX için genellikle 2*dilen kadar veri gerekir
+                _adx, _plus_di, _minus_di = calculate_adx(df)
+                df.loc[:, 'adx'] = _adx
+                df.loc[:, 'plus_di'] = _plus_di
+                df.loc[:, 'minus_di'] = _minus_di
+            else:
+                df.loc[:, 'adx'] = np.nan
+                df.loc[:, 'plus_di'] = np.nan
+                df.loc[:, 'minus_di'] = np.nan
 
-        # ATR
-        if len(df) >= Config.ATR_PERIOD:
-            df['atr'] = calculate_atr(df, period=Config.ATR_PERIOD)
-        else:
-            df['atr'] = np.nan
+            # ATR
+            if len(df) >= Config.ATR_PERIOD:
+                df.loc[:, 'atr'] = calculate_atr(df, period=Config.ATR_PERIOD)
+            else:
+                df.loc[:, 'atr'] = np.nan
 
-        # Momentum (ROC)
-        if len(df) >= Config.ROC_PERIOD:
-            df['momentum'] = calculate_roc(df, period=Config.ROC_PERIOD)
-        else:
-            df['momentum'] = np.nan
+            # Momentum (ROC)
+            if len(df) >= Config.ROC_PERIOD:
+                df.loc[:, 'momentum'] = calculate_roc(df, period=Config.ROC_PERIOD)
+            else:
+                df.loc[:, 'momentum'] = np.nan
 
-        logger.debug("Tüm göstergeler başarıyla DataFrame'e eklendi.")
+            logger.debug("Tüm göstergeler başarıyla DataFrame'e eklendi.")
 
     except Exception as e:
         logger.error(f"Gösterge hesaplama hatası: {e}", exc_info=True)

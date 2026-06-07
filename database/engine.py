@@ -6,30 +6,30 @@ import os
 
 from .models import Base
 
-# PostgreSQL connection URL - PgBouncer connection
+# PostgreSQL connection URL - Direct PostgreSQL connection
 DATABASE_URL = os.getenv(
     "DATABASE_URL", 
-    "postgresql+asyncpg://yusuf@localhost:6432/trader_panel"
+    "postgresql+asyncpg://yusuf@localhost:5432/trader_panel"
 )
 
-# Asenkron veritabanı motoru
+# Asenkron veritabanı motoru - Multi-WebSocket için optimize edilmiş
 async_engine = create_async_engine(
     DATABASE_URL,
     echo=False,  # True yaparsanız tüm SQL sorgularını loglar
-    pool_size=10,  # PgBouncer ile daha az pool
-    max_overflow=5,  # PgBouncer ile daha az overflow
-    pool_pre_ping=False,
+    pool_size=50,  # Artırıldı: 168 sembol × 6 TF için yeterli
+    max_overflow=50,  # Peak load için ekstra kapasite
+    pool_pre_ping=True,  # Connection sağlık kontrolü
     future=True,
-    pool_timeout=30,  # Timeout artırıldı
-    pool_recycle=1800,  # 30 dakika sonra connection'ları yenile
+    pool_timeout=60,  # Timeout artırıldı (peak load için)
+    pool_recycle=3600,  # 1 saat sonra connection'ları yenile
     connect_args={
         "server_settings": {
-            "application_name": "trader_panel",
+            "application_name": "trader_panel_mtf",
         },
-        "command_timeout": 30,
+        "command_timeout": 60,
     },
     # Event loop cleanup için ek ayarlar
-    pool_reset_on_return='commit'
+    pool_reset_on_return='rollback'  # commit yerine rollback (daha hızlı)
 )
 
 # Asenkron oturum yöneticisi

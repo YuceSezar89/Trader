@@ -3,11 +3,12 @@ from typing import List, Dict, Any, Optional
 
 from utils.logger import get_logger
 from signals.signal_engine import signal_engine
-from utils.financial_metrics import calculate_metrics
+from indicators.financial_metrics import calculate_metrics
 from signals.signal_lifecycle_manager import signal_lifecycle_manager
 from config import Config
 from indicators.core import calculate_rsi, calculate_macd
 from utils.data_provider import fetch_ohlcv
+from signals.vpm_calculator import VPMCalculator
 
 logger = get_logger(__name__)
 
@@ -128,10 +129,15 @@ async def process_and_enrich_signals(
                     pass_count = sum(1 for x in passes if x)
 
                     # Skor: işaret ayarı (Short için P ve M ters)
-                    p_comp = (p_pct * side) if (p_pct is not None) else 0.0
-                    v_comp = v_z if (v_z is not None) else 0.0
-                    m_comp = (rsi_delta * side) if (rsi_delta is not None) else 0.0
-                    vpms_score = (w.get('P', 0.4) * p_comp) + (w.get('V', 0.3) * v_comp) + (w.get('M', 0.3) * m_comp)
+                    # Yeni VPMCalculator kullan
+                    vpms_score = VPMCalculator.calculate(
+                        volume=float(latest_metrics.get('volume', 0)),
+                        volume_sma=float(latest_metrics.get('volume_sma_20', 1)),
+                        price_change_pct=float(p_pct if p_pct is not None else 0.0),
+                        rsi_delta=float(rsi_delta if rsi_delta is not None else 0.0),
+                        interval=interval,
+                        signal_type=signal_data.get('signal_type', 'Long')
+                    )
 
                     # Onay modu
                     if mode == 'and':

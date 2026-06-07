@@ -110,9 +110,6 @@ inceleme/
 pgbouncer.log
 pgbouncer.pid
 *.md
-tests/
-test_*/
-*_test.py
 
 # --- Log ve geçici dosyalar ---
 *.tmp

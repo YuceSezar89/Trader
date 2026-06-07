@@ -253,8 +253,13 @@ class SignalEngine:
         return []
 
     async def ma200_crossover_signal(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
-        """MA200 ve fiyat kesişimini kontrol eder ve standart formatta döndürür."""
-        required_cols = [COL_CLOSE, COL_MA200, COL_LOW, COL_HIGH, "open_time"]
+        """MA200 ve fiyat kesişimini kontrol eder (TradingView basit crossover mantığı).
+        
+        TradingView ta.crossover/crossunder mantığı:
+        - Sadece close fiyatlarının kesişimine bakar
+        - Önceki close bir tarafta, şimdiki close diğer tarafta
+        """
+        required_cols = [COL_CLOSE, COL_MA200, "open_time"]
         # Kapalı mum üzerinde çalış: son açık mumu at
         if len(df) < 3:
             return []
@@ -262,11 +267,17 @@ class SignalEngine:
         if not self._validate_dataframe(df_closed, required_cols):
             return []
 
-        price, ma = df_closed[COL_CLOSE], df_closed[COL_MA200]
+        # Önceki ve şimdiki bar
+        prev = df_closed.iloc[-2]
+        curr = df_closed.iloc[-1]
+        
         signal_type = ""
-        if price.iloc[-2] < ma.iloc[-2] and price.iloc[-1] > ma.iloc[-1]:
+        # Basit crossover kontrolü (TradingView ta.crossover/crossunder)
+        # Yukarı kesişim: önceki close altında, şimdi üstte
+        if prev[COL_CLOSE] < prev[COL_MA200] and curr[COL_CLOSE] > curr[COL_MA200]:
             signal_type = "Long"
-        elif price.iloc[-2] > ma.iloc[-2] and price.iloc[-1] < ma.iloc[-1]:
+        # Aşağı kesişim: önceki close üstte, şimdi altında
+        elif prev[COL_CLOSE] > prev[COL_MA200] and curr[COL_CLOSE] < curr[COL_MA200]:
             signal_type = "Short"
 
         if signal_type:

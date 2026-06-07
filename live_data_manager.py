@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from typing import Dict, List, Optional
 
@@ -22,6 +23,7 @@ from signals.signal_processor import process_and_enrich_signals
 from utils.exceptions import BinanceAPIError, DatabaseError
 from config import Config
 from utils.redis_client import RedisClient
+from utils.timeframe_aggregator import TimeframeAggregator
 
 
 def setup_logging():
@@ -75,8 +77,20 @@ class LiveDataManager:
         self.symbols = list(dict.fromkeys(symbols))  # Duplike varsa kaldır
 
         self.interval = interval
-        # WebSocket istemcisi: düzeltilmiş python-binance ile
-        self.ws_client = None
+        
+        # MTF Configuration
+        self.mtf_enabled = getattr(Config, 'MTF_ENABLED', True)
+        self.supported_timeframes = getattr(Config, 'MTF_TIMEFRAMES', ['1m', '5m', '15m'])
+        self.mtf_buffer_limits = getattr(Config, 'MTF_BUFFER_LIMITS', {
+            '1m': 1000,   # 16+ hours
+            '5m': 200,    # 16+ hours  
+            '15m': 67,    # 16+ hours
+            '1h': 24,     # 24 hours
+            '4h': 12,     # 48 hours
+            '1d': 7       # 7 days
+        })
+        # Multi-WebSocket istemcileri: Her connection için ayrı client
+        self.ws_clients: Dict[int, Any] = {}  # connection_id -> ws_client
         self.is_ws_connected = False
         self.last_message_time: Optional[float] = (
             None  # Son WebSocket mesajının zamanını takip et
@@ -86,9 +100,30 @@ class LiveDataManager:
         self.last_error_type = None  # Son hata türü
         self.consecutive_errors = 0  # Ardışık hata sayısı
         self.db_lock = asyncio.Lock()  # Veritabanı yazma işlemleri için kilit
+
+        # Multi-WebSocket configuration
+        self.max_streams_per_connection = 200  # Binance limit
+        
+        # Keep-Alive Ping/Pong Tracking
+        self.ping_task: Optional[asyncio.Task] = None
+        self.last_ping_time: Optional[float] = None
+        self.ping_interval = getattr(Config, 'WS_PING_INTERVAL', 20)
+        self.connection_health_ok = True
+        
+        # Legacy single timeframe buffer (backward compatibility)
         self.kline_data: Dict[str, pd.DataFrame] = {
             symbol: pd.DataFrame() for symbol in symbols
         }
+        
+        # NEW: Multi-timeframe buffers
+        if self.mtf_enabled:
+            self.mtf_buffers: Dict[str, Dict[str, pd.DataFrame]] = {}
+            for symbol in symbols:
+                self.mtf_buffers[symbol] = {}
+                for tf in self.supported_timeframes:
+                    self.mtf_buffers[symbol][tf] = pd.DataFrame()
+            logger.info(f"MTF buffers initialized for {len(symbols)} symbols, {len(self.supported_timeframes)} timeframes")
+        
         self.processing_tasks: set[asyncio.Task] = set()
 
         # Batch insert için buffer sistemi
@@ -336,8 +371,9 @@ class LiveDataManager:
             raise  # Hatayı yukarıya ilet
 
     def _handle_websocket_message(self, _, msg: str):
-        """WebSocket'ten gelen her mesajı işler."""
+        """WebSocket'ten gelen multi-timeframe mesajları işler."""
         self.last_message_time = self.loop.time()  # Her mesajda zamanı güncelle
+        self.connection_health_ok = True  # Mesaj geldi, bağlantı sağlıklı
         logger.debug(f"WebSocket mesajı alındı: {msg}")  # Tam mesaj
         try:
             data = json.loads(msg)
@@ -348,15 +384,16 @@ class LiveDataManager:
                 if kline_data.get("e") == "kline":
                     kline = kline_data["k"]
                     symbol = kline["s"]
+                    interval = kline["i"]  # Timeframe bilgisi (1m, 5m, 15m, etc.)
                     is_closed = kline["x"]
-                    
-                    logger.debug(f"[{symbol}] Bar closed (x): {is_closed} (type: {type(is_closed)})")
+
+                    logger.debug(f"[{symbol}] {interval} Bar closed (x): {is_closed}")
 
                     if is_closed:
-                        logger.info(f"🕯️ [{symbol}] Mum kapandı. Fiyat: {kline['c']}")
+                        logger.info(f"🕯️ [{symbol}] {interval} mum kapandı. Fiyat: {kline['c']}")
                         # WebSocket thread'inden ana event loop'a güvenli coroutine çağrısı
                         asyncio.run_coroutine_threadsafe(
-                            self._update_and_process_symbol(symbol, kline), self.loop
+                            self._update_and_process_symbol_mtf(symbol, interval, kline), self.loop
                         )
 
         except json.JSONDecodeError:
@@ -366,9 +403,17 @@ class LiveDataManager:
                 f"WebSocket mesaj işleme hatası: {e} | Mesaj: {msg}", exc_info=True
             )
 
-    async def _update_and_process_symbol(self, symbol: str, kline_data: Dict):
-        """Updates the DataFrame with the new kline and triggers signal processing."""
+    async def _update_and_process_symbol_mtf(self, symbol: str, interval: str, kline_data: Dict):
+        """
+        Multi-timeframe version: Updates the DataFrame for specific timeframe and triggers signal processing.
+
+        Args:
+            symbol: Trading symbol (e.g., 'BTCUSDT')
+            interval: Timeframe (e.g., '1m', '5m', '15m')
+            kline_data: Kline data from WebSocket
+        """
         try:
+            # Parse kline data
             new_row = {
                 "open_time": int(kline_data["t"]),
                 "open": float(kline_data["o"]),
@@ -383,45 +428,73 @@ class LiveDataManager:
                 "taker_buy_quote_asset_volume": float(kline_data["Q"]),
             }
 
-            # Using pd.concat instead of append
-            new_df = pd.DataFrame([new_row])
-            self.kline_data[symbol] = pd.concat(
-                [self.kline_data[symbol], new_df], ignore_index=True
-            )
+            # MTF buffer'a ekle (her timeframe için ayrı buffer)
+            if self.mtf_enabled and symbol in self.mtf_buffers:
+                new_df = pd.DataFrame([new_row])
+                self.mtf_buffers[symbol][interval] = pd.concat(
+                    [self.mtf_buffers[symbol][interval], new_df], ignore_index=True
+                )
 
-            # Bellekteki veri setini belirli bir boyutta tut (örneğin son 1000 mum)
-            self.kline_data[symbol] = self.kline_data[symbol].tail(1000)
+                # Apply buffer limit
+                limit = self.mtf_buffer_limits.get(interval, 100)
+                self.mtf_buffers[symbol][interval] = self.mtf_buffers[symbol][interval].tail(limit)
 
-            # Yeni kline'ı buffer'a ekle (batch insert için)
-            await self._add_to_batch_buffer(symbol, new_row)
+                # Add indicators
+                self.mtf_buffers[symbol][interval] = add_all_indicators(
+                    self.mtf_buffers[symbol][interval]
+                )
 
-            # Hafızadaki veri üzerinde sinyal üretimi için göstergeleri hesapla
-            self.kline_data[symbol] = add_all_indicators(self.kline_data[symbol])
+                # Cache to Redis
+                await RedisClient.set_mtf_klines(symbol, interval, self.mtf_buffers[symbol][interval])
+                logger.debug(f"[{symbol}] {interval} buffer updated and cached")
 
-            # Göstergelerle zenginleştirilmiş DataFrame'i Redis'e yaz
-            # Yeni standart anahtar: <prefix>:<symbol>:<interval>
-            new_redis_key = (
-                f"{Config.REDIS_LIVE_DATA_KEY_PREFIX}:{symbol}:{self.interval}"
-            )
-            await RedisClient.set_df(new_redis_key, self.kline_data[symbol])
-            # Geriye uyum: eski anahtara da yaz (yakında kaldırılabilir)
-            legacy_redis_key = f"{Config.REDIS_LIVE_DATA_KEY_PREFIX}:{symbol}"
-            await RedisClient.set_df(legacy_redis_key, self.kline_data[symbol])
+            # Legacy 1m buffer için backward compatibility (1m interval'da)
+            if interval == '1m':
+                new_df = pd.DataFrame([new_row])
+                self.kline_data[symbol] = pd.concat(
+                    [self.kline_data[symbol], new_df], ignore_index=True
+                )
+                self.kline_data[symbol] = self.kline_data[symbol].tail(1000)
+                self.kline_data[symbol] = add_all_indicators(self.kline_data[symbol])
 
-            # Hot cache'e de yaz (hızlı erişim için)
-            await RedisClient.set_hot_klines(symbol, self.kline_data[symbol])
+                # Legacy Redis keys
+                new_redis_key = f"{Config.REDIS_LIVE_DATA_KEY_PREFIX}:{symbol}:1m"
+                await RedisClient.set_df(new_redis_key, self.kline_data[symbol])
+                legacy_redis_key = f"{Config.REDIS_LIVE_DATA_KEY_PREFIX}:{symbol}"
+                await RedisClient.set_df(legacy_redis_key, self.kline_data[symbol])
+                await RedisClient.set_hot_klines(symbol, self.kline_data[symbol])
 
-            logger.info(
-                f"[{symbol}] Canlı veri Redis'e yazıldı. Yeni: {new_redis_key} | Legacy: {legacy_redis_key} | Hot: hot_klines:{symbol}"
-            )
+            # Batch insert için buffer'a ekle (sadece 1m için - diğer TF'ler opsiyonel)
+            if interval == '1m':
+                await self._add_to_batch_buffer(symbol, new_row)
 
-            task = asyncio.create_task(self._process_signal_for_symbol(symbol))
-            self.processing_tasks.add(task)
-            task.add_done_callback(self.processing_tasks.discard)
+            # Sinyal üretimi (her timeframe için)
+            if self.mtf_enabled:
+                # Get reference data for this timeframe
+                ref_df = pd.DataFrame()
+                if self.ref_symbol in self.mtf_buffers and interval in self.mtf_buffers[self.ref_symbol]:
+                    ref_df = self.mtf_buffers[self.ref_symbol][interval].copy()
+
+                # Minimum bar requirements per timeframe
+                min_bars = {'1m': 200, '5m': 100, '15m': 67, '1h': 24, '4h': 12, '1d': 7}.get(interval, 100)
+
+                if not ref_df.empty and len(self.mtf_buffers[symbol][interval]) >= min_bars:
+                    # Create async task for signal processing
+                    task = asyncio.create_task(
+                        process_and_enrich_signals(
+                            symbol=symbol,
+                            df=self.mtf_buffers[symbol][interval].copy(),
+                            ref_df=ref_df,
+                            interval=interval,
+                        )
+                    )
+                    self.processing_tasks.add(task)
+                    task.add_done_callback(self.processing_tasks.discard)
+                    logger.info(f"🎯 [{symbol}] {interval} sinyal üretimi başlatıldı")
 
         except Exception as e:
             logger.error(
-                f"Failed to update and process symbol {symbol}: {e}", exc_info=True
+                f"[{symbol}] {interval} veri güncelleme hatası: {e}", exc_info=True
             )
 
     async def _purge_symbol_data(self, symbol: str):
@@ -437,29 +510,62 @@ class LiveDataManager:
 
     def _handle_ws_close(self, *args):
         """Callback function for when the websocket connection is closed."""
-        logger.warning("WebSocket bağlantısı kapandı.")
-        self.is_ws_connected = False
+        try:
+            # Log any provided close arguments (code, reason, etc.) for diagnostics
+            logger.warning(f"WebSocket bağlantısı kapandı. args={args!r}")
+            # If the websocket client provides a close code/reason, try to extract
+            if args:
+                try:
+                    # common signatures: (ws, close_status_code, close_msg) or (code, reason)
+                    # attempt a best-effort extraction
+                    if len(args) >= 2:
+                        close_code = args[1]
+                        logger.warning(f"WebSocket close code: {close_code}")
+                    if len(args) >= 3:
+                        close_msg = args[2]
+                        logger.warning(f"WebSocket close message: {close_msg}")
+                except Exception:
+                    logger.debug("Close args couldn't be parsed further.", exc_info=True)
+        except Exception as e:
+            logger.error(f"_handle_ws_close hata verirken: {e}", exc_info=True)
+        finally:
+            # Mark connection as down and set an error type for reconnect logic
+            self.is_ws_connected = False
+            self.last_error_type = "closed"
 
     def _handle_ws_error(self, error, *args):
         """Callback function for websocket errors."""
-        error_str = str(error)
+        try:
+            error_str = str(error)
+            logger.error(f"WebSocket hata callback tetiklendi. error={error_str}, args={args!r}")
 
-        # Connection reset hatalarını özel olarak takip et
-        if "Connection reset by peer" in error_str or "[Errno 54]" in error_str:
-            self.connection_reset_count += 1
-            self.last_error_type = "connection_reset"
-            logger.error(
-                f"WebSocket connection reset hatası (#{self.connection_reset_count}): {error}"
-            )
-        elif "timeout" in error_str.lower():
-            self.last_error_type = "timeout"
-            logger.error(f"WebSocket timeout hatası: {error}")
-        else:
-            self.last_error_type = "other"
-            logger.error(f"WebSocket genel hatası: {error}", exc_info=True)
+            # Connection reset hatalarını özel olarak takip et
+            if "Connection reset by peer" in error_str or "[Errno 54]" in error_str:
+                self.connection_reset_count += 1
+                self.last_error_type = "connection_reset"
+                logger.error(
+                    f"WebSocket connection reset hatası (#{self.connection_reset_count}): {error}"
+                )
+            elif "timeout" in error_str.lower():
+                self.last_error_type = "timeout"
+                logger.error(f"WebSocket timeout hatası: {error}")
+            else:
+                self.last_error_type = "other"
+                logger.error(f"WebSocket genel hatası: {error}", exc_info=True)
 
-        self.consecutive_errors += 1
-        self.is_ws_connected = False
+            # If the error object has attributes like code/reason, log them too
+            try:
+                if hasattr(error, 'code'):
+                    logger.debug(f"Error.code={getattr(error, 'code')}")
+                if hasattr(error, 'reason'):
+                    logger.debug(f"Error.reason={getattr(error, 'reason')}")
+            except Exception:
+                logger.debug("Ek hata öznitelikleri alınamadı.", exc_info=True)
+
+            self.consecutive_errors += 1
+            self.is_ws_connected = False
+        except Exception as e:
+            logger.error(f"_handle_ws_error sırasında beklenmedik hata: {e}", exc_info=True)
 
     async def _process_signal_for_symbol(self, symbol: str):
         """Belirli bir sembol için sinyal hesaplamasını ve zenginleştirmesini tetikler."""
@@ -493,59 +599,547 @@ class LiveDataManager:
         except Exception as e:
             logger.error(f"Sinyal işleme ana hatası - {symbol}: {e}", exc_info=True)
 
+    # =============================================================================
+    # MULTI-TIMEFRAME FUNCTIONS (NEW!)
+    # =============================================================================
+    
+    async def _update_mtf_data(self, symbol: str, new_row: Dict):
+        """
+        Updates multi-timeframe buffers when a new 1m bar is received.
+        
+        Args:
+            symbol: Symbol to update
+            new_row: New 1m OHLCV data
+        """
+        try:
+            if not self.mtf_enabled or symbol not in self.mtf_buffers:
+                return
+            
+            # Update 1m buffer first
+            new_df = pd.DataFrame([new_row])
+            self.mtf_buffers[symbol]['1m'] = pd.concat(
+                [self.mtf_buffers[symbol]['1m'], new_df], ignore_index=True
+            )
+            
+            # Apply buffer limit for 1m
+            limit_1m = self.mtf_buffer_limits.get('1m', 1000)
+            self.mtf_buffers[symbol]['1m'] = self.mtf_buffers[symbol]['1m'].tail(limit_1m)
+            
+            # Aggregate to higher timeframes
+            await self._aggregate_and_cache_mtf(symbol)
+
+            # YENİ: MTF Bar Kapanış Kontrolü ve Sinyal Üretimi
+            # close_time + 1ms = bir sonraki bar'ın open_time'ı
+            # Örnek: 16:30:00-16:30:59 arası bar için close_time=16:30:59999 -> next_open=16:31:00
+            # Bu sayede 16:31:00 minute % 15 kontrolünde, 16:30 bar'ının kapandığını anlayabiliriz
+            next_bar_open_time = datetime.fromtimestamp((new_row['close_time'] + 1) / 1000)
+
+            # Her timeframe için bar kapanış kontrolü (1m hariç)
+            for timeframe in self.supported_timeframes[1:]:  # 1m'i atla
+                if self._is_mtf_bar_complete(timeframe, next_bar_open_time):
+                    logger.info(f"🕯️ [{symbol}] {timeframe} bar kapandı - sinyal kontrolü başlatılıyor")
+
+                    # Async task olarak sinyal üretimi başlat (blocking olmasın)
+                    task = asyncio.create_task(
+                        self._generate_mtf_signal_live(symbol, timeframe)
+                    )
+                    self.processing_tasks.add(task)
+                    task.add_done_callback(self.processing_tasks.discard)
+            
+            logger.debug(f"[{symbol}] MTF data updated for all timeframes")
+            
+        except Exception as e:
+            logger.error(f"[{symbol}] MTF data update error: {e}", exc_info=True)
+    
+    async def _aggregate_and_cache_mtf(self, symbol: str):
+        """
+        1m verisinden 5m, 15m, 1h'yi aggregate eder ve Redis'e yazar.
+        4h ve 1d WebSocket'ten direkt geldiği için buradan atlanır —
+        bu TF'ler için 1m buffer yetersiz ve WebSocket verisini ezmemek gerekir.
+        """
+        try:
+            df_1m = self.mtf_buffers[symbol]['1m']
+            if df_1m.empty:
+                return
+
+            # Yalnızca 1m buffer'dan güvenilir şekilde üretilebilen TF'ler
+            aggregation_targets = ['5m', '15m', '1h']
+
+            for target_tf in aggregation_targets:
+                if not TimeframeAggregator.can_aggregate('1m', target_tf):
+                    continue
+
+                aggregated_df = TimeframeAggregator.aggregate_ohlcv(df_1m, '1m', target_tf)
+
+                if not aggregated_df.empty:
+                    limit = self.mtf_buffer_limits.get(target_tf, 100)
+                    self.mtf_buffers[symbol][target_tf] = add_all_indicators(
+                        aggregated_df.tail(limit)
+                    )
+                    logger.debug(f"[{symbol}] {target_tf}: {len(aggregated_df)} bar aggregated")
+
+            # Sadece aggregate edilen TF'leri Redis'e yaz (4h/1d'yi ezme)
+            for tf in ['1m'] + aggregation_targets:
+                df = self.mtf_buffers[symbol].get(tf)
+                if df is not None and not df.empty:
+                    await RedisClient.set_mtf_klines(symbol, tf, df)
+
+        except Exception as e:
+            logger.error(f"[{symbol}] MTF aggregation error: {e}", exc_info=True)
+    
+    async def _cache_mtf_to_redis(self, symbol: str):
+        """
+        Caches all MTF data to Redis using new MTF cache functions.
+        
+        Args:
+            symbol: Symbol to cache
+        """
+        try:
+            cached_count = 0
+            
+            for timeframe in self.supported_timeframes:
+                df = self.mtf_buffers[symbol].get(timeframe)
+                if df is not None and not df.empty:
+                    # Use new MTF cache function
+                    success = await RedisClient.set_mtf_klines(symbol, timeframe, df)
+                    if success:
+                        cached_count += 1
+                        logger.debug(f"[{symbol}] {timeframe}: Cached {len(df)} bars to Redis")
+                    else:
+                        logger.warning(f"[{symbol}] {timeframe}: Failed to cache to Redis")
+            
+            if cached_count > 0:
+                logger.info(f"[{symbol}] MTF cache updated: {cached_count}/{len(self.supported_timeframes)} timeframes")
+            
+        except Exception as e:
+            logger.error(f"[{symbol}] MTF Redis cache error: {e}", exc_info=True)
+    
+    async def _initialize_mtf_dataframes(self):
+        """
+        Hibrit batch initialization: Tarihsel tüm TF'leri batch halinde yükle + sonra WebSocket.
+        API rate limit safe: 10 sembol/batch, 2 saniye delay.
+        """
+        if not self.mtf_enabled:
+            return
+
+        batch_size = 10  # Her batch'te 10 sembol (10×6=60 istek/batch)
+        delay_between_batches = 3  # 3 saniye delay (API limit: ~960 weight/dk, limit 1200)
+
+        total_symbols = len(self.symbols)
+        total_batches = (total_symbols + batch_size - 1) // batch_size
+
+        logger.info(f"🚀 MTF Batch Initialization başlatılıyor:")
+        logger.info(f"   📊 Toplam: {total_symbols} sembol × {len(self.supported_timeframes)} TF")
+        logger.info(f"   📦 Batch: {batch_size} sembol/batch, {total_batches} batch")
+        logger.info(f"   ⏱️  Tahmini süre: ~{total_batches * delay_between_batches / 60:.1f} dakika")
+
+        # Sembolleri batch'lere böl
+        for i in range(0, total_symbols, batch_size):
+            batch = self.symbols[i:i + batch_size]
+            batch_num = (i // batch_size) + 1
+
+            logger.info(f"📦 Batch {batch_num}/{total_batches}: {len(batch)} sembol yükleniyor...")
+
+            # Bu batch'teki sembolleri paralel yükle
+            tasks = [self._load_symbol_all_timeframes(symbol) for symbol in batch]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            # Başarı oranını hesapla
+            success_count = sum(1 for r in results if r is True)
+            logger.info(f"✅ Batch {batch_num}/{total_batches} tamamlandı ({success_count}/{len(batch)} başarılı)")
+
+            # Son batch değilse bekle (API limit protection)
+            if i + batch_size < total_symbols:
+                logger.info(f"⏳ {delay_between_batches}s bekleniyor (API rate limit protection)...")
+                await asyncio.sleep(delay_between_batches)
+
+        logger.info("🎉 MTF Batch Initialization tamamlandı! WebSocket canlı mod başlatılabilir.")
+
+    async def _load_symbol_all_timeframes(self, symbol: str) -> bool:
+        """
+        Bir sembol için tüm timeframe'leri API'den yükle.
+
+        Args:
+            symbol: Sembol adı
+
+        Returns:
+            bool: Başarılı ise True
+        """
+        try:
+            # Her timeframe için gerekli bar sayısı
+            timeframe_limits = {
+                '1m': 500,   # ~8 saat
+                '5m': 300,   # ~25 saat
+                '15m': 100,  # ~25 saat
+                '1h': 48,    # 48 saat
+                '4h': 30,    # 5 gün
+                '1d': 30     # 30 gün
+            }
+
+            loaded_count = 0
+
+            for tf in self.supported_timeframes:
+                limit = timeframe_limits.get(tf, 100)
+
+                # API'den tarihsel veri çek (retry ile)
+                max_retries = 3
+                for retry in range(max_retries):
+                    try:
+                        df = await BinanceClientManager.fetch_klines(
+                            symbol=symbol,
+                            interval=tf,
+                            limit=limit
+                        )
+                        break  # Başarılı, döngüden çık
+                    except Exception as e:
+                        if "418" in str(e) or "429" in str(e):  # Rate limit
+                            if retry < max_retries - 1:
+                                wait_time = (retry + 1) * 10  # 10s, 20s, 30s
+                                logger.warning(f"[{symbol}] {tf} Rate limit, {wait_time}s bekleniyor...")
+                                await asyncio.sleep(wait_time)
+                                continue
+                        raise  # Başka hata veya son retry
+
+                if not df.empty:
+                    # İndikatörler ekle
+                    df_with_indicators = add_all_indicators(df)
+
+                    # Buffer'a kaydet
+                    buffer_limit = self.mtf_buffer_limits.get(tf, 100)
+                    self.mtf_buffers[symbol][tf] = df_with_indicators.tail(buffer_limit)
+
+                    # Redis'e cache'le
+                    await RedisClient.set_mtf_klines(symbol, tf, self.mtf_buffers[symbol][tf])
+
+                    loaded_count += 1
+                    logger.debug(f"[{symbol}] {tf}: {len(df)} bar yüklendi")
+                else:
+                    logger.warning(f"[{symbol}] {tf}: Veri boş")
+
+            logger.info(f"✅ [{symbol}] {loaded_count}/{len(self.supported_timeframes)} TF yüklendi")
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ [{symbol}] Yükleme hatası: {e}", exc_info=False)
+            return False
+    
+    def get_mtf_data(self, symbol: str, timeframe: str) -> Optional[pd.DataFrame]:
+        """
+        Returns MTF data for a specific symbol and timeframe.
+        
+        Args:
+            symbol: Symbol name
+            timeframe: Timeframe (1m, 5m, 15m, etc.)
+            
+        Returns:
+            DataFrame or None if not available
+        """
+        if not self.mtf_enabled or symbol not in self.mtf_buffers:
+            return None
+        
+        return self.mtf_buffers[symbol].get(timeframe)
+    
+    def get_mtf_stats(self) -> Dict[str, Dict[str, int]]:
+        """
+        Returns statistics about MTF buffers.
+        
+        Returns:
+            Dict with buffer sizes for each symbol and timeframe
+        """
+        if not self.mtf_enabled:
+            return {}
+        
+        stats: Dict[str, Dict[str, int]] = {}
+        for symbol in self.mtf_buffers:
+            stats[symbol] = {}
+            for tf in self.supported_timeframes:
+                df = self.mtf_buffers[symbol].get(tf)
+                stats[symbol][tf] = len(df) if df is not None else 0
+        
+        return stats
+    
+    def _is_mtf_bar_complete(self, timeframe: str, timestamp: datetime) -> bool:
+        """
+        MTF bar kapanış kontrolü - timestamp'e göre bar tamamlandı mı?
+        
+        Args:
+            timeframe: Timeframe (5m, 15m, 1h, 4h)
+            timestamp: Bar timestamp'i
+            
+        Returns:
+            bool: Bar tamamlandıysa True
+        """
+        minute = timestamp.minute
+        hour = timestamp.hour
+        
+        if timeframe == '5m':
+            return minute % 5 == 0
+        elif timeframe == '15m':
+            return minute % 15 == 0
+        elif timeframe == '1h':
+            return minute == 0
+        elif timeframe == '4h':
+            return minute == 0 and hour % 4 == 0
+        elif timeframe == '1d':
+            return minute == 0 and hour == 0
+
+        return False
+    
+    async def _generate_mtf_signal_live(self, symbol: str, timeframe: str):
+        """
+        Canlı MTF sinyal üretimi - bar kapanışında çalışır
+        
+        Args:
+            symbol: Sembol adı
+            timeframe: Timeframe (5m, 15m, 1h, 4h)
+        """
+        try:
+            # MTF buffer'dan veri al
+            if symbol not in self.mtf_buffers or timeframe not in self.mtf_buffers[symbol]:
+                logger.debug(f"[{symbol}] {timeframe} buffer bulunamadı")
+                return
+            
+            df_mtf = self.mtf_buffers[symbol][timeframe]
+            if len(df_mtf) < 200:  # Yeterli veri yok
+                logger.debug(f"[{symbol}] {timeframe} yetersiz veri: {len(df_mtf)} < 200")
+                return
+            
+            # Son bar için sinyal kontrol et (mtf_backfill mantığını kullan)
+            last_row = df_mtf.iloc[-1]
+            signal_data = await self._check_mtf_signal_conditions(last_row, symbol, timeframe)
+            
+            if signal_data:
+                # Mevcut pipeline: process_and_enrich_signals kullan
+                # Referans sembolün aynı timeframe MTF verisi (varsa)
+                ref_df = pd.DataFrame()
+                try:
+                    ref_tf_map = self.mtf_buffers.get(self.ref_symbol, {})
+                    if isinstance(ref_tf_map, dict):
+                        maybe_ref = ref_tf_map.get(timeframe)
+                        if maybe_ref is not None and not maybe_ref.empty:
+                            ref_df = maybe_ref
+                except Exception:
+                    ref_df = pd.DataFrame()
+
+                if ref_df.empty:
+                    logger.warning(f"[{symbol}] {timeframe} referans DF boş, sinyal işleme atlandı")
+                else:
+                    await process_and_enrich_signals(
+                        symbol=symbol,
+                        df=df_mtf.copy(),
+                        ref_df=ref_df.copy(),
+                        interval=timeframe,
+                    )
+                    logger.info(f"🎯 [{symbol}] {timeframe} MTF sinyali üretimi tamamlandı (process_and_enrich_signals)")
+            else:
+                logger.debug(f"[{symbol}] {timeframe} sinyal koşulları sağlanmadı")
+                
+        except Exception as e:
+            await self._handle_mtf_error(symbol, timeframe, e)
+    
+    async def _check_mtf_signal_conditions(self, row: pd.Series, symbol: str, timeframe: str) -> Optional[Dict]:
+        """
+        MTF sinyal koşullarını kontrol et (mtf_backfill mantığı)
+        
+        Args:
+            row: DataFrame satırı
+            symbol: Sembol adı
+            timeframe: Timeframe
+            
+        Returns:
+            Dict: Sinyal verisi veya None
+        """
+        try:
+            # MTF backfill'deki sinyal mantığını kullan
+            from backtest.mtf_backfill import MTFBackfillEngine
+            
+            # Geçici engine oluştur (sadece sinyal kontrolü için)
+            temp_engine = MTFBackfillEngine()
+            
+            # Sinyal koşullarını kontrol et
+            signal_data = temp_engine._check_signal_conditions(row, symbol, timeframe)
+            
+            return signal_data
+            
+        except Exception as e:
+            logger.error(f"[{symbol}] {timeframe} sinyal kontrol hatası: {e}")
+            return None
+    
+    async def _handle_mtf_error(self, symbol: str, timeframe: str, error: Exception):
+        """
+        MTF hata yönetimi
+        
+        Args:
+            symbol: Sembol adı
+            timeframe: Timeframe
+            error: Hata objesi
+        """
+        error_msg = f"[{symbol}] {timeframe} MTF sinyal hatası: {error}"
+        logger.error(error_msg, exc_info=True)
+        
+        # Error counter (basit implementasyon)
+        if not hasattr(self, 'mtf_error_count'):
+            self.mtf_error_count = 0
+        
+        self.mtf_error_count += 1
+        
+        # Circuit breaker pattern
+        if self.mtf_error_count > 10:
+            logger.warning("MTF circuit breaker activated - çok fazla hata")
+            await asyncio.sleep(60)  # 1 dakika bekle
+            self.mtf_error_count = 0
+    
+    async def _keep_alive_ping_loop(self):
+        """
+        Proaktif keep-alive: WebSocket bağlantısını canlı tutmak için
+        periyodik olarak connection health check yapar.
+        
+        Binance sunucuları idle bağlantıları ~60 dakika sonra kapatıyor.
+        Bu task her 20 saniyede kontrol yaparak bağlantının sağlıklı
+        kalmasını garantiler.
+        """
+        logger.info(f"Keep-Alive ping task başlatıldı (interval: {self.ping_interval}s)")
+        
+        while True:
+            try:
+                await asyncio.sleep(self.ping_interval)
+                
+                if not self.is_ws_connected:
+                    logger.debug("WebSocket bağlı değil, ping atlanıyor")
+                    continue
+                
+                current_time = self.loop.time()
+                
+                # Son mesajdan bu yana geçen süre
+                if self.last_message_time:
+                    time_since_last_msg = current_time - self.last_message_time
+                    
+                    # Eğer 30 saniyedir mesaj gelmiyorsa proaktif reconnect
+                    if time_since_last_msg > 30:
+                        logger.warning(
+                            f"⚠️ Son mesajdan bu yana {time_since_last_msg:.1f}s geçti. "
+                            "Proaktif reconnect tetikleniyor..."
+                        )
+                        self.connection_health_ok = False
+                        self.is_ws_connected = False
+                        continue
+                    
+                    # Health check - her 20 saniyede log
+                    logger.debug(
+                        f"💚 Keep-Alive Health Check: Bağlantı sağlıklı "
+                        f"(son mesaj: {time_since_last_msg:.1f}s önce)"
+                    )
+                    self.last_ping_time = current_time
+                else:
+                    logger.debug("Keep-Alive: last_message_time henüz set edilmemiş")
+                    
+            except asyncio.CancelledError:
+                logger.info("Keep-Alive ping task iptal edildi")
+                break
+            except Exception as e:
+                logger.error(f"Keep-Alive ping task hatası: {e}", exc_info=True)
+                await asyncio.sleep(5)  # Hata durumunda kısa bekle
+
     async def start_streams(self):
-        """Starts the WebSocket streams for all symbols using a single combined stream."""
+        """Starts multi-timeframe WebSocket streams for all symbols with multiple connections."""
         if not self.symbols:
             logger.warning("İzlenecek sembol kalmadı, WebSocket başlatılmıyor.")
             return
 
-        logger.info(f"WebSocket yayınları başlatılıyor: {self.symbols}")
-        # Combined stream (tek bağlantı) için stream listesi
-        streams = [f"{s.lower()}@kline_{self.interval}" for s in self.symbols]
+        logger.info(f"🚀 Multi-Timeframe WebSocket başlatılıyor: {len(self.symbols)} sembol × {len(self.supported_timeframes)} TF")
+
+        # Tüm stream'leri oluştur (sembol × timeframe)
+        all_streams = []
+        for symbol in self.symbols:
+            for tf in self.supported_timeframes:
+                all_streams.append(f"{symbol.lower()}@kline_{tf}")
+
+        total_streams = len(all_streams)
+        # Allow override from central config (new tunable)
+        self.max_streams_per_connection = getattr(
+            Config, 'WS_MAX_STREAMS_PER_CONNECTION', self.max_streams_per_connection
+        )
+        connections_needed = (
+            (total_streams + self.max_streams_per_connection - 1)
+            // self.max_streams_per_connection
+        )
+
+        logger.info(f"📊 Toplam stream: {total_streams} ({len(self.symbols)} sembol × {len(self.supported_timeframes)} TF)")
+        logger.info(f"🔌 Gerekli connection: {connections_needed} (max {self.max_streams_per_connection} stream/connection)")
 
         try:
-            # Eski bağlantıyı güvenli şekilde kapat
+            # Eski bağlantıları güvenli şekilde kapat
             await self._safe_close_websocket()
 
-            # python-binance ile WebSocket client oluştur
-            self.ws_client = UMFuturesWebsocketClient(
-                on_message=self._handle_websocket_message,
-                on_close=self._handle_ws_close,
-                on_error=self._handle_ws_error,
-                is_combined=True,  # Combined streams kullan
-            )
+            # Stream'leri connection'lara böl (her connection max 200 stream)
+            stream_chunks = [
+                all_streams[i:i + self.max_streams_per_connection]
+                for i in range(0, total_streams, self.max_streams_per_connection)
+            ]
 
-            # Tüm stream'leri tek seferde subscribe et
-            streams = [f"{s.lower()}@kline_{self.interval}" for s in self.symbols]
-            logger.info(
-                f"Subscribe edilecek stream'ler: {streams[:5]}... (toplam {len(streams)})"
-            )
+            # Her chunk için ayrı WebSocket connection oluştur
+            for connection_id, streams in enumerate(stream_chunks):
+                logger.info(f"🔌 Connection #{connection_id + 1}: {len(streams)} stream subscribe ediliyor...")
 
-            # Combined stream olarak subscribe et
-            self.ws_client.subscribe(stream=streams, id=1)
+                # python-binance ile WebSocket client oluştur
+                # Use configured Binance websocket base so we can target /market endpoints
+                stream_url = getattr(Config, 'BINANCE_WS_BASE', None)
+                if stream_url:
+                    logger.info(f"Using custom Binance WS base: {stream_url} for connection #{connection_id + 1}")
 
-            logger.info(f"Tüm semboller için combined stream başlatıldı.")
+                if stream_url:
+                    ws_client = UMFuturesWebsocketClient(
+                        stream_url=stream_url,
+                        on_message=self._handle_websocket_message,
+                        on_close=self._handle_ws_close,
+                        on_error=self._handle_ws_error,
+                        is_combined=True,  # Combined streams kullan
+                    )
+                else:
+                    ws_client = UMFuturesWebsocketClient(
+                        on_message=self._handle_websocket_message,
+                        on_close=self._handle_ws_close,
+                        on_error=self._handle_ws_error,
+                        is_combined=True,  # Combined streams kullan
+                    )
 
-            # Bağlantı kurulduktan sonra kısa bir bekleme
-            await asyncio.sleep(1)
+                # Bu connection'daki tüm stream'lere subscribe et
+                ws_client.subscribe(stream=streams, id=connection_id + 1)
+
+                # Client'ı sakla
+                self.ws_clients[connection_id] = ws_client
+
+                logger.info(f"✅ Connection #{connection_id + 1} başarıyla kuruldu ({len(streams)} stream)")
+                # Stagger connection subscriptions slightly to avoid server-side burst handling
+                await asyncio.sleep(0.25)
+
+            # Bağlantılar kurulduktan sonra kısa bir bekleme
+            await asyncio.sleep(2)
 
             self.is_ws_connected = True
             self.reconnect_attempt = 0  # Başarılı bağlantıda backoff'u sıfırla
-            logger.info("Tüm WebSocket yayınlarına başarıyla abone olundu.")
+            self.connection_health_ok = True  # Health durumunu sıfırla
+            logger.info(f"🎉 Multi-WebSocket başarıyla başlatıldı: {connections_needed} connection, {total_streams} stream")
+
+            # Keep-Alive ping task'ını başlat
+            await self._start_ping_task()
 
         except Exception as e:
-            logger.error(f"WebSocket başlatma hatası: {e}", exc_info=True)
+            logger.error(f"Multi-WebSocket başlatma hatası: {e}", exc_info=True)
             self.is_ws_connected = False
             raise
 
     async def run(self):
         """Ana çalıştırma döngüsü."""
         try:
-            # 1. Eksik geçmiş verileri tamamla
-            await self.sync_historical_data()
-            # 2. Sinyal hesaplaması için hafızadaki DataFrame'leri ilk verilerle doldur
-            await self._initialize_dataframes()
-            # 3. Canlı veri akışını başlat (bu bloklamaz)
+            # SKIP: 1m historical sync - MTF init will provide all data
+            # await self.sync_historical_data()
+            # await self._initialize_dataframes()
+
+            # 1. MTF buffers'ı başlat (tüm timeframe'ler için batch halinde)
+            if self.mtf_enabled:
+                await self._initialize_mtf_dataframes()
+            # 2. Canlı veri akışını başlat (bu bloklamaz)
             await self.start_streams()
 
             logger.info(
@@ -668,25 +1262,57 @@ class LiveDataManager:
         finally:
             await self.shutdown()
 
-    async def _safe_close_websocket(self):
-        """WebSocket bağlantısını güvenli şekilde kapatır."""
-        if self.ws_client:
+    async def _start_ping_task(self):
+        """Keep-alive ping task'ını başlatır."""
+        # Eski task varsa iptal et
+        if self.ping_task and not self.ping_task.done():
+            self.ping_task.cancel()
             try:
-                # Timeout ile güvenli kapatma
-                await asyncio.wait_for(
-                    asyncio.to_thread(self.ws_client.stop), timeout=5.0
-                )
-                logger.debug("WebSocket güvenli şekilde kapatıldı.")
-            except asyncio.TimeoutError:
-                logger.warning(
-                    "WebSocket kapatma işlemi timeout oldu, zorla kapatılıyor."
-                )
-            except Exception as e:
-                logger.warning(
-                    f"WebSocket kapatma sırasında hata (göz ardı edildi): {e}"
-                )
-            finally:
-                self.ws_client = None
+                await self.ping_task
+            except asyncio.CancelledError:
+                pass
+        
+        # Yeni ping task başlat
+        self.ping_task = asyncio.create_task(self._keep_alive_ping_loop())
+        logger.info("Keep-Alive ping task başlatıldı")
+    
+    async def _stop_ping_task(self):
+        """Keep-alive ping task'ını durdurur."""
+        if self.ping_task and not self.ping_task.done():
+            self.ping_task.cancel()
+            try:
+                await self.ping_task
+            except asyncio.CancelledError:
+                pass
+            logger.info("Keep-Alive ping task durduruldu")
+    
+    async def _safe_close_websocket(self):
+        """Tüm WebSocket bağlantılarını güvenli şekilde kapatır."""
+        # Önce ping task'ını durdur
+        await self._stop_ping_task()
+
+        # Tüm WebSocket client'larını kapat
+        if self.ws_clients:
+            for connection_id, ws_client in list(self.ws_clients.items()):
+                if ws_client:
+                    try:
+                        # Timeout ile güvenli kapatma
+                        await asyncio.wait_for(
+                            asyncio.to_thread(ws_client.stop), timeout=5.0
+                        )
+                        logger.debug(f"WebSocket connection #{connection_id} güvenli şekilde kapatıldı.")
+                    except asyncio.TimeoutError:
+                        logger.warning(
+                            f"WebSocket connection #{connection_id} kapatma işlemi timeout oldu, zorla kapatılıyor."
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"WebSocket connection #{connection_id} kapatma sırasında hata (göz ardı edildi): {e}"
+                        )
+
+            # Tüm client'ları temizle
+            self.ws_clients.clear()
+            logger.info(f"Tüm WebSocket bağlantıları kapatıldı.")
 
     async def shutdown(self):
         """Tüm görevleri ve servisleri düzgünce kapatır."""

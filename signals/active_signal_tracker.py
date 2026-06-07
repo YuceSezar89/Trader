@@ -30,7 +30,7 @@ class ActiveSignalTracker:
     Aktif sinyaller için optimize edilmiş canlı veri takipçisi
     """
     
-    def __init__(self):
+    def __init__(self) -> None:
         self.active_signals: Dict[str, List[Dict]] = {}  # symbol -> [signal_data]
         self.current_prices: Dict[str, float] = {}  # symbol -> current_price
         self.websocket_manager: Optional[BinanceSocketManager] = None
@@ -38,7 +38,7 @@ class ActiveSignalTracker:
         self.is_running = False
         self.update_interval = 30  # Sinyal durumu güncelleme aralığı (saniye)
         
-    async def initialize(self):
+    async def initialize(self) -> None:
         """Binance client ve WebSocket manager'ı başlat"""
         try:
             self.client = Client()
@@ -99,7 +99,7 @@ class ActiveSignalTracker:
             logger.error(f"Aktif sinyal yükleme hatası: {e}")
             return {}
     
-    async def start_price_tracking(self):
+    async def start_price_tracking(self) -> None:
         """Sadece aktif sinyal sembolları için fiyat takibi başlat"""
         if not self.active_signals:
             await self.load_active_signals()
@@ -119,6 +119,8 @@ class ActiveSignalTracker:
             streams = [f"{symbol}@ticker" for symbol in stream_symbols]
             
             # WebSocket bağlantısı kur
+            if self.websocket_manager is None:
+                raise RuntimeError("WebSocket manager başlatılmamış!")
             socket = self.websocket_manager.multiplex_socket(streams)
             
             self.is_running = True
@@ -138,7 +140,7 @@ class ActiveSignalTracker:
             logger.error(f"WebSocket bağlantı hatası: {e}")
             self.is_running = False
     
-    async def _process_price_update(self, data: dict):
+    async def _process_price_update(self, data: dict) -> None:
         """Gelen fiyat güncellemesini işle"""
         try:
             if 'data' in data:
@@ -169,72 +171,68 @@ class ActiveSignalTracker:
         except Exception as e:
             logger.error(f"Fiyat güncelleme işleme hatası: {e}")
     
-    async def update_signal_status(self):
-        """Sinyal durumlarını kontrol et ve güncelle"""
+    async def update_signal_status(self) -> None:
+        """Sinyal durumlarını kontrol et ve batch olarak güncelle."""
         try:
-            for symbol, signals in self.active_signals.items():
+            # status -> [id] mapping — tüm sinyalleri önce belleğe topla
+            pending: Dict[str, List[int]] = {}
+
+            for signals in self.active_signals.values():
                 for signal in signals:
-                    await self._check_signal_conditions(signal)
-                    
+                    new_status = self._evaluate_signal_status(signal)
+                    if new_status:
+                        pending.setdefault(new_status, []).append(signal['id'])
+
+            if pending:
+                await self._batch_update_status_in_db(pending)
+
         except Exception as e:
             logger.error(f"Sinyal durum güncelleme hatası: {e}")
-    
-    async def _check_signal_conditions(self, signal: Dict):
-        """Tek bir sinyalin durumunu kontrol et"""
+
+    def _evaluate_signal_status(self, signal: Dict) -> Optional[str]:
+        """Tek bir sinyalin yeni durumunu hesapla (DB çağrısı yok)."""
         try:
             current_price = signal.get('current_price')
             if not current_price:
-                return
-            
-            entry_price = signal['entry_price']
-            signal_type = signal['signal_type']
-            pullback_level = signal.get('pullback_level')
-            
-            # Temel hit/miss kontrolü
-            price_change_pct = abs(signal['price_change_pct'])
-            
-            # Hit koşulları (örnek: %2+ hareket)
+                return None
+
             hit_threshold = 2.0
-            
-            # Miss koşulları (örnek: %1- ters hareket)  
             miss_threshold = 1.0
-            
-            new_status = None
-            
+            signal_type = signal['signal_type']
+            price_change_pct = signal.get('price_change_pct', 0.0)
+
             if signal_type == 'Long':
-                if signal['price_change_pct'] >= hit_threshold:
-                    new_status = 'hit'
-                elif signal['price_change_pct'] <= -miss_threshold:
-                    new_status = 'miss'
+                if price_change_pct >= hit_threshold:
+                    return 'hit'
+                if price_change_pct <= -miss_threshold:
+                    return 'miss'
             else:  # Short
-                if signal['price_change_pct'] <= -hit_threshold:
-                    new_status = 'hit'  
-                elif signal['price_change_pct'] >= miss_threshold:
-                    new_status = 'miss'
-            
-            # Zaman bazlı expire kontrolü (örnek: 24 saat)
+                if price_change_pct <= -hit_threshold:
+                    return 'hit'
+                if price_change_pct >= miss_threshold:
+                    return 'miss'
+
             signal_age = datetime.now() - signal['timestamp']
             if signal_age > timedelta(hours=24):
-                new_status = 'expired'
-            
-            # Durum değişikliği varsa veritabanını güncelle
-            if new_status and new_status != 'active':
-                await self._update_signal_status_in_db(signal['id'], new_status)
-                logger.info(f"Sinyal durumu güncellendi: {signal['symbol']} {signal['signal_type']} -> {new_status}")
-                
+                return 'expired'
+
+            return None
         except Exception as e:
-            logger.error(f"Sinyal koşul kontrolü hatası: {e}")
-    
-    async def _update_signal_status_in_db(self, signal_id: str, new_status: str):
-        """Veritabanında sinyal durumunu güncelle"""
+            logger.error(f"Sinyal koşul değerlendirme hatası: {e}")
+            return None
+
+    async def _batch_update_status_in_db(self, pending: Dict[str, List[int]]) -> None:
+        """Durumu değişen sinyalleri status'e göre gruplandırarak tek sorguda güncelle."""
         try:
             async with get_connection_manager().get_connection() as conn:
-                await conn.execute(
-                    "UPDATE signals SET status = $1, updated_at = NOW() WHERE id = $2",
-                    new_status, signal_id
-                )
+                for new_status, ids in pending.items():
+                    await conn.execute(
+                        "UPDATE signals SET status = $1, updated_at = NOW() WHERE id = ANY($2::int[])",
+                        new_status, ids
+                    )
+                    logger.info(f"{len(ids)} sinyal '{new_status}' olarak güncellendi")
         except Exception as e:
-            logger.error(f"Veritabanı sinyal durum güncelleme hatası: {e}")
+            logger.error(f"Batch sinyal durum güncelleme hatası: {e}")
     
     def get_active_signals_summary(self) -> Dict:
         """Aktif sinyallerin özetini döndür"""
@@ -258,7 +256,7 @@ class ActiveSignalTracker:
         
         return summary
     
-    async def stop(self):
+    async def stop(self) -> None:
         """Takipçiyi durdur"""
         self.is_running = False
         if self.client:

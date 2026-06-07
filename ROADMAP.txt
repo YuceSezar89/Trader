@@ -1,0 +1,337 @@
+# TRader Panel - Multi-Timeframe Geliştirme Yol Haritası
+
+📅 **Oluşturulma Tarihi:** 24 Eylül 2025, 17:37
+📅 **Son Güncelleme:** 24 Eylül 2025, 18:33
+🎯 **Hedef:** Multi-timeframe sinyal sistemi implementasyonu
+
+---
+
+## 📊 MEVCUT DURUM ANALİZİ
+
+### ✅ TAMAMLANMIŞ ÖZELLIKLER
+
+#### 🔧 Temel Altyapı
+- [x] PostgreSQL veritabanı ve tablolar
+- [x] PgBouncer connection pooling
+- [x] Redis cache sistemi
+- [x] Async database operations (CRUD)
+- [x] Logging sistemi
+- [x] Configuration management
+
+#### 📊 Veri Yönetimi
+- [x] Binance API entegrasyonu
+- [x] WebSocket canlı veri akışı (1m interval)
+- [x] Tarihsel veri senkronizasyonu
+- [x] Volume filtreleme sistemi
+- [x] Batch insert optimizasyonu
+
+#### 🎯 Sinyal Sistemi
+- [x] Temel teknik indikatörler (RSI, MACD, MA200)
+- [x] VP (Volume-Price) sinyal motoru
+- [x] VPM (Volume-Price-Momentum) scoring
+- [x] Signal lifecycle management
+- [x] Finansal metrikler (Alpha, Beta, Sharpe)
+
+#### 🖥️ Streamlit Panel
+- [x] Ana dashboard
+- [x] AL/SAT sinyal tabloları
+- [x] Bar sayısı tracking
+- [x] Grafik analizi sekmesi (temel yapı)
+- [x] Backtest sekmesi (temel yapı)
+
+#### 🧪 Multi-Timeframe (Yeni Tamamlanan)
+- [x] **Timeframe Aggregator Modülü** (utils/timeframe_aggregator.py)
+- [x] **1m → 5m, 15m aggregation** (Test edildi, çalışıyor)
+- [x] **OHLCV aggregation kuralları** (Open, High, Low, Close, Volume)
+- [x] **Redis MTF Cache Sistemi** (utils/redis_client.py) ✅ YENİ!
+- [x] **MTF Cache Functions** (set/get_mtf_klines, indicators, signals) ✅ YENİ!
+- [x] **TTL Stratejileri** (1m:1h, 5m:4h, 15m:24h) ✅ YENİ!
+- [x] **Kapsamlı Test Suite** (98 test, pytest framework) ✅ YENİ!
+- [x] **Performance Benchmarks** (Aggregation, cache operations) ✅ YENİ!
+- [x] **Error Handling & Edge Cases** (Comprehensive coverage) ✅ YENİ!
+
+---
+
+## 🚀 FAZ 2: MULTI-TIMEFRAME SİSTEMİ (DEVAM EDEN)
+
+### ⏳ DEVAM EDEN GÖREVLER
+
+#### 🔴 YÜksek Öncelik - Bu Hafta
+- [x] **Redis MTF Cache Entegrasyonu** ✅ TAMAMLANDI!
+  - [x] Redis key yapısını genişlet: `live_kline_data:SYMBOL:TIMEFRAME` ✅
+  - [x] MTF cache fonksiyonları ekle (redis_client.py) ✅
+  - [x] TTL stratejileri uygula (1m: 1h, 5m: 4h, 15m: 24h) ✅
+  - [x] Memory optimization ve eviction policies ✅
+  - [x] Cache stats ve monitoring ✅
+  - [x] Cache warming ve flush operations ✅
+
+- [ ] **LiveDataManager MTF Desteği** 🔄 SONRAKİ ADIM
+  - [ ] Multiple timeframe buffer sistemi
+  - [ ] Her bar kapanışında tüm TF'leri güncelle
+  - [ ] Redis'e multiple TF cache yazma
+  - [ ] Memory management (circular buffers)
+
+- [ ] **Signal Processor MTF Entegrasyonu**
+  - [ ] Mevcut MTF kodunu genişlet
+  - [ ] Multiple TF sinyal hesaplama
+  - [ ] Timeframe confluence analysis
+  - [ ] Signal strength scoring
+
+- [ ] **Test Suite İyileştirmeleri** 🔄 DEVAM EDEN
+  - [x] Pytest framework kurulumu ✅
+  - [x] 98 kapsamlı test yazıldı ✅
+  - [ ] Database test fixtures düzeltme (16 başarısız test)
+  - [ ] Redis mock testleri iyileştirme
+  - [ ] %95+ test başarı oranı hedefi
+
+#### 🟡 Orta Öncelik - Gelecek Hafta
+- [ ] **Config MTF Ayarları**
+  - [ ] MTF_ENABLED flag ekle
+  - [ ] Timeframe listesi konfigürasyonu
+  - [ ] Memory limits ve performance ayarları
+
+- [ ] **Database Schema Güncellemeleri**
+  - [ ] Signal tablosuna timeframe kolonu ekle
+  - [ ] MTF sinyal indexleri oluştur
+  - [ ] Migration scriptleri hazırla
+
+- [ ] **PgBouncer Optimization**
+  - [ ] Connection pool size artır (15 → 25)
+  - [ ] Batch processing iyileştirmeleri
+  - [ ] Performance monitoring
+
+### 🔵 Düşük Öncelik - İleride
+- [ ] **UI MTF Desteği**
+  - [ ] Timeframe seçici ekle
+  - [ ] MTF sinyal tabloları
+  - [ ] Multi-TF grafik görünümü
+
+- [ ] **Advanced MTF Features**
+  - [ ] MTF divergence detection
+  - [ ] Higher TF trend filtering
+  - [ ] Lower TF entry optimization
+
+---
+
+## 📋 DETAYLI GÖREV LİSTESİ
+
+### 1. Redis MTF Cache Entegrasyonu
+
+#### Dosya: `utils/redis_client.py`
+```python
+# Yeni fonksiyonlar eklenecek:
+- set_mtf_klines(symbol, timeframe, df)
+- get_mtf_klines(symbol, timeframe)
+- set_mtf_indicators(symbol, timeframe, indicators)
+- get_mtf_indicators(symbol, timeframe)
+- flush_mtf_cache(symbol, timeframes)
+```
+
+#### Cache Key Yapısı:
+```
+Mevcut: live_kline_data:BTCUSDT
+Yeni:   live_kline_data:BTCUSDT:1m
+        live_kline_data:BTCUSDT:5m
+        live_kline_data:BTCUSDT:15m
+        hot_indicators:BTCUSDT:5m
+        hot_indicators:BTCUSDT:15m
+```
+
+#### TTL Stratejisi:
+- 1m data: 1 saat TTL
+- 5m data: 4 saat TTL  
+- 15m data: 24 saat TTL
+- Indicators: 30 dakika TTL
+
+### 2. LiveDataManager MTF Desteği
+
+#### Dosya: `live_data_manager.py`
+```python
+# Yeni özellikler:
+- self.mtf_buffers: Dict[str, Dict[str, pd.DataFrame]]
+- _update_mtf_data(symbol, kline_data)
+- _aggregate_and_cache_mtf(symbol)
+- _process_mtf_signals(symbol)
+```
+
+#### İş Akışı:
+1. 1m bar kapanışında tetiklenir
+2. 1m verisi buffer'a eklenir
+3. 5m ve 15m aggregation hesaplanır
+4. Tüm TF'ler Redis'e cache'lenir
+5. Her TF için sinyal işleme başlatılır
+
+### 3. Signal Processor MTF Entegrasyonu
+
+#### Dosya: `signals/signal_processor.py`
+```python
+# Genişletilecek fonksiyonlar:
+- process_and_enrich_signals() → MTF desteği
+- calculate_mtf_confluence()
+- get_higher_tf_trend()
+- calculate_mtf_score()
+```
+
+#### MTF Sinyal Mantığı:
+- 15m trend yönü ana filtre
+- 5m momentum onayı
+- 1m entry timing
+- Confluence scoring sistemi
+
+---
+
+## 🎯 HAFTALIK HEDEFLER
+
+### Bu Hafta (24-30 Eylül) - %75 TAMAMLANDI
+- [x] ~~Timeframe Aggregator modülü~~ ✅ Tamamlandı
+- [x] ~~Redis MTF cache entegrasyonu~~ ✅ Tamamlandı
+- [x] ~~Kapsamlı test suite (98 test)~~ ✅ Tamamlandı
+- [ ] LiveDataManager temel MTF desteği 🔄 Devam ediyor
+- [ ] Test suite iyileştirmeleri (16 başarısız test düzeltme)
+
+### Gelecek Hafta (1-7 Ekim)
+- [ ] Signal processor MTF entegrasyonu
+- [ ] Database schema güncellemeleri
+- [ ] Performance optimization
+- [ ] Kapsamlı testler
+
+### 3. Hafta (8-14 Ekim)
+- [ ] UI MTF desteği
+- [ ] Advanced MTF features
+- [ ] Documentation
+- [ ] Production deployment
+
+---
+
+## ⚠️ RİSKLER VE ZORLUKLAR
+
+### Teknik Riskler
+- **Memory Kullanımı**: 5x artacak (100 symbol × 3 TF = 300 buffer)
+- **CPU Overhead**: Aggregation hesaplamaları
+- **Redis Memory**: Cache boyutu artacak
+- **Database Load**: Daha fazla yazma işlemi
+
+### Çözüm Stratejileri
+- Circular buffer kullanımı (son 1000 bar)
+- Intelligent caching (hot/cold data)
+- Batch processing optimization
+- Memory monitoring ve alerting
+
+### Performance Hedefleri
+- Memory kullanımı: <2GB Redis
+- Aggregation süresi: <100ms per symbol
+- Cache hit rate: >90%
+- Database yazma: <1000 insert/dakika
+
+---
+
+## 🧪 TEST STRATEJİSİ
+
+### Unit Tests - %75 TAMAMLANDI
+- [x] Aggregation fonksiyonları ✅
+- [x] Redis MTF cache fonksiyonları ✅
+- [x] Performance benchmarks ✅
+- [x] Error handling scenarios ✅
+- [ ] LiveDataManager MTF methods
+- [ ] Signal processor MTF logic
+
+### Integration Tests - %60 TAMAMLANDI
+- [x] End-to-end MTF pipeline ✅
+- [x] Multi-symbol scenarios ✅
+- [x] Cache integration ✅
+- [ ] Database integration (16 başarısız test)
+- [ ] Memory leak tests
+- [ ] Error recovery tests
+
+### Load Tests - PLANLI
+- [ ] 100 symbol × 3 TF stress test
+- [ ] Redis memory pressure test
+- [ ] Database concurrent write test
+- [ ] WebSocket stability test
+
+### 📊 Test İstatistikleri (24 Eylül 2025)
+- **Toplam Test Sayısı**: 98
+- **Başarılı Testler**: 82 (%84)
+- **Başarısız Testler**: 16 (%16)
+- **Test Süresi**: 4.78 saniye
+- **Kapsam**: Aggregation, Redis Cache, Integration
+
+---
+
+## 📈 BAŞARI KRİTERLERİ
+
+### Fonksiyonel Kriterler - %50 TAMAMLANDI
+- [x] 1m → 5m, 15m aggregation çalışıyor ✅
+- [x] MTF cache sistemi çalışıyor ✅
+- [ ] MTF sinyal üretimi çalışıyor
+- [ ] UI'da MTF veriler görünüyor
+
+### Performance Kriterleri
+- [ ] <2GB Redis memory kullanımı
+- [ ] <100ms aggregation süresi
+- [ ] >90% cache hit rate
+- [ ] <5% CPU overhead
+
+### Kalite Kriterleri
+- [ ] %100 test coverage
+- [ ] Zero memory leaks
+- [ ] Graceful error handling
+- [ ] Comprehensive logging
+
+---
+
+## 🔄 GÜNCELLEMELER
+
+### 24 Eylül 2025 - 17:37 (İlk Versiyon)
+- ✅ Timeframe Aggregator modülü tamamlandı
+- ✅ Test suite oluşturuldu ve çalıştırıldı
+- ✅ 1m → 5m, 15m aggregation test edildi
+- ⏳ Redis MTF entegrasyonu başlayacak
+
+### 24 Eylül 2025 - 18:33 (Major Update)
+- ✅ **Redis MTF Cache Sistemi Tamamlandı**
+  - 9 yeni cache fonksiyonu eklendi
+  - TTL stratejileri uygulandı
+  - Cache warming/flushing/stats sistemi
+  - Memory optimization yapıldı
+
+- ✅ **Kapsamlı Test Suite Oluşturuldu**
+  - 98 test yazıldı (Unit, Integration, Performance)
+  - 82 test başarılı (%84 başarı oranı)
+  - Edge case'ler ve error handling test edildi
+  - Performance benchmarks eklendi
+
+- ✅ **Test Dosyaları**
+  - `tests/test_timeframe_aggregator.py` (44 test)
+  - `tests/test_redis_mtf_cache.py` (35 test)
+  - `tests/test_mtf_integration.py` (19 test)
+  - `pytest.ini` ve `conftest.py` konfigürasyonu
+
+- 🔄 **Devam Eden**: LiveDataManager MTF desteği
+- 🔄 **Sonraki**: Test suite iyileştirmeleri (%95 hedefi)
+
+### Sonraki Güncellemeler
+- LiveDataManager MTF entegrasyonu tamamlandığında
+- Test başarı oranı %95'e çıkarıldığında
+- İlk MTF sinyalleri üretildiğinde
+
+---
+
+## 📞 İLETİŞİM VE DESTEK
+
+Bu roadmap'i takip ederken:
+- Her adımda test yapın
+- Performance metrikleri izleyin
+- Memory kullanımını kontrol edin
+- Hata durumlarını loglayın
+
+**Sonraki Adım:** LiveDataManager MTF Desteği
+**Tahmini Süre:** 2-3 gün
+**Risk Seviyesi:** Orta (mevcut canlı veri akışını etkileyebilir)
+
+**Tamamlanan Adımlar:**
+- ✅ Timeframe Aggregation (1-2 gün)
+- ✅ Redis MTF Cache (1 gün)
+- ✅ Kapsamlı Test Suite (1 gün)
+
+**Toplam İlerleme:** %40 (3/7 ana modül tamamlandı)

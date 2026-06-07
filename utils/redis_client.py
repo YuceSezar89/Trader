@@ -1,14 +1,18 @@
 import asyncio
 import json
 import logging
-from typing import Any, Dict, Optional
+from io import StringIO
+from typing import Any, Dict, List, Optional, Union
 
 import pandas as pd
+import pyarrow as pa
 import redis.asyncio as redis
 
 from config import Config
 
 logger = logging.getLogger(__name__)
+
+_ARROW_MAGIC = b"ARDF"
 
 
 class RedisClient:
@@ -17,6 +21,7 @@ class RedisClient:
     Her process/event loop için ayrı bir bağlantı havuzu yönetir.
     """
     _pools: Dict[int, redis.ConnectionPool] = {}
+    _binary_pools: Dict[int, redis.ConnectionPool] = {}
 
     @classmethod
     def _get_pool_for_current_loop(cls) -> redis.ConnectionPool:
@@ -24,10 +29,6 @@ class RedisClient:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            # Eğer çalışan bir loop yoksa, bu genellikle senkron bir bağlamdır.
-            # Yeni bir loop oluşturup onu kullanabiliriz, ancak bu genellikle
-            # Streamlit gibi framework'lerin kendi loop yönetimini bekleriz.
-            # Bu senaryoda, loop-suz bir anahtar kullanalım.
             loop = None
 
         loop_id = id(loop)
@@ -35,9 +36,35 @@ class RedisClient:
         if loop_id not in cls._pools:
             logger.info(f"Yeni Redis bağlantı havuzu oluşturuluyor (Loop ID: {loop_id})")
             cls._pools[loop_id] = redis.ConnectionPool.from_url(
-                Config.REDIS_URL, decode_responses=True
+                Config.REDIS_URL,
+                decode_responses=True,
+                max_connections=100,
+                socket_keepalive=True,
+                socket_connect_timeout=5,
+                retry_on_timeout=True
             )
         return cls._pools[loop_id]
+
+    @classmethod
+    def _get_binary_pool_for_current_loop(cls) -> redis.ConnectionPool:
+        """Binary (bytes) veri için decode_responses=False havuzu."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        loop_id = id(loop)
+
+        if loop_id not in cls._binary_pools:
+            cls._binary_pools[loop_id] = redis.ConnectionPool.from_url(
+                Config.REDIS_URL,
+                decode_responses=False,
+                max_connections=50,
+                socket_keepalive=True,
+                socket_connect_timeout=5,
+                retry_on_timeout=True
+            )
+        return cls._binary_pools[loop_id]
 
     @classmethod
     def get_client(cls) -> redis.Redis:
@@ -46,19 +73,38 @@ class RedisClient:
         return redis.Redis(connection_pool=pool)
 
     @classmethod
+    def _get_binary_client(cls) -> redis.Redis:
+        """Binary veri için bağlantı havuzundan istemci döndürür."""
+        pool = cls._get_binary_pool_for_current_loop()
+        return redis.Redis(connection_pool=pool)
+
+    @staticmethod
+    def _df_to_arrow_bytes(df: pd.DataFrame) -> bytes:
+        table = pa.Table.from_pandas(df, preserve_index=False)
+        sink = pa.BufferOutputStream()
+        writer = pa.ipc.new_stream(sink, table.schema)
+        writer.write_table(table)
+        writer.close()
+        return _ARROW_MAGIC + sink.getvalue().to_pybytes()
+
+    @staticmethod
+    def _arrow_bytes_to_df(data: bytes) -> pd.DataFrame:
+        reader = pa.ipc.open_stream(data[len(_ARROW_MAGIC):])
+        return reader.read_pandas()
+
+    @classmethod
     async def set_df(
         cls, key: str, df: pd.DataFrame, ex: int = 60 * 60 * 24
-    ) -> None:  # 24 saat
-        """Bir Pandas DataFrame'i JSON formatında Redis'e yazar."""
-        r = cls.get_client()
+    ) -> None:
+        """Bir Pandas DataFrame'i Arrow IPC formatında Redis'e yazar."""
+        r = cls._get_binary_client()
         try:
-            # DataFrame'i 'split' formatında JSON'a çevirerek sakla
-            await r.set(key, df.to_json(orient="split"), ex=ex)
-            logger.debug(f"DataFrame Redis'e yazıldı. Anahtar: {key}")
+            arrow_bytes = await asyncio.to_thread(cls._df_to_arrow_bytes, df)
+            await r.set(key, arrow_bytes, ex=ex)
+            logger.debug(f"DataFrame Redis'e yazıldı (Arrow). Anahtar: {key}")
         except Exception as e:
             logger.error(f"Redis'e DataFrame yazma hatası (Anahtar: {key}): {e}")
-        finally:
-            await r.close()
+        # Pool otomatik yönetir, close() gerekmez
 
     @classmethod
     async def get_hot_klines(cls, symbol: str, limit: int = 500) -> Optional[pd.DataFrame]:
@@ -81,24 +127,24 @@ class RedisClient:
 
     @classmethod
     async def get_df(cls, key: str) -> Optional[pd.DataFrame]:
-        """Redis'ten bir DataFrame'i okur."""
-        r = cls.get_client()
+        """Redis'ten bir DataFrame'i okur (Arrow IPC veya JSON fallback)."""
+        r = cls._get_binary_client()
         try:
             data = await r.get(key)
-            if data:
-                logger.debug(f"DataFrame Redis'ten okundu. Anahtar: {key}")
-                # 'split' formatında kaydedilen JSON'u DataFrame'e geri çevir
-                from io import StringIO
-                df = pd.read_json(StringIO(data), orient="split")
-                if 'open_time' in df.columns:
-                    df['open_time'] = pd.to_datetime(df['open_time'], unit='ms')
-                return df
-            return None
+            if not data:
+                return None
+            logger.debug(f"DataFrame Redis'ten okundu. Anahtar: {key}")
+            if isinstance(data, bytes) and data.startswith(_ARROW_MAGIC):
+                df = await asyncio.to_thread(cls._arrow_bytes_to_df, data)
+            else:
+                text = data.decode("utf-8") if isinstance(data, bytes) else data
+                df = await asyncio.to_thread(pd.read_json, StringIO(text), orient="split")
+                if "open_time" in df.columns and pd.api.types.is_integer_dtype(df["open_time"]):
+                    df["open_time"] = pd.to_datetime(df["open_time"], unit="ms")
+            return df
         except Exception as e:
             logger.error(f"Redis'ten DataFrame okuma hatası (Anahtar: {key}): {e}")
             return None
-        finally:
-            await r.close()
 
     @classmethod
     async def set_json(cls, key: str, data: Any, ex: Optional[int] = None) -> bool:
@@ -126,8 +172,308 @@ class RedisClient:
         except Exception as e:
             logger.error(f"Redis'ten JSON okuma hatası (Anahtar: {key}): {e}")
             return None
-        finally:
-            await r.close()
+        # Pool otomatik yönetir, close() gerekmez
+
+    # =============================================================================
+    # MULTI-TIMEFRAME CACHE FUNCTIONS
+    # =============================================================================
+    
+    @classmethod
+    def _get_mtf_key(cls, symbol: str, timeframe: str, data_type: str = "klines") -> str:
+        """
+        Multi-timeframe cache key oluşturur.
+        
+        Args:
+            symbol: Sembol (örn: 'BTCUSDT')
+            timeframe: Zaman dilimi (örn: '5m', '15m')
+            data_type: Veri türü ('klines', 'indicators', 'signals')
+            
+        Returns:
+            str: Redis cache key
+        """
+        return f"{data_type}:{symbol}:{timeframe}"
+    
+    @classmethod
+    def _get_ttl_for_timeframe(cls, timeframe: str) -> int:
+        """
+        Timeframe'e göre TTL (Time To Live) değeri döndürür.
+        
+        Args:
+            timeframe: Zaman dilimi
+            
+        Returns:
+            int: TTL saniye cinsinden
+        """
+        ttl_map = {
+            '1m': 3600,      # 1 saat
+            '5m': 14400,     # 4 saat  
+            '15m': 86400,    # 24 saat
+            '1h': 172800,    # 48 saat
+            '4h': 604800,    # 7 gün
+            '1d': 2592000,   # 30 gün
+        }
+        return ttl_map.get(timeframe, 3600)  # Default: 1 saat
+    
+    @classmethod
+    async def set_mtf_klines(cls, symbol: str, timeframe: str, df: pd.DataFrame) -> bool:
+        """
+        Multi-timeframe kline verilerini cache'e yazar.
+        
+        Args:
+            symbol: Sembol
+            timeframe: Zaman dilimi
+            df: OHLCV DataFrame
+            
+        Returns:
+            bool: Başarılı ise True
+        """
+        try:
+            key = cls._get_mtf_key(symbol, timeframe, "live_kline_data")
+            ttl = cls._get_ttl_for_timeframe(timeframe)
+            
+            await cls.set_df(key, df, ex=ttl)
+            logger.debug(f"MTF klines cache'lendi: {key} (TTL: {ttl}s)")
+            return True
+            
+        except Exception as e:
+            logger.error(f"MTF klines cache hatası [{symbol}:{timeframe}]: {e}")
+            return False
+    
+    @classmethod
+    async def get_mtf_klines(cls, symbol: str, timeframe: str, limit: Optional[int] = None) -> Optional[pd.DataFrame]:
+        """
+        Multi-timeframe kline verilerini cache'den okur.
+        
+        Args:
+            symbol: Sembol
+            timeframe: Zaman dilimi
+            limit: Döndürülecek maksimum bar sayısı
+            
+        Returns:
+            pd.DataFrame: OHLCV verisi veya None
+        """
+        try:
+            key = cls._get_mtf_key(symbol, timeframe, "live_kline_data")
+            df = await cls.get_df(key)
+            
+            if df is not None and not df.empty:
+                if limit:
+                    df = df.tail(limit)
+                logger.debug(f"MTF klines cache'den okundu: {key} ({len(df)} bars)")
+                return df
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"MTF klines okuma hatası [{symbol}:{timeframe}]: {e}")
+            return None
+    
+    @classmethod
+    async def set_mtf_indicators(cls, symbol: str, timeframe: str, indicators: Dict[str, Any]) -> bool:
+        """
+        Multi-timeframe indikatör verilerini cache'e yazar.
+        
+        Args:
+            symbol: Sembol
+            timeframe: Zaman dilimi
+            indicators: İndikatör verileri dictionary
+            
+        Returns:
+            bool: Başarılı ise True
+        """
+        try:
+            key = cls._get_mtf_key(symbol, timeframe, "indicators")
+            ttl = min(1800, cls._get_ttl_for_timeframe(timeframe))  # Max 30 dakika
+            
+            await cls.set_json(key, indicators, ex=ttl)
+            logger.debug(f"MTF indicators cache'lendi: {key}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"MTF indicators cache hatası [{symbol}:{timeframe}]: {e}")
+            return False
+    
+    @classmethod
+    async def get_mtf_indicators(cls, symbol: str, timeframe: str) -> Optional[Dict[str, Any]]:
+        """
+        Multi-timeframe indikatör verilerini cache'den okur.
+        
+        Args:
+            symbol: Sembol
+            timeframe: Zaman dilimi
+            
+        Returns:
+            Dict: İndikatör verileri veya None
+        """
+        try:
+            key = cls._get_mtf_key(symbol, timeframe, "indicators")
+            indicators = await cls.get_json(key)
+            
+            if indicators:
+                logger.debug(f"MTF indicators cache'den okundu: {key}")
+                return indicators
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"MTF indicators okuma hatası [{symbol}:{timeframe}]: {e}")
+            return None
+    
+    @classmethod
+    async def set_mtf_signals(cls, symbol: str, timeframe: str, signals: List[Dict[str, Any]]) -> bool:
+        """
+        Multi-timeframe sinyal verilerini cache'e yazar.
+        
+        Args:
+            symbol: Sembol
+            timeframe: Zaman dilimi
+            signals: Sinyal listesi
+            
+        Returns:
+            bool: Başarılı ise True
+        """
+        try:
+            key = cls._get_mtf_key(symbol, timeframe, "signals")
+            ttl = 900  # 15 dakika (sinyaller daha kısa süre cache'lenir)
+            
+            await cls.set_json(key, signals, ex=ttl)
+            logger.debug(f"MTF signals cache'lendi: {key} ({len(signals)} signals)")
+            return True
+            
+        except Exception as e:
+            logger.error(f"MTF signals cache hatası [{symbol}:{timeframe}]: {e}")
+            return False
+    
+    @classmethod
+    async def get_mtf_signals(cls, symbol: str, timeframe: str) -> Optional[List[Dict[str, Any]]]:
+        """
+        Multi-timeframe sinyal verilerini cache'den okur.
+        
+        Args:
+            symbol: Sembol
+            timeframe: Zaman dilimi
+            
+        Returns:
+            List: Sinyal listesi veya None
+        """
+        try:
+            key = cls._get_mtf_key(symbol, timeframe, "signals")
+            signals = await cls.get_json(key)
+            
+            if signals:
+                logger.debug(f"MTF signals cache'den okundu: {key} ({len(signals)} signals)")
+                return signals
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"MTF signals okuma hatası [{symbol}:{timeframe}]: {e}")
+            return None
+    
+    @classmethod
+    async def flush_mtf_cache(cls, symbol: str, timeframes: Optional[List[str]] = None) -> int:
+        """
+        Belirtilen sembol için MTF cache'i temizler.
+        
+        Args:
+            symbol: Sembol
+            timeframes: Temizlenecek timeframe listesi (None ise tümü)
+            
+        Returns:
+            int: Temizlenen key sayısı
+        """
+        try:
+            r = cls.get_client()
+            deleted_count = 0
+            
+            if timeframes is None:
+                timeframes = ['1m', '5m', '15m', '1h', '4h', '1d']
+            
+            data_types = ['live_kline_data', 'indicators', 'signals']
+            
+            for tf in timeframes:
+                for data_type in data_types:
+                    key = cls._get_mtf_key(symbol, tf, data_type)
+                    if await r.delete(key):
+                        deleted_count += 1
+                        logger.debug(f"MTF cache temizlendi: {key}")
+            
+            logger.info(f"MTF cache flush tamamlandı [{symbol}]: {deleted_count} keys deleted")
+            return deleted_count
+            
+        except Exception as e:
+            logger.error(f"MTF cache flush hatası [{symbol}]: {e}")
+            return 0
+        # Pool otomatik yönetir, close() gerekmez
+    
+    @classmethod
+    async def get_mtf_cache_stats(cls, symbol: str) -> Dict[str, Dict[str, Any]]:
+        """
+        MTF cache istatistiklerini döndürür.
+        
+        Args:
+            symbol: Sembol
+            
+        Returns:
+            Dict: Cache istatistikleri
+        """
+        try:
+            r = cls.get_client()
+            stats = {}
+            
+            timeframes = ['1m', '5m', '15m', '1h', '4h', '1d']
+            data_types = ['live_kline_data', 'indicators', 'signals']
+            
+            for tf in timeframes:
+                tf_stats = {}
+                for data_type in data_types:
+                    key = cls._get_mtf_key(symbol, tf, data_type)
+                    exists = await r.exists(key)
+                    ttl = await r.ttl(key) if exists else -1
+                    
+                    tf_stats[data_type] = {
+                        'exists': bool(exists),
+                        'ttl': ttl,
+                        'key': key
+                    }
+                
+                stats[tf] = tf_stats
+            
+            return stats
+            
+        except Exception as e:
+            logger.error(f"MTF cache stats hatası [{symbol}]: {e}")
+            return {}
+        # Pool otomatik yönetir, close() gerekmez
+    
+    @classmethod
+    async def warm_mtf_cache(cls, symbol: str, timeframes: List[str], 
+                           klines_data: Dict[str, pd.DataFrame]) -> Dict[str, bool]:
+        """
+        MTF cache'i önceden doldurur (cache warming).
+        
+        Args:
+            symbol: Sembol
+            timeframes: Timeframe listesi
+            klines_data: Timeframe -> DataFrame mapping
+            
+        Returns:
+            Dict: Timeframe -> success mapping
+        """
+        results = {}
+        
+        for tf in timeframes:
+            if tf in klines_data and not klines_data[tf].empty:
+                success = await cls.set_mtf_klines(symbol, tf, klines_data[tf])
+                results[tf] = success
+                
+                if success:
+                    logger.info(f"MTF cache warmed: {symbol}:{tf} ({len(klines_data[tf])} bars)")
+            else:
+                results[tf] = False
+                logger.warning(f"MTF cache warm failed: {symbol}:{tf} - No data")
+        
+        return results
 
 
 # Kolay erişim için bir instance oluştur

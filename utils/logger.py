@@ -62,6 +62,15 @@ class TRaderLogger:
         root_logger.addHandler(console_handler)
         root_logger.addHandler(file_handler)
         
+        # Also set python-binance websocket client logger to DEBUG to capture CLOSE frames and details
+        try:
+            ws_logger = logging.getLogger('binance.websocket.websocket_client')
+            # Force debug to get protocol-level messages about close frames
+            ws_logger.setLevel(logging.DEBUG)
+        except Exception:
+            # Non-critical if this logger doesn't exist in older/newer lib versions
+            root_logger.debug('Could not set debug level for binance.websocket.websocket_client')
+        
         cls._configured = True
     
     @classmethod

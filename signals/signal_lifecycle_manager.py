@@ -44,20 +44,39 @@ class SignalLifecycleManager:
                     None  # signal_type'ı geçmiyoruz - aynı indikatörün tüm yönleri supersede edilecek
                 )
                 
-                # 2. Yeni sinyali ekle (default status='active')
-                new_signal = Signal()
-                for key, value in signal_data.items():
-                    setattr(new_signal, key, value)
-                new_signal.status = 'active'  # type: ignore
+                # 2. Yeni sinyali ekle (UPSERT ile duplicate key hatalarını önle)
+                from sqlalchemy.dialects.postgresql import insert
                 
-                session.add(new_signal)
+                # Signal data'yı hazırla
+                signal_data_copy = signal_data.copy()
+                signal_data_copy['status'] = 'active'
+                
+                # UPSERT (ON CONFLICT DO UPDATE) kullan
+                stmt = insert(Signal).values(**signal_data_copy)
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=['symbol', 'timestamp'],
+                    set_={
+                        'signal_type': stmt.excluded.signal_type,
+                        'strength': stmt.excluded.strength,
+                        'indicators': stmt.excluded.indicators,
+                        'rsi': stmt.excluded.rsi,
+                        'macd': stmt.excluded.macd,
+                        'momentum': stmt.excluded.momentum,
+                        'vpms_score': stmt.excluded.vpms_score,
+                        'status': stmt.excluded.status,
+                        'price': stmt.excluded.price,
+                        'interval': stmt.excluded.interval
+                    }
+                )
+                
+                result = await session.execute(stmt)
                 await session.commit()  # Transaction'ı tamamla
                 
-                # Primary key (symbol, timestamp) kullan
-                new_signal_id = f"{new_signal.symbol}_{new_signal.timestamp}"
+                # Primary key (symbol, timestamp) kullan - UPSERT sonrası ID oluştur
+                new_signal_id = f"{signal_data['symbol']}_{signal_data['timestamp']}"
                 
                 self.logger.info(
-                    f"Yeni sinyal eklendi: {signal_data['symbol']} "
+                    f"Yeni sinyal eklendi/güncellendi: {signal_data['symbol']} "
                     f"{signal_data['signal_type']} ({signal_data.get('indicators', 'N/A')}) "
                     f"(ID: {new_signal_id}) - {superseded_count} eski sinyal supersede edildi"
                 )
