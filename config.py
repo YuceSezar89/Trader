@@ -149,24 +149,12 @@ class Config:
     # --- V-P-M Onay Ayarları ---
     # Not: Şimdilik DB şeması değişmeden kullanılacak; panel ve processor tarafında hesaplanır.
     VPM = {
-        'MODE': 'two_of_three',  # options: 'and', 'two_of_three'
-        'LOOKBACK': 1,           # aynı bar (1) veya kısa geçmişteki farklar
-        'THRESHOLDS': {
-            # P: yüzde fiyat değişimi mutlak eşik (örn. 0.3%)
-            'P_MIN_ABS_PCT': 0.3,
-            # V: hacim için z-normalize edilmiş fark eşiği (financial_metrics -> normalized_volume_diff)
-            'V_MIN_Z': 1.0,
-            # M: momentum için RSI fark eşiği (AL/SAT işaretleri yönlü)
-            'M_RSI_DELTA_LONG': 2.0,
-            'M_RSI_DELTA_SHORT': -2.0,
-            # Alternatif: MACD histogram delta eşiği eklenebilir (şimdilik hesap yok)
-            'M_MACD_HIST_DELTA_LONG': 0.5,
-            'M_MACD_HIST_DELTA_SHORT': -0.5,
-        },
+        'MIN_SCORE': 40.0,       # VPMV minimum skor — altında sinyal kaydedilmez
         'WEIGHTS': {
-            'P': 0.2,
-            'V': 0.3,
-            'M': 0.5,
+            'V':   0.35,         # Volume   — rolling log+minmax
+            'M':   0.35,         # Momentum — yönlü z-score+sigmoid
+            'Vlt': 0.20,         # Volatility — ATR percentile rank
+            'P':   0.10,         # Price    — rolling IQR
         },
         # MTF bonus ayarları
         'MTF': {

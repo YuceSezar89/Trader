@@ -21,7 +21,7 @@ from PyQt6.QtGui import QColor
 
 from desktop.theme import COLORS
 
-COLUMNS = ["Sembol", "Tip", "TF", "İndikatör", "VPM", "MTF", "α", "β", "Z-Score%", "P&L%", "Süre"]
+COLUMNS = ["Sembol", "Tip", "TF", "İndikatör", "VPMV", "MTF", "α", "β", "Z-Score%", "P&L%", "Süre"]
 
 COL_SYMBOL    = 0
 COL_TYPE      = 1

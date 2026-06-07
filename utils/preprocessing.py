@@ -56,26 +56,23 @@ def normalize_price_0_100(series, window=50, index=None):
     
     return normalized.fillna(50.0)
 
-def normalize_momentum_0_100(series, k=1.0, index=None):
+def normalize_momentum_0_100(series, k=1.0, window=100, index=None):
     """
-    Momentum verilerini sigmoid normalizasyon ile 0-100 aralığında normalize eder
-    Smooth geçişler sağlar
+    Momentum verilerini rolling z-score + sigmoid ile 0-100 aralığında normalize eder.
+    Son `window` bara göre görelilik hesaplar.
     """
     if series.empty or series.isna().all():
         return pd.Series(50.0, index=index if index is not None else series.index)
-    
-    mean = series.mean()
-    std = series.std()
-    
-    if std == 0:
-        return pd.Series(50.0, index=index if index is not None else series.index)
-    
-    z_score = (series - mean) / std
+
+    rolling_mean = series.rolling(window, min_periods=10).mean()
+    rolling_std  = series.rolling(window, min_periods=10).std()
+
+    z_score = (series - rolling_mean) / (rolling_std + 1e-8)
     sigmoid = 100 / (1 + np.exp(-k * z_score))
-    
+
     if index is not None:
         sigmoid.index = index
-    
+
     return sigmoid.fillna(50.0)
 
 def normalize_volume_0_100(series, window=50, index=None):
