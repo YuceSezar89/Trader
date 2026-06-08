@@ -6,8 +6,7 @@ from signals.signal_engine import signal_engine
 from indicators.financial_metrics import calculate_metrics
 from signals.signal_lifecycle_manager import signal_lifecycle_manager
 from config import Config
-from indicators.core import calculate_rsi, calculate_macd, calculate_atr
-from utils.data_provider import fetch_ohlcv
+from indicators.core import calculate_rsi, calculate_atr
 from signals.vpm_calculator import VPMCalculator
 from utils.preprocessing import (
     normalize_volume_0_100,
@@ -135,58 +134,7 @@ async def process_and_enrich_signals(
                     )
                     continue
 
-                # 5. MTF bonus skoru
-                mtf_score: Optional[float] = None
-                combined_score: Optional[float] = None
-                try:
-                    mtf_cfg = Config.VPM.get("MTF", {})
-                    if mtf_cfg.get("ENABLED", False):
-                        tf_map = mtf_cfg.get("TF_MAP", {})
-                        upper_tf = tf_map.get(interval)
-                        if upper_tf:
-                            res = await fetch_ohlcv(symbol, upper_tf, limit=300, source="auto")
-                            if res is not None and not res.empty and len(res) >= 3:
-                                rsi_series = calculate_rsi(res)
-                                _, _, macd_hist = calculate_macd(
-                                    res,
-                                    fast=Config.MACD_FAST,
-                                    slow=Config.MACD_SLOW,
-                                    signal=Config.MACD_SIGNAL,
-                                )
-                                if len(rsi_series.dropna()) >= 2 and len(macd_hist.dropna()) >= 2:
-                                    rsi_delta  = float(rsi_series.iloc[-1]  - rsi_series.iloc[-2])
-                                    macd_delta = float(macd_hist.iloc[-1]   - macd_hist.iloc[-2])
-
-                                    side = 1 if sig_type == "Long" else -1
-                                    rsi_thr  = mtf_cfg.get("RSI_DELTA_THR",       {"long": 2.0,  "short": -2.0})
-                                    macd_thr = mtf_cfg.get("MACD_HIST_DELTA_THR", {"long": 0.5,  "short": -0.5})
-
-                                    rsi_pass  = (side == 1 and rsi_delta  >= float(rsi_thr.get("long", 2.0)))  or \
-                                                (side == -1 and rsi_delta  <= float(rsi_thr.get("short", -2.0)))
-                                    macd_pass = (side == 1 and macd_delta >= float(macd_thr.get("long", 0.5))) or \
-                                                (side == -1 and macd_delta <= float(macd_thr.get("short", -0.5)))
-
-                                    rsi_comp  = rsi_delta  * side
-                                    macd_comp = macd_delta * side
-                                    raw_score = (rsi_comp + macd_comp) / 2.0
-                                    cap = float(mtf_cfg.get("SCORE_CAP", 1.0))
-                                    mtf_score = max(0.0, min(cap, raw_score)) if (rsi_pass or macd_pass) else 0.0
-
-                                    if vpms_score is not None:
-                                        mtf_weight = float(mtf_cfg.get("WEIGHT", 0.2))
-                                        combined_score = float(vpms_score) + mtf_weight * float(mtf_score)
-
-                                    logger.info(
-                                        f"[{symbol}] MTF | upper_tf={upper_tf} "
-                                        f"rsi_d={rsi_delta:.3f} macd_d={macd_delta:.3f} "
-                                        f"mtf_score={mtf_score} combined={combined_score}"
-                                    )
-                            else:
-                                logger.warning(f"[{symbol}] MTF: Üst TF verisi boş (tf={upper_tf}).")
-                except Exception as mtf_err:
-                    logger.warning(f"[{symbol}] MTF hesaplama atlandı: {mtf_err}")
-
-                # 6. Sinyali zenginleştir ve kaydet
+                # 5. Sinyali zenginleştir ve kaydet
                 signal_data_clean = {k: v for k, v in signal_data.items() if k != "id"}
                 enriched_signal = {
                     "symbol":                   symbol,
@@ -205,13 +153,7 @@ async def process_and_enrich_signals(
                     "normalized_price_change":  latest_metrics.get("normalized_price_diff"),
                     "zscore_ratio_percent":     latest_metrics.get("zscore_ratio_percent"),
                     "vpms_score":               float(vpms_score) if vpms_score is not None else None,
-                    "vpm_confirmed":            True,  # filtreden geçti
-                    "mtf_score":                float(mtf_score) if mtf_score is not None else 0.0,
-                    "vpms_mtf_score": (
-                        float(combined_score)
-                        if combined_score is not None
-                        else (float(vpms_score) if vpms_score is not None else None)
-                    ),
+                    "vpm_confirmed":            True,
                 }
 
                 logger.info(f"[{symbol}] Sinyal kaydediliyor: {signal_name} - {sig_type}")

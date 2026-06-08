@@ -307,11 +307,16 @@ class MainWindow(QMainWindow):
         self._health_worker.start()
         self._workers.append(self._health_worker)
 
-        # Market worker — watchlist'e bağlı
+        # Market worker — watchlist + grafik paneline bağlı
         self._market_worker = MarketWorker(redis_url, parent=self)
         self._market_worker.connection_changed.connect(self._on_market_connection)
         self._market_worker.price_updated.connect(self._watchlist_panel.on_price_updated)
         self._market_worker.price_updated.connect(self._on_price_updated)
+        self._market_worker.klines_updated.connect(self._chart_panel.on_klines_updated)
+        self._chart_panel.symbol_changed.connect(self._market_worker.set_chart_watch)
+        self._market_worker.set_chart_watch(
+            self._chart_panel.current_symbol(), self._chart_panel.current_tf()
+        )
         self._market_worker.start()
         self._workers.append(self._market_worker)
 

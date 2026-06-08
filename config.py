@@ -149,7 +149,7 @@ class Config:
     # --- V-P-M Onay Ayarları ---
     # Not: Şimdilik DB şeması değişmeden kullanılacak; panel ve processor tarafında hesaplanır.
     VPM = {
-        'MIN_SCORE': 40.0,       # VPMV minimum skor — altında sinyal kaydedilmez
+        'MIN_SCORE': 50.0,       # VPMV minimum skor — altında sinyal kaydedilmez
         'WEIGHTS': {
             'V':   0.35,         # Volume   — rolling log+minmax
             'M':   0.35,         # Momentum — yönlü z-score+sigmoid

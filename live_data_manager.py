@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from typing import Dict, List, Optional
@@ -125,6 +126,7 @@ class LiveDataManager:
             logger.info(f"MTF buffers initialized for {len(symbols)} symbols, {len(self.supported_timeframes)} timeframes")
         
         self.processing_tasks: set[asyncio.Task] = set()
+        self._tick_last_sent: Dict[str, float] = {}
 
         # Batch insert için buffer sistemi
         self.kline_buffer: List[Dict] = []  # Bekleyen kline verilerini toplar
@@ -245,7 +247,6 @@ class LiveDataManager:
 
     async def _add_to_batch_buffer(self, symbol: str, kline_row: Dict):
         """Kline verisini batch buffer'a ekler ve gerekirse flush yapar."""
-        import time
 
         async with self.buffer_lock:
             # Kline verisine symbol ve interval bilgisi ekle
@@ -272,7 +273,6 @@ class LiveDataManager:
 
     async def _flush_batch_buffer(self):
         """Buffer'daki tüm kline verilerini veritabanına toplu olarak yazar."""
-        import time
 
         if not self.kline_buffer:
             return
@@ -395,6 +395,14 @@ class LiveDataManager:
                         asyncio.run_coroutine_threadsafe(
                             self._update_and_process_symbol_mtf(symbol, interval, kline), self.loop
                         )
+                    else:
+                        tick_key = f"{symbol}:{interval}"
+                        now = time.time()
+                        if now - self._tick_last_sent.get(tick_key, 0) >= 2.0:
+                            self._tick_last_sent[tick_key] = now
+                            asyncio.run_coroutine_threadsafe(
+                                self._handle_tick(symbol, interval, kline), self.loop
+                            )
 
         except json.JSONDecodeError:
             logger.error(f"WebSocket'ten bozuk JSON verisi alındı: {msg}")
@@ -402,6 +410,37 @@ class LiveDataManager:
             logger.error(
                 f"WebSocket mesaj işleme hatası: {e} | Mesaj: {msg}", exc_info=True
             )
+
+    async def _handle_tick(self, symbol: str, interval: str, kline_data: Dict) -> None:
+        """Açık mumu kapalı buffer'a ekleyerek Redis'e yazar ve pub/sub tetikler."""
+        try:
+            if symbol not in self.mtf_buffers or interval not in self.mtf_buffers[symbol]:
+                return
+            buf = self.mtf_buffers[symbol][interval]
+            if buf.empty:
+                return
+            tick_row = {
+                "open_time": int(kline_data["t"]),
+                "open": float(kline_data["o"]),
+                "high": float(kline_data["h"]),
+                "low": float(kline_data["l"]),
+                "close": float(kline_data["c"]),
+                "volume": float(kline_data["v"]),
+                "close_time": int(kline_data["T"]),
+                "quote_asset_volume": float(kline_data["q"]),
+                "number_of_trades": int(kline_data["n"]),
+                "taker_buy_base_asset_volume": float(kline_data["V"]),
+                "taker_buy_quote_asset_volume": float(kline_data["Q"]),
+            }
+            limit = self.mtf_buffer_limits.get(interval, 100)
+            merged = pd.concat(
+                [buf, pd.DataFrame([tick_row])], ignore_index=True
+            ).tail(limit)
+            await RedisClient.set_mtf_klines(symbol, interval, merged)
+            await RedisClient.publish_kline_update(symbol, interval)
+            logger.debug("[%s] %s tick Redis'e yazıldı", symbol, interval)
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.debug("[%s] %s tick hatası: %s", symbol, interval, e)
 
     async def _update_and_process_symbol_mtf(self, symbol: str, interval: str, kline_data: Dict):
         """

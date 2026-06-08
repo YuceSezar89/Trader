@@ -1,5 +1,5 @@
 """
-ChartPanel — sembol + TF seçimi + CandleChart + 5 saniyelik auto-refresh.
+ChartPanel — sembol + TF seçimi + CandleChart.
 
 MarketWorker'dan gelen klines_updated sinyaliyle veya watchlist'ten
 symbol_selected ile tetiklenir.
@@ -11,8 +11,8 @@ import io
 from typing import Optional
 
 import pandas as pd
-from PyQt6.QtCore import QTimer, pyqtSignal, pyqtSlot
-from PyQt6.QtWidgets import (
+from PyQt6.QtCore import pyqtSignal, pyqtSlot  # pylint: disable=no-name-in-module
+from PyQt6.QtWidgets import (  # pylint: disable=no-name-in-module
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -29,7 +29,7 @@ _DEFAULT_SYM = "BTCUSDT"
 _LIMIT = 200
 
 
-class ChartPanel(QWidget):
+class ChartPanel(QWidget):  # pylint: disable=too-many-instance-attributes
     """
     Grafik paneli içeriği (QDockWidget'a yerleştirilen widget).
 
@@ -48,7 +48,6 @@ class ChartPanel(QWidget):
         self._tf_buttons: dict[str, QPushButton] = {}
 
         self._setup_ui()
-        self._setup_refresh_timer()
         self.load_symbol(_DEFAULT_SYM, _DEFAULT_TF)
 
     # ── UI ────────────────────────────────────────────────────────────────────
@@ -106,21 +105,9 @@ class ChartPanel(QWidget):
             f"QPushButton:hover {{ color: {COLORS['text_primary']}; }}"
         )
 
-    # ── Auto-refresh ──────────────────────────────────────────────────────────
-
-    def _setup_refresh_timer(self) -> None:
-        self._timer = QTimer(self)
-        self._timer.setInterval(5_000)
-        self._timer.timeout.connect(self._refresh)
-        self._timer.start()
-
-    def _refresh(self) -> None:
-        if self._symbol:
-            self._load_and_draw(self._symbol, self._tf, auto_range=False)
-
     # ── Veri yükleme ──────────────────────────────────────────────────────────
 
-    def _load_and_draw(self, symbol: str, tf: str, auto_range: bool = False) -> None:  # noqa: ARG002
+    def _load_and_draw(self, symbol: str, tf: str, auto_range: bool = False) -> None:  # pylint: disable=unused-argument
         df = self._fetch_data(symbol, tf)
         self._chart.load_df(df, symbol, tf)
         if df is not None and not df.empty:
@@ -130,7 +117,7 @@ class ChartPanel(QWidget):
     def _fetch_data(self, symbol: str, tf: str) -> Optional[pd.DataFrame]:
         """Redis Arrow → JSON fallback → DB fallback."""
         try:
-            import redis as _redis
+            import redis as _redis  # pylint: disable=import-outside-toplevel
             r = _redis.Redis.from_url(
                 self._redis_url,
                 decode_responses=False,
@@ -139,7 +126,7 @@ class ChartPanel(QWidget):
             raw = r.get(f"live_kline_data:{symbol}:{tf}")
             if raw:
                 if raw[:4] == b"ARDF":
-                    import pyarrow as pa
+                    import pyarrow as pa  # pylint: disable=import-outside-toplevel
                     reader = pa.ipc.open_stream(raw[4:])
                     df = reader.read_pandas()
                 else:
@@ -147,7 +134,7 @@ class ChartPanel(QWidget):
                 df = self._normalize_df(df)
                 if df is not None:
                     return df.tail(_LIMIT)
-        except Exception:
+        except Exception:  # pylint: disable=broad-exception-caught
             pass
         return self._fetch_from_db(symbol, tf)
 
@@ -177,7 +164,7 @@ class ChartPanel(QWidget):
 
     def _fetch_from_db(self, symbol: str, tf: str) -> Optional[pd.DataFrame]:
         try:
-            import psycopg2
+            import psycopg2  # pylint: disable=import-outside-toplevel
             conn = psycopg2.connect(**self._db_cfg)
             cur = conn.cursor()
             cur.execute(
@@ -198,13 +185,26 @@ class ChartPanel(QWidget):
             df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
             df = df.sort_values("timestamp").reset_index(drop=True)
             return df
-        except Exception:
+        except Exception:  # pylint: disable=broad-exception-caught
             return None
 
     # ── Slot'lar ──────────────────────────────────────────────────────────────
 
+    @pyqtSlot(str, str, object)
+    def on_klines_updated(self, symbol: str, tf: str, df: object) -> None:
+        """MarketWorker pub/sub güncellemesini doğrudan çizer."""
+        if symbol != self._symbol or tf != self._tf:
+            return
+        if not isinstance(df, pd.DataFrame) or df.empty:
+            return
+        df_norm = self._normalize_df(df.tail(_LIMIT))
+        if df_norm is not None:
+            self._chart.load_df(df_norm, symbol, tf)
+            self._price_label.setText(f"{float(df_norm['close'].iloc[-1]):,.4f}")
+
     @pyqtSlot(str)
     def load_symbol(self, symbol: str, tf: Optional[str] = None) -> None:
+        """Sembolü yükler ve grafiği çizer; TF verilmezse mevcut TF kullanılır."""
         if tf is None:
             tf = self._tf
         self._symbol = symbol
@@ -215,6 +215,7 @@ class ChartPanel(QWidget):
         self.symbol_changed.emit(symbol, tf)
 
     def _on_tf_clicked(self, tf: str) -> None:
+        """TF butonuna tıklanınca grafiği günceller."""
         self._tf = tf
         self._update_tf_buttons(tf)
         if self._symbol:
@@ -222,6 +223,7 @@ class ChartPanel(QWidget):
         self.symbol_changed.emit(self._symbol, tf)
 
     def _update_tf_buttons(self, active_tf: str) -> None:
+        """Aktif TF butonunu vurgular."""
         for tf, btn in self._tf_buttons.items():
             btn.setChecked(tf == active_tf)
             btn.setStyleSheet(self._tf_btn_style(tf == active_tf))
@@ -230,11 +232,14 @@ class ChartPanel(QWidget):
 
     @pyqtSlot(str, str)
     def set_tf(self, tf: str) -> None:
+        """Dışarıdan TF seçimi yapar."""
         if tf in self._tf_buttons:
             self._on_tf_clicked(tf)
 
     def current_symbol(self) -> str:
+        """Şu an gösterilen sembolü döner."""
         return self._symbol
 
     def current_tf(self) -> str:
+        """Şu an gösterilen TF'i döner."""
         return self._tf
