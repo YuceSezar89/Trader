@@ -25,7 +25,7 @@ from PyQt6.QtWidgets import (  # pylint: disable=no-name-in-module
 
 from desktop.theme import COLORS
 
-_COLS = ["Sembol", "Z-score", "Yön"]
+_COLS = ["Sembol", "Z-score", "Yön", "Zaman"]
 _COL_IDX = {name: i for i, name in enumerate(_COLS)}
 
 _PALETTE = [
@@ -102,6 +102,9 @@ class DivergencePanel(QWidget):  # pylint: disable=too-many-instance-attributes
         self._table.horizontalHeader().setSectionResizeMode(
             0, QHeaderView.ResizeMode.ResizeToContents
         )
+        self._table.horizontalHeader().setSectionResizeMode(
+            _COL_IDX["Zaman"], QHeaderView.ResizeMode.ResizeToContents
+        )
         self._table.verticalHeader().setVisible(False)
         splitter.addWidget(self._table)
 
@@ -111,7 +114,9 @@ class DivergencePanel(QWidget):  # pylint: disable=too-many-instance-attributes
 
     def _build_chart(self) -> pg.PlotWidget:
         pg.setConfigOptions(antialias=True)
-        self._plot = pg.PlotWidget()
+        date_axis = pg.DateAxisItem(orientation="bottom")
+        date_axis.setStyle(tickFont=QFont("Monospace", 8))
+        self._plot = pg.PlotWidget(axisItems={"bottom": date_axis})
         self._plot.setBackground(COLORS["bg_primary"])
         self._plot.setLabel("left", "Z-score", color=COLORS["text_muted"])
         self._plot.showGrid(x=False, y=True, alpha=0.12)
@@ -182,16 +187,19 @@ class DivergencePanel(QWidget):  # pylint: disable=too-many-instance-attributes
         """Tablo ve grafiği güncel veriyle doldurur."""
         current = result.get("current", {})
         series = result.get("series", {})
-        self._populate_table(current)
-        self._populate_chart(series, current)
+        diverge_since = result.get("diverge_since", {})
+        timestamps = result.get("timestamps", {})
+        self._populate_table(current, diverge_since)
+        self._populate_chart(series, current, timestamps)
 
-    def _populate_table(self, current: dict) -> None:
+    def _populate_table(self, current: dict, diverge_since: dict) -> None:
         rows = sorted(current.items(), key=lambda x: abs(x[1]), reverse=True)
         self._table.setSortingEnabled(False)
         self._table.setRowCount(len(rows))
 
         mono = QFont("Monospace", 11)
         bold = QFont("Monospace", 11, QFont.Weight.Bold)
+        now = datetime.now()
 
         for row, (symbol, z) in enumerate(rows):
             color_hex = self._symbol_color(symbol)
@@ -227,9 +235,21 @@ class DivergencePanel(QWidget):  # pylint: disable=too-many-instance-attributes
             d_item.setForeground(fg)
             self._table.setItem(row, _COL_IDX["Yön"], d_item)
 
+            ts = diverge_since.get(symbol)
+            if ts:
+                dt = datetime.fromtimestamp(ts)
+                time_str = dt.strftime("%H:%M") if dt.date() == now.date() else dt.strftime("%m/%d %H:%M")
+            else:
+                time_str = "—"
+            t_item = QTableWidgetItem(time_str)
+            t_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            t_item.setFont(mono)
+            t_item.setForeground(_C_MUTED)
+            self._table.setItem(row, _COL_IDX["Zaman"], t_item)
+
         self._table.setSortingEnabled(True)
 
-    def _populate_chart(self, series: dict, current: dict) -> None:
+    def _populate_chart(self, series: dict, current: dict, timestamps: dict) -> None:
         for item in self._curves + self._labels:
             self._plot.removeItem(item)
         self._curves.clear()
@@ -241,7 +261,8 @@ class DivergencePanel(QWidget):  # pylint: disable=too-many-instance-attributes
             return
 
         for symbol, z_arr in series.items():
-            xs = list(range(len(z_arr)))
+            ts = timestamps.get(symbol)
+            xs = ts.tolist() if ts is not None and len(ts) == len(z_arr) else list(range(len(z_arr)))
             color_hex = self._symbol_color(symbol)
             color = QColor(color_hex)
             color.setAlpha(200)
@@ -263,7 +284,7 @@ class DivergencePanel(QWidget):  # pylint: disable=too-many-instance-attributes
                 anchor=(0.0, 0.5),
             )
             lbl.setFont(QFont("Monospace", 8))
-            lbl.setPos(len(z_arr) - 1, float(z_arr[-1]))
+            lbl.setPos(xs[-1], float(z_arr[-1]))
             lbl.setZValue(15)
             self._plot.addItem(lbl)
             self._labels.append(lbl)

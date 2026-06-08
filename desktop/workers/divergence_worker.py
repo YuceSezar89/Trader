@@ -26,6 +26,25 @@ def _direction(signal_type: str) -> str:
     return "short" if "short" in signal_type.lower() else "long"
 
 
+def _extract_timestamps(df: pd.DataFrame, length: int):
+    """open_time veya timestamp kolonundan Unix saniye dizisi döner."""
+    col = next((c for c in ("open_time", "timestamp") if c in df.columns), None)
+    if col is None:
+        return None
+    raw = df[col].values[-length:]
+    if pd.api.types.is_integer_dtype(df[col]):
+        return raw / 1000.0
+    return pd.to_datetime(raw).astype("int64").values / 1e9
+
+
+def _diverge_start(z_slice, ts) -> Optional[float]:
+    """Son ayrışmanın başladığı timestamp'ı döner (|z| < 0.5 son geçişten sonraki an)."""
+    for i in range(len(z_slice) - 2, -1, -1):
+        if abs(z_slice[i]) < 0.5:
+            return float(ts[min(i + 1, len(ts) - 1)])
+    return float(ts[0]) if len(ts) > 0 else None
+
+
 class DivergenceWorker(QThread):  # pylint: disable=too-many-instance-attributes
     """Sinyal coinlerinin Z-score zaman serilerini Redis'ten hesaplayan worker."""
 
@@ -139,6 +158,8 @@ class DivergenceWorker(QThread):  # pylint: disable=too-many-instance-attributes
     def _compute(self, symbols: set, pending_resets: set) -> Optional[dict]:
         series: dict = {}
         current: dict = {}
+        timestamps: dict = {}
+        diverge_since: dict = {}
 
         for symbol in symbols:
             key = f"live_kline_data:{symbol}:{self._timeframe}".encode()
@@ -159,13 +180,25 @@ class DivergenceWorker(QThread):  # pylint: disable=too-many-instance-attributes
             offset = self._offsets.get(symbol, 0.0)
             z_adj = z - offset
 
-            series[symbol] = z_adj.values[-_SERIES_LEN:]
+            z_slice = z_adj.values[-_SERIES_LEN:]
+            series[symbol] = z_slice
             current[symbol] = float(z_adj.iloc[-1])
+
+            ts = _extract_timestamps(df, len(z_slice))
+            if ts is not None:
+                timestamps[symbol] = ts
+                diverge_since[symbol] = _diverge_start(z_slice, ts)
 
         if not series:
             return None
 
-        return {"series": series, "current": current, "tf": self._timeframe}
+        return {
+            "series": series,
+            "current": current,
+            "tf": self._timeframe,
+            "timestamps": timestamps,
+            "diverge_since": diverge_since,
+        }
 
     def _fetch_klines(self, key: bytes) -> Optional[pd.DataFrame]:
         raw = self._redis.get(key)
