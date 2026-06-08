@@ -232,13 +232,23 @@ class RedisClient:
             ttl = cls._get_ttl_for_timeframe(timeframe)
             
             await cls.set_df(key, df, ex=ttl)
+            await cls.publish_kline_update(symbol, timeframe)
             logger.debug(f"MTF klines cache'lendi: {key} (TTL: {ttl}s)")
             return True
-            
+
         except Exception as e:
             logger.error(f"MTF klines cache hatası [{symbol}:{timeframe}]: {e}")
             return False
-    
+
+    @classmethod
+    async def publish_kline_update(cls, symbol: str, timeframe: str) -> None:
+        """Kline güncellendi bildirimini pub/sub kanalına gönderir."""
+        try:
+            client = cls.get_client()
+            await client.publish("kline_updated", f"{symbol}:{timeframe}")
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.debug("kline_updated publish hatası: %s", e)
+
     @classmethod
     async def get_mtf_klines(cls, symbol: str, timeframe: str, limit: Optional[int] = None) -> Optional[pd.DataFrame]:
         """

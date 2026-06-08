@@ -8,6 +8,7 @@ Kullanım:
 """
 
 import os
+import subprocess
 import sys
 
 os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu")
@@ -18,14 +19,49 @@ from PyQt6.QtWidgets import QApplication
 from desktop.main_window import MainWindow
 from desktop.theme import DARK_QSS
 
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _backend_already_running() -> bool:
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", "run_services.py"],
+            capture_output=True, text=True
+        )
+        return bool(result.stdout.strip())
+    except Exception:
+        return False
+
+
+def _start_backend() -> "subprocess.Popen | None":
+    services_script = os.path.join(_PROJECT_ROOT, "run_services.py")
+    if not os.path.exists(services_script):
+        return None
+
+    if _backend_already_running():
+        return None
+
+    log_dir = os.path.join(_PROJECT_ROOT, "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    log_path = os.path.join(log_dir, "services.log")
+
+    try:
+        log_file = open(log_path, "a")  # pylint: disable=consider-using-with
+        return subprocess.Popen(
+            [sys.executable, "run_services.py"],
+            cwd=_PROJECT_ROOT,
+            stdout=log_file,
+            stderr=log_file,
+        )
+    except Exception as exc:
+        print(f"Backend başlatılamadı: {exc}", file=sys.stderr)
+        return None
+
 
 def _load_config() -> dict:
-    """Config'i merkezi config.py'den yükler, bulunamazsa varsayılanları kullanır."""
     try:
-        import sys
-        import os
-        sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-        from config import Config
+        sys.path.insert(0, _PROJECT_ROOT)
+        from config import Config  # pylint: disable=import-outside-toplevel
         return {
             "redis_url":   Config.REDIS_URL,
             "db_host":     Config.DB_HOST,
@@ -46,6 +82,8 @@ def _load_config() -> dict:
 
 
 def main() -> None:
+    backend = _start_backend()
+
     app = QApplication(sys.argv)
     app.setApplicationName("TRader Terminal")
     app.setOrganizationName("TRader")
@@ -55,6 +93,9 @@ def main() -> None:
     font.setFamily("Helvetica Neue")
     font.setPointSize(13)
     app.setFont(font)
+
+    if backend is not None:
+        app.aboutToQuit.connect(backend.terminate)
 
     config = _load_config()
     window = MainWindow(config)

@@ -22,8 +22,10 @@ from PyQt6.QtWidgets import (
 
 from desktop.panels.active_signals_panel import ActiveSignalsPanel
 from desktop.panels.chart_panel import ChartPanel
+from desktop.panels.divergence_panel import DivergencePanel
 from desktop.panels.watchlist_panel import WatchlistPanel
 from desktop.theme import COLORS
+from desktop.workers.divergence_worker import DivergenceWorker
 from desktop.workers.health_worker import HealthWorker, ServiceStatus
 from desktop.workers.market_worker import MarketWorker
 from desktop.workers.signal_worker import SignalWorker
@@ -239,9 +241,19 @@ class MainWindow(QMainWindow):
         self._add_panel_toggle(active_sig_dock)
         self._docks["active_sig"] = active_sig_dock
 
+        # ── Ayrışma paneli (sağ tabified) ─────────────────────────────────
+        self._divergence_panel = DivergencePanel(self)
+        divergence_dock = QDockWidget("Ayrışma", self)
+        divergence_dock.setObjectName("dock_divergence")
+        divergence_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        divergence_dock.setWidget(self._divergence_panel)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, divergence_dock)
+        self.tabifyDockWidget(chart_dock, divergence_dock)
+        self._add_panel_toggle(divergence_dock)
+        self._docks["divergence"] = divergence_dock
+
         # ── Placeholder paneller (sağ tabified + alt) ─────────────────────
         placeholder_panels = [
-            ("mtf",         "MTF Analizi",      Qt.DockWidgetArea.RightDockWidgetArea),
             ("signal_feed", "Sinyal Feed",      Qt.DockWidgetArea.RightDockWidgetArea),
             ("performance", "Performans",       Qt.DockWidgetArea.BottomDockWidgetArea),
             ("backtest",    "Backtest Stüdyo",  Qt.DockWidgetArea.BottomDockWidgetArea),
@@ -318,6 +330,26 @@ class MainWindow(QMainWindow):
         self._market_worker.price_updated.connect(self._active_signals_panel.on_price_updated)
         self._signal_worker.start()
         self._workers.append(self._signal_worker)
+
+        # Divergence worker — sinyal coinlerin z-score ayrışması
+        self._divergence_worker = DivergenceWorker(redis_url, parent=self)
+        self._divergence_worker.divergence_updated.connect(
+            self._divergence_panel.on_divergence_updated
+        )
+        self._divergence_worker.status_updated.connect(
+            self._divergence_panel.on_status_updated
+        )
+        self._divergence_panel.tf_combo().currentTextChanged.connect(
+            self._divergence_worker.set_timeframe
+        )
+        self._signal_worker.signals_loaded.connect(
+            self._divergence_worker.set_symbols
+        )
+        self._signal_worker.new_signal.connect(
+            self._divergence_worker.add_symbol
+        )
+        self._divergence_worker.start()
+        self._workers.append(self._divergence_worker)
 
     # ── Slot'lar ──────────────────────────────────────────────────────────
 
