@@ -37,6 +37,33 @@ async def get_last_timestamp(symbol: str, interval: Optional[str] = None) -> Opt
             
         return None
 
+async def get_recent_klines(symbol: str, interval: str, limit: int) -> pd.DataFrame:
+    """DB'den son N kline'ı Binance formatında (open_time ms) döndürür."""
+    async with get_session() as session:
+        stmt = (
+            select(PriceData)
+            .where(PriceData.symbol == symbol)
+            .where(PriceData.interval == interval)
+            .order_by(PriceData.timestamp.desc())
+            .limit(limit)
+        )
+        result = await session.execute(stmt)
+        rows = result.scalars().all()
+
+    if not rows:
+        return pd.DataFrame()
+
+    rows = sorted(rows, key=lambda r: r.timestamp)
+    return pd.DataFrame({
+        "open_time": [int(r.timestamp.timestamp() * 1000) for r in rows],
+        "open":      [r.open   for r in rows],
+        "high":      [r.high   for r in rows],
+        "low":       [r.low    for r in rows],
+        "close":     [r.close  for r in rows],
+        "volume":    [r.volume for r in rows],
+    })
+
+
 async def bulk_insert_price_data(symbol: str, df: pd.DataFrame, interval: Optional[str] = None):
     """DataFrame'deki fiyat verisini toplu olarak kaydeder."""
     if df.empty:

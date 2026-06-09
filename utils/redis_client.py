@@ -22,6 +22,18 @@ class RedisClient:
     """
     _pools: Dict[int, redis.ConnectionPool] = {}
     _binary_pools: Dict[int, redis.ConnectionPool] = {}
+    _write_semaphores: Dict[int, asyncio.Semaphore] = {}
+
+    @classmethod
+    def _get_write_semaphore(cls) -> asyncio.Semaphore:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        loop_id = id(loop)
+        if loop_id not in cls._write_semaphores:
+            cls._write_semaphores[loop_id] = asyncio.Semaphore(30)
+        return cls._write_semaphores[loop_id]
 
     @classmethod
     def _get_pool_for_current_loop(cls) -> redis.ConnectionPool:
@@ -35,10 +47,11 @@ class RedisClient:
 
         if loop_id not in cls._pools:
             logger.info(f"Yeni Redis bağlantı havuzu oluşturuluyor (Loop ID: {loop_id})")
-            cls._pools[loop_id] = redis.ConnectionPool.from_url(
+            cls._pools[loop_id] = redis.BlockingConnectionPool.from_url(
                 Config.REDIS_URL,
                 decode_responses=True,
-                max_connections=500,
+                max_connections=100,
+                timeout=3,
                 socket_keepalive=True,
                 socket_connect_timeout=5,
                 retry_on_timeout=True
@@ -56,10 +69,11 @@ class RedisClient:
         loop_id = id(loop)
 
         if loop_id not in cls._binary_pools:
-            cls._binary_pools[loop_id] = redis.ConnectionPool.from_url(
+            cls._binary_pools[loop_id] = redis.BlockingConnectionPool.from_url(
                 Config.REDIS_URL,
                 decode_responses=False,
-                max_connections=200,
+                max_connections=50,
+                timeout=3,
                 socket_keepalive=True,
                 socket_connect_timeout=5,
                 retry_on_timeout=True
@@ -103,13 +117,15 @@ class RedisClient:
         cls, key: str, df: pd.DataFrame, ex: int = 60 * 60 * 24
     ) -> None:
         """Bir Pandas DataFrame'i Arrow IPC formatında Redis'e yazar."""
-        r = cls._get_binary_client()
-        try:
-            arrow_bytes = await asyncio.to_thread(cls._df_to_arrow_bytes, df)
-            await r.set(key, arrow_bytes, ex=ex)
-            logger.debug(f"DataFrame Redis'e yazıldı (Arrow). Anahtar: {key}")
-        except Exception as e:
-            logger.error(f"Redis'e DataFrame yazma hatası (Anahtar: {key}): {e}")
+        sem = cls._get_write_semaphore()
+        async with sem:
+            r = cls._get_binary_client()
+            try:
+                arrow_bytes = await asyncio.to_thread(cls._df_to_arrow_bytes, df)
+                await r.set(key, arrow_bytes, ex=ex)
+                logger.debug(f"DataFrame Redis'e yazıldı (Arrow). Anahtar: {key}")
+            except Exception as e:
+                logger.error(f"Redis'e DataFrame yazma hatası (Anahtar: {key}): {e}")
         # Pool otomatik yönetir, close() gerekmez
 
     @classmethod

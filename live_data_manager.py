@@ -17,6 +17,7 @@ from indicators.core import add_all_indicators
 from database.crud import (
     bulk_insert_price_data,
     get_last_timestamp,
+    get_recent_klines,
     initialize_database,
     delete_symbol_data,
 )
@@ -154,7 +155,7 @@ class LiveDataManager:
 
         # Paralel işleme - maksimum hız için
         # Semaphore ile eşzamanlı istek sayısını kontrol et
-        semaphore = asyncio.Semaphore(20)  # Aynı anda max 20 istek
+        semaphore = asyncio.Semaphore(2)  # Aynı anda max 2 istek (arka plan görevi, rate limit dostu)
 
         async def sync_with_semaphore(symbol):
             async with semaphore:
@@ -497,7 +498,7 @@ class LiveDataManager:
                     [self.kline_data[symbol], new_df], ignore_index=True
                 )
                 self.kline_data[symbol] = self.kline_data[symbol].tail(1000)
-                self.kline_data[symbol] = add_all_indicators(self.kline_data[symbol])
+                self.kline_data[symbol] = await asyncio.to_thread(add_all_indicators, self.kline_data[symbol])
 
                 # Legacy Redis keys
                 new_redis_key = f"{Config.REDIS_LIVE_DATA_KEY_PREFIX}:{symbol}:1m"
@@ -510,6 +511,23 @@ class LiveDataManager:
             # Batch insert için buffer'a ekle (sadece 1m için - diğer TF'ler opsiyonel)
             if interval == '1m':
                 await self._add_to_batch_buffer(symbol, new_row)
+
+            # 4h ve 1d kapanışlarını DB'ye yaz (Redis düşse bile veri kaybolmasın)
+            if interval in ('4h', '1d'):
+                try:
+                    df_bar = pd.DataFrame([{
+                        'open_time': new_row['open_time'],
+                        'open':   new_row['open'],
+                        'high':   new_row['high'],
+                        'low':    new_row['low'],
+                        'close':  new_row['close'],
+                        'volume': new_row['volume'],
+                    }])
+                    async with self.db_lock:
+                        await bulk_insert_price_data(symbol, df_bar, interval=interval)
+                    logger.debug(f"[{symbol}] {interval} kapanışı DB'ye kaydedildi")
+                except Exception as db_err:
+                    logger.warning(f"[{symbol}] {interval} DB yazma hatası: {db_err}")
 
             # Sinyal üretimi (her timeframe için)
             if self.mtf_enabled:
@@ -765,8 +783,8 @@ class LiveDataManager:
         if not self.mtf_enabled:
             return
 
-        batch_size = 10  # Her batch'te 10 sembol (10×6=60 istek/batch)
-        delay_between_batches = 3  # 3 saniye delay (API limit: ~960 weight/dk, limit 1200)
+        batch_size = 10  # Her batch'te 10 sembol
+        delay_between_batches = 5  # 5 saniye delay (10×3TF×2weight=60/batch → 720 weight/dk, limit 1200)
 
         total_symbols = len(self.symbols)
         total_batches = (total_symbols + batch_size - 1) // batch_size
@@ -788,13 +806,15 @@ class LiveDataManager:
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
             # Başarı oranını hesapla
-            success_count = sum(1 for r in results if r is True)
+            # _load_symbol_all_timeframes True (cache hit) veya False (Binance çağrısı yapıldı) döner
+            binance_used = any(r is False for r in results if not isinstance(r, Exception))
+            success_count = sum(1 for r in results if r is not None and not isinstance(r, Exception))
             logger.info(f"✅ Batch {batch_num}/{total_batches} tamamlandı ({success_count}/{len(batch)} başarılı)")
 
-            # Son batch değilse bekle (API limit protection)
+            # Son batch değilse bekle
             if i + batch_size < total_symbols:
-                logger.info(f"⏳ {delay_between_batches}s bekleniyor (API rate limit protection)...")
-                await asyncio.sleep(delay_between_batches)
+                wait = delay_between_batches if binance_used else 0.5
+                await asyncio.sleep(wait)
 
         logger.info("🎉 MTF Batch Initialization tamamlandı! WebSocket canlı mod başlatılabilir.")
 
@@ -809,58 +829,92 @@ class LiveDataManager:
             bool: Başarılı ise True
         """
         try:
-            # Her timeframe için gerekli bar sayısı (MA200 warm-up için min 250)
-            timeframe_limits = {
-                '1m': 500,   # ~8 saat
-                '5m': 300,   # ~25 saat
-                '15m': 250,  # ~62 saat
-                '1h': 250,   # ~10 gün
+            # Binance'ten çekilecek TF'ler (1m ve aggregate edilebilecekler hariç)
+            binance_timeframe_limits = {
+                '1h': 250,   # ~10 gün  — aggregate için 1m yetersiz (15k bar lazım)
                 '4h': 250,   # ~41 gün
                 '1d': 250,   # ~250 gün
             }
 
             loaded_count = 0
+            binance_call_made = False
 
-            for tf in self.supported_timeframes:
-                limit = timeframe_limits.get(tf, 100)
+            # ── 1m: DB'den yükle ──────────────────────────────────────────────
+            df_1m = await get_recent_klines(symbol, "1m", 1500)  # 25 saat
+            if df_1m.empty:
+                logger.warning(f"[{symbol}] 1m DB'de yok, Binance'ten çekiliyor...")
+                df_1m = await BinanceClientManager.fetch_klines(symbol=symbol, interval="1m", limit=1500)
 
-                # API'den tarihsel veri çek (retry ile)
+            if not df_1m.empty:
+                df_1m_ind = await asyncio.to_thread(add_all_indicators, df_1m)
+                self.mtf_buffers[symbol]['1m'] = df_1m_ind.tail(self.mtf_buffer_limits.get('1m', 250))
+                await RedisClient.set_mtf_klines(symbol, '1m', self.mtf_buffers[symbol]['1m'])
+                loaded_count += 1
+
+                # ── 5m / 15m: 1m buffer'dan aggregate et (Binance isteği yok) ──
+                for agg_tf in ['5m', '15m']:
+                    if not TimeframeAggregator.can_aggregate('1m', agg_tf):
+                        continue
+                    agg_df = TimeframeAggregator.aggregate_ohlcv(df_1m, '1m', agg_tf)
+                    if not agg_df.empty:
+                        limit = self.mtf_buffer_limits.get(agg_tf, 250)
+                        agg_ind = await asyncio.to_thread(add_all_indicators, agg_df.tail(limit))
+                        self.mtf_buffers[symbol][agg_tf] = agg_ind
+                        await RedisClient.set_mtf_klines(symbol, agg_tf, agg_ind)
+                        loaded_count += 1
+                        logger.debug(f"[{symbol}] {agg_tf}: {len(agg_df)} bar aggregated from 1m")
+
+            # ── 1h / 4h / 1d: Redis cache → yoksa Binance ───────────────────
+            for tf, limit in binance_timeframe_limits.items():
+                # Önce Redis cache'e bak (7 günlük TTL — sistem kısa süreli restart'ta sıfırdan çekmez)
+                cached_df = await RedisClient.get_mtf_klines(symbol, tf, limit=limit)
+                if cached_df is not None and len(cached_df) >= limit // 2:
+                    self.mtf_buffers[symbol][tf] = cached_df
+                    loaded_count += 1
+                    logger.debug(f"[{symbol}] {tf}: Redis cache'den yüklendi ({len(cached_df)} bar)")
+                    continue
+
+                # Cache miss → önce DB'yi dene (4h/1d artık DB'ye yazılıyor)
+                db_df = await get_recent_klines(symbol, tf, limit)
+                if db_df is not None and len(db_df) >= limit // 2:
+                    df_ind = await asyncio.to_thread(add_all_indicators, db_df)
+                    buf_limit = self.mtf_buffer_limits.get(tf, 250)
+                    self.mtf_buffers[symbol][tf] = df_ind.tail(buf_limit)
+                    await RedisClient.set_mtf_klines(symbol, tf, self.mtf_buffers[symbol][tf])
+                    loaded_count += 1
+                    logger.debug(f"[{symbol}] {tf}: DB'den yüklendi ({len(db_df)} bar)")
+                    continue
+
+                # DB de boş → Binance'ten çek
+                binance_call_made = True
                 max_retries = 3
+                df = pd.DataFrame()
                 for retry in range(max_retries):
                     try:
-                        df = await BinanceClientManager.fetch_klines(
-                            symbol=symbol,
-                            interval=tf,
-                            limit=limit
-                        )
-                        break  # Başarılı, döngüden çık
+                        df = await BinanceClientManager.fetch_klines(symbol=symbol, interval=tf, limit=limit)
+                        break
                     except Exception as e:
-                        if "418" in str(e) or "429" in str(e):  # Rate limit
+                        if "418" in str(e) or "429" in str(e):
                             if retry < max_retries - 1:
-                                wait_time = (retry + 1) * 10  # 10s, 20s, 30s
+                                wait_time = (retry + 1) * 10
                                 logger.warning(f"[{symbol}] {tf} Rate limit, {wait_time}s bekleniyor...")
                                 await asyncio.sleep(wait_time)
                                 continue
-                        raise  # Başka hata veya son retry
+                        raise
 
                 if not df.empty:
-                    # İndikatörler ekle
-                    df_with_indicators = add_all_indicators(df)
-
-                    # Buffer'a kaydet
-                    buffer_limit = self.mtf_buffer_limits.get(tf, 100)
+                    df_with_indicators = await asyncio.to_thread(add_all_indicators, df)
+                    buffer_limit = self.mtf_buffer_limits.get(tf, 250)
                     self.mtf_buffers[symbol][tf] = df_with_indicators.tail(buffer_limit)
-
-                    # Redis'e cache'le
                     await RedisClient.set_mtf_klines(symbol, tf, self.mtf_buffers[symbol][tf])
-
                     loaded_count += 1
-                    logger.debug(f"[{symbol}] {tf}: {len(df)} bar yüklendi")
+                    logger.debug(f"[{symbol}] {tf}: Binance'ten çekildi ({len(df)} bar)")
                 else:
                     logger.warning(f"[{symbol}] {tf}: Veri boş")
 
-            logger.info(f"✅ [{symbol}] {loaded_count}/{len(self.supported_timeframes)} TF yüklendi")
-            return True
+            logger.info(f"✅ [{symbol}] {loaded_count} TF yüklendi (1m+5m+15m=aggregated, 1h/4h/1d=cache→Binance)")
+            # False döndür → batch'e "Binance kullanıldı" sinyali ver
+            return not binance_call_made
 
         except Exception as e:
             logger.error(f"❌ [{symbol}] Yükleme hatası: {e}", exc_info=False)
@@ -1172,16 +1226,22 @@ class LiveDataManager:
             self.is_ws_connected = False
             raise
 
+    async def _deferred_sync_historical(self, delay_seconds: int = 30):
+        """sync_historical_data'yı gecikmeyle arka planda çalıştırır."""
+        await asyncio.sleep(delay_seconds)
+        logger.info(f"🔄 Tarihsel veri senkronizasyonu başlatılıyor (arka plan, {delay_seconds}s sonra)...")
+        await self.sync_historical_data()
+
     async def run(self):
         """Ana çalıştırma döngüsü."""
         try:
-            await self.sync_historical_data()
-
             # 1. MTF buffers'ı başlat (tüm timeframe'ler için batch halinde)
             if self.mtf_enabled:
                 await self._initialize_mtf_dataframes()
-            # 2. Canlı veri akışını başlat (bu bloklamaz)
+            # 2. Canlı veri akışını başlat
             await self.start_streams()
+            # 3. Tarihsel gap fill → WebSocket açıldıktan 30s sonra arka planda
+            asyncio.create_task(self._deferred_sync_historical(delay_seconds=30))
 
             logger.info(
                 "Canlı veri yöneticisi çalışıyor. Bağlantı izleniyor... Çıkmak için CTRL+C."
