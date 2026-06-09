@@ -38,7 +38,7 @@ class RedisClient:
             cls._pools[loop_id] = redis.ConnectionPool.from_url(
                 Config.REDIS_URL,
                 decode_responses=True,
-                max_connections=100,
+                max_connections=500,
                 socket_keepalive=True,
                 socket_connect_timeout=5,
                 retry_on_timeout=True
@@ -59,7 +59,7 @@ class RedisClient:
             cls._binary_pools[loop_id] = redis.ConnectionPool.from_url(
                 Config.REDIS_URL,
                 decode_responses=False,
-                max_connections=50,
+                max_connections=200,
                 socket_keepalive=True,
                 socket_connect_timeout=5,
                 retry_on_timeout=True
@@ -80,6 +80,12 @@ class RedisClient:
 
     @staticmethod
     def _df_to_arrow_bytes(df: pd.DataFrame) -> bytes:
+        df = df.copy()
+        for col in df.columns:
+            if df[col].dtype == object:
+                converted = pd.to_numeric(df[col], errors="coerce")
+                if converted.notna().sum() > 0:
+                    df[col] = converted
         table = pa.Table.from_pandas(df, preserve_index=False)
         sink = pa.BufferOutputStream()
         writer = pa.ipc.new_stream(sink, table.schema)
@@ -205,11 +211,11 @@ class RedisClient:
             int: TTL saniye cinsinden
         """
         ttl_map = {
-            '1m': 3600,      # 1 saat
-            '5m': 14400,     # 4 saat  
-            '15m': 86400,    # 24 saat
-            '1h': 172800,    # 48 saat
-            '4h': 604800,    # 7 gün
+            '1m': 86400,     # 24 saat
+            '5m': 259200,    # 3 gün
+            '15m': 604800,   # 7 gün
+            '1h': 604800,    # 7 gün
+            '4h': 1209600,   # 14 gün
             '1d': 2592000,   # 30 gün
         }
         return ttl_map.get(timeframe, 3600)  # Default: 1 saat

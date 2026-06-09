@@ -25,6 +25,7 @@ from desktop.panels.chart_panel import ChartPanel
 from desktop.panels.divergence_panel import DivergencePanel
 from desktop.panels.watchlist_panel import WatchlistPanel
 from desktop.theme import COLORS
+from desktop.widgets.log_panel import LogPanel
 from desktop.workers.divergence_worker import DivergenceWorker
 from desktop.workers.health_worker import HealthWorker, ServiceStatus
 from desktop.workers.market_worker import MarketWorker
@@ -257,7 +258,6 @@ class MainWindow(QMainWindow):
             ("signal_feed", "Sinyal Feed",      Qt.DockWidgetArea.RightDockWidgetArea),
             ("performance", "Performans",       Qt.DockWidgetArea.BottomDockWidgetArea),
             ("backtest",    "Backtest Stüdyo",  Qt.DockWidgetArea.BottomDockWidgetArea),
-            ("system",      "Sistem Durumu",    Qt.DockWidgetArea.BottomDockWidgetArea),
         ]
 
         for name, title, area in placeholder_panels:
@@ -270,6 +270,18 @@ class MainWindow(QMainWindow):
                 self.tabifyDockWidget(chart_dock, dock)
             if area == Qt.DockWidgetArea.BottomDockWidgetArea:
                 self.tabifyDockWidget(active_sig_dock, dock)
+
+        # ── Sistem Durumu → Log paneli ────────────────────────────────────
+        self._log_panel = LogPanel(self)
+        log_dock = QDockWidget("Sistem Durumu", self)
+        log_dock.setObjectName("dock_system")
+        log_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        log_dock.setWidget(self._log_panel)
+        log_dock.setMinimumHeight(120)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, log_dock)
+        self.tabifyDockWidget(active_sig_dock, log_dock)
+        self._add_panel_toggle(log_dock)
+        self._docks["system"] = log_dock
 
         chart_dock.raise_()
         active_sig_dock.raise_()
@@ -468,6 +480,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         self._save_layout()
+        self._log_panel.cleanup()
         for w in self._workers:
             w.stop()
         event.accept()
