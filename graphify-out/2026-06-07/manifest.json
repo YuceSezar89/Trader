@@ -1,0 +1,462 @@
+{
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/.claude/settings.local.json": {
+    "mtime": 1780753052.5872762,
+    "ast_hash": "167512d5e67883a81bf004d7f267cc68",
+    "semantic_hash": "167512d5e67883a81bf004d7f267cc68"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/app.py": {
+    "mtime": 1760548227.6477566,
+    "ast_hash": "f4f5cad2b245c21637e2b7a86590f66b",
+    "semantic_hash": "f4f5cad2b245c21637e2b7a86590f66b"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/backtest/__init__.py": {
+    "mtime": 1758473504.337073,
+    "ast_hash": "1b7796d9ae85a2068841b3ecea52f6eb",
+    "semantic_hash": "1b7796d9ae85a2068841b3ecea52f6eb"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/backtest/analyzer.py": {
+    "mtime": 1758484211.5801592,
+    "ast_hash": "28ce0120e6e680141080debc43ed9ee0",
+    "semantic_hash": "28ce0120e6e680141080debc43ed9ee0"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/backtest/engine.py": {
+    "mtime": 1758484626.725527,
+    "ast_hash": "72fb6fa3ceb7c313e9f5b06d73661713",
+    "semantic_hash": "72fb6fa3ceb7c313e9f5b06d73661713"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/backtest/models.py": {
+    "mtime": 1758484152.5078778,
+    "ast_hash": "f7cf0965241cc51eff8f82495c14ce93",
+    "semantic_hash": "f7cf0965241cc51eff8f82495c14ce93"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/backtest/paper_trader.py": {
+    "mtime": 1758484470.7586389,
+    "ast_hash": "5761a8e1be05667b98c6fa0f1df9b167",
+    "semantic_hash": "5761a8e1be05667b98c6fa0f1df9b167"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/backtest/risk_manager.py": {
+    "mtime": 1758473641.124175,
+    "ast_hash": "6d661ee19cf6013101a572c00ae599e7",
+    "semantic_hash": "6d661ee19cf6013101a572c00ae599e7"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/backtest/strategy_tester.py": {
+    "mtime": 1758478824.6242447,
+    "ast_hash": "24aa366ba689fcdcf219bc32f7c455f8",
+    "semantic_hash": "24aa366ba689fcdcf219bc32f7c455f8"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/backtest_ui.py": {
+    "mtime": 1759085543.7583404,
+    "ast_hash": "d41f997b626ebcf5e17d468db3628585",
+    "semantic_hash": "d41f997b626ebcf5e17d468db3628585"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/binance_client.py": {
+    "mtime": 1758658265.8251011,
+    "ast_hash": "99ff7adb9942245f36d086a8ffdbb8ae",
+    "semantic_hash": "99ff7adb9942245f36d086a8ffdbb8ae"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/check_calculated_signals.py": {
+    "mtime": 1760468406.287381,
+    "ast_hash": "5c1dca65bdc17f9ea55a533fe08c494e",
+    "semantic_hash": "5c1dca65bdc17f9ea55a533fe08c494e"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/check_db.py": {
+    "mtime": 1760373977.2859056,
+    "ast_hash": "92c44160909de99078689c658c5d95ee",
+    "semantic_hash": "92c44160909de99078689c658c5d95ee"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/check_db_status.py": {
+    "mtime": 1760375961.729241,
+    "ast_hash": "5e96986274176ab009031c447f40d534",
+    "semantic_hash": "5e96986274176ab009031c447f40d534"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/check_interval_performance.py": {
+    "mtime": 1760467866.6020188,
+    "ast_hash": "483ab0186aabd3579b479dcd996a683e",
+    "semantic_hash": "483ab0186aabd3579b479dcd996a683e"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/check_price_data.py": {
+    "mtime": 1760469113.3722684,
+    "ast_hash": "95a3dcbcd1b467439ba93988d1d849fb",
+    "semantic_hash": "95a3dcbcd1b467439ba93988d1d849fb"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/check_system.sh": {
+    "mtime": 1759077963.0975764,
+    "ast_hash": "5b11eb2fb4fdb297aa4e7518d64c5120",
+    "semantic_hash": "5b11eb2fb4fdb297aa4e7518d64c5120"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/config.py": {
+    "mtime": 1780347507.6508746,
+    "ast_hash": "122e1d9752071ecc160df3a16a071817",
+    "semantic_hash": "122e1d9752071ecc160df3a16a071817"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/dashboard/__init__.py": {
+    "mtime": 1760384174.4943304,
+    "ast_hash": "c32eca4aadd2835fb8fd7f59d28c1093",
+    "semantic_hash": "c32eca4aadd2835fb8fd7f59d28c1093"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/dashboard/signal_performance.py": {
+    "mtime": 1760467405.3268645,
+    "ast_hash": "d1358b73de15b01c574e96f349606310",
+    "semantic_hash": "d1358b73de15b01c574e96f349606310"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/dashboard/signal_performance_old.py": {
+    "mtime": 1760382793.9713936,
+    "ast_hash": "49577847771dd82bb5f33256e1b91db4",
+    "semantic_hash": "49577847771dd82bb5f33256e1b91db4"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/database/__init__.py": {
+    "mtime": 1756119058.093318,
+    "ast_hash": "3277b7852bea20442b353741bc198136",
+    "semantic_hash": "3277b7852bea20442b353741bc198136"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/database/connection_manager.py": {
+    "mtime": 1758140192.4629974,
+    "ast_hash": "b5961d1025580973dc55da72dfa3e6c7",
+    "semantic_hash": "b5961d1025580973dc55da72dfa3e6c7"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/database/crud.py": {
+    "mtime": 1758142601.621185,
+    "ast_hash": "de7d00a17a92bea50860f9d85234b285",
+    "semantic_hash": "de7d00a17a92bea50860f9d85234b285"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/database/engine.py": {
+    "mtime": 1760374364.2040498,
+    "ast_hash": "ebf069be65c8bc989170fd51bdd59cff",
+    "semantic_hash": "ebf069be65c8bc989170fd51bdd59cff"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/database/migrations/005_create_backtest_tables.sql": {
+    "mtime": 1760471790.5666115,
+    "ast_hash": "4f3412d51eeef572f9ddc099509061be",
+    "semantic_hash": "4f3412d51eeef572f9ddc099509061be"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/database/migrations/add_signal_id_primary_key.sql": {
+    "mtime": 1758140192.4636924,
+    "ast_hash": "4b6509072901a59b6e2b73f9ece9b189",
+    "semantic_hash": "4b6509072901a59b6e2b73f9ece9b189"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/database/migrations/add_signal_lifecycle.sql": {
+    "mtime": 1758140192.4638097,
+    "ast_hash": "1fff6656fc5be5fdc3b1b4bc3a8b339e",
+    "semantic_hash": "1fff6656fc5be5fdc3b1b4bc3a8b339e"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/database/migrations/add_signal_performance.sql": {
+    "mtime": 1760377057.4408753,
+    "ast_hash": "fa1375784e21c99f0e3f8c8895de1dc0",
+    "semantic_hash": "fa1375784e21c99f0e3f8c8895de1dc0"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/database/migrations/add_zscore_ratio_percent.sql": {
+    "mtime": 1758310099.7468176,
+    "ast_hash": "c797fa34b1357b93ddd12cf7cfbd7b1d",
+    "semantic_hash": "c797fa34b1357b93ddd12cf7cfbd7b1d"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/database/models.py": {
+    "mtime": 1758310049.38512,
+    "ast_hash": "e067dd96ee3fd98c731ba700e26149d1",
+    "semantic_hash": "e067dd96ee3fd98c731ba700e26149d1"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/indicators/__init__.py": {
+    "mtime": 1751816966.2589962,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/indicators/core.py": {
+    "mtime": 1759083111.8473463,
+    "ast_hash": "a68addc307abf791eef896f686551213",
+    "semantic_hash": "a68addc307abf791eef896f686551213"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/install-mcp-servers.sh": {
+    "mtime": 1758140192.4664676,
+    "ast_hash": "ebbcb5121e574f88cd3641c66194ef20",
+    "semantic_hash": "ebbcb5121e574f88cd3641c66194ef20"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/live_data_manager.py": {
+    "mtime": 1780003208.0861137,
+    "ast_hash": "c4318d9b6cbaddbc0f3fef0027dd478c",
+    "semantic_hash": "c4318d9b6cbaddbc0f3fef0027dd478c"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/migrations/005_auto_signal_performance_trigger.sql": {
+    "mtime": 1760465072.162136,
+    "ast_hash": "45b720dcaf5c39ae515db5ee6fc34930",
+    "semantic_hash": "45b720dcaf5c39ae515db5ee6fc34930"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/pages/__init__.py": {
+    "mtime": 1760382833.261772,
+    "ast_hash": "06dad093eb3dab52378c7187edec0331",
+    "semantic_hash": "06dad093eb3dab52378c7187edec0331"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/run_backtest.py": {
+    "mtime": 1760548768.523572,
+    "ast_hash": "8dac186dcbf805e1d2b02508d25f9067",
+    "semantic_hash": "8dac186dcbf805e1d2b02508d25f9067"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/run_migration_performance.py": {
+    "mtime": 1760374872.2196937,
+    "ast_hash": "693763942b9de5c2617d9dd7f740a3bf",
+    "semantic_hash": "693763942b9de5c2617d9dd7f740a3bf"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/run_mtf_backfill.py": {
+    "mtime": 1758822854.4975646,
+    "ast_hash": "3f6e29e9e09e418ebbd04b5ee5cfb549",
+    "semantic_hash": "3f6e29e9e09e418ebbd04b5ee5cfb549"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/run_performance_update.py": {
+    "mtime": 1780342871.729395,
+    "ast_hash": "9ffeaf00ff3070199c52c6daabf32c6e",
+    "semantic_hash": "9ffeaf00ff3070199c52c6daabf32c6e"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/run_services.py": {
+    "mtime": 1780346513.7588255,
+    "ast_hash": "d91c4d984021742a7659ebfae5d670ef",
+    "semantic_hash": "d91c4d984021742a7659ebfae5d670ef"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/run_tests.sh": {
+    "mtime": 1760375365.3949518,
+    "ast_hash": "6df5ffbf3c1deeb6d9d89f3d7d739e15",
+    "semantic_hash": "6df5ffbf3c1deeb6d9d89f3d7d739e15"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/scripts/__init__.py": {
+    "mtime": 1760465155.3493361,
+    "ast_hash": "66389b7544cc6bdaa6967765055af444",
+    "semantic_hash": "66389b7544cc6bdaa6967765055af444"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/scripts/analyze_signal_performance.py": {
+    "mtime": 1780342078.576755,
+    "ast_hash": "74822b01f2fd45e2e91e50c023b3196e",
+    "semantic_hash": "74822b01f2fd45e2e91e50c023b3196e"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/scripts/backfill_signal_performance_records.py": {
+    "mtime": 1760468007.2081163,
+    "ast_hash": "f7d61a2916e5180ccf93e377b78439d0",
+    "semantic_hash": "f7d61a2916e5180ccf93e377b78439d0"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/scripts/daily_performance_update.sh": {
+    "mtime": 1760465324.8045602,
+    "ast_hash": "1fddc56d87893711147090cf3006bf5c",
+    "semantic_hash": "1fddc56d87893711147090cf3006bf5c"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/scripts/signal_summary.py": {
+    "mtime": 1780342281.9813638,
+    "ast_hash": "96022bdc59343131431a2674abe6ec04",
+    "semantic_hash": "96022bdc59343131431a2674abe6ec04"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/scripts/top50_signal_performance_summary.py": {
+    "mtime": 1780347314.9412782,
+    "ast_hash": "518f1469ad2529f8133b0aa7fa8f1800",
+    "semantic_hash": "518f1469ad2529f8133b0aa7fa8f1800"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/scripts/update_performance_by_interval.py": {
+    "mtime": 1760468801.9416852,
+    "ast_hash": "79f8d7cb099415ecd5e6d04ea757f385",
+    "semantic_hash": "79f8d7cb099415ecd5e6d04ea757f385"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/scripts/update_signal_performance.py": {
+    "mtime": 1760465394.1946998,
+    "ast_hash": "09693d6d00b339662b42fdd348341de8",
+    "semantic_hash": "09693d6d00b339662b42fdd348341de8"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/setup-precommit.sh": {
+    "mtime": 1758140192.467804,
+    "ast_hash": "e404b4bcc1d267adc905d6614b7861f9",
+    "semantic_hash": "e404b4bcc1d267adc905d6614b7861f9"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/signals/__init__.py": {
+    "mtime": 1751816966.2641232,
+    "ast_hash": "d402d7000f1d1fbba58e82a65961f4e7",
+    "semantic_hash": "d402d7000f1d1fbba58e82a65961f4e7"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/signals/active_signal_tracker.py": {
+    "mtime": 1758827322.4194877,
+    "ast_hash": "4202571ca4c87b60482bee7a90e89528",
+    "semantic_hash": "4202571ca4c87b60482bee7a90e89528"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/signals/c20mx_core.py": {
+    "mtime": 1758140192.4683034,
+    "ast_hash": "f71e993cd531b7fb20df39fcc19d23e6",
+    "semantic_hash": "f71e993cd531b7fb20df39fcc19d23e6"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/signals/signal_engine.py": {
+    "mtime": 1759178465.2092125,
+    "ast_hash": "9a91645340026599318be666c09865ca",
+    "semantic_hash": "9a91645340026599318be666c09865ca"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/signals/signal_lifecycle_manager.py": {
+    "mtime": 1758658424.0687644,
+    "ast_hash": "366c88ebde033736aca7a843dc5a1c42",
+    "semantic_hash": "366c88ebde033736aca7a843dc5a1c42"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/signals/signal_processor.py": {
+    "mtime": 1760470563.9914818,
+    "ast_hash": "ec15062518d7bec1fe28adca8b7c3ef2",
+    "semantic_hash": "ec15062518d7bec1fe28adca8b7c3ef2"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/tests/__init__.py": {
+    "mtime": 1758725704.124422,
+    "ast_hash": "fb7c4d86ab6736f5b575833dde0fe969",
+    "semantic_hash": "fb7c4d86ab6736f5b575833dde0fe969"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/tests/conftest.py": {
+    "mtime": 1760375725.3817134,
+    "ast_hash": "891ea1f9c6afe66bb473035e633600aa",
+    "semantic_hash": "891ea1f9c6afe66bb473035e633600aa"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/tests/test_aggregation.py": {
+    "mtime": 1758724507.0444348,
+    "ast_hash": "4be6203fd28350eaddf0692d8deac10a",
+    "semantic_hash": "4be6203fd28350eaddf0692d8deac10a"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/tests/test_live_mtf.py": {
+    "mtime": 1758737175.3965642,
+    "ast_hash": "8217dc2549e7f0a071f072d92d58b21c",
+    "semantic_hash": "8217dc2549e7f0a071f072d92d58b21c"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/tests/test_mtf_aggregation.py": {
+    "mtime": 1758736972.7782907,
+    "ast_hash": "b02be5ac79101555a1d7fda18630bc6b",
+    "semantic_hash": "b02be5ac79101555a1d7fda18630bc6b"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/tests/test_mtf_integration.py": {
+    "mtime": 1758726152.424662,
+    "ast_hash": "703598f57c511e25f18fb8cddc3cb8ff",
+    "semantic_hash": "703598f57c511e25f18fb8cddc3cb8ff"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/tests/test_mtf_live_manager.py": {
+    "mtime": 1758729703.8694515,
+    "ast_hash": "1cb244261658349a3eac0c5a9f3c960d",
+    "semantic_hash": "1cb244261658349a3eac0c5a9f3c960d"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/tests/test_mtf_redis.py": {
+    "mtime": 1758725247.1714664,
+    "ast_hash": "d16d4ec43ca989b947fbe1bfe4a39d02",
+    "semantic_hash": "d16d4ec43ca989b947fbe1bfe4a39d02"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/tests/test_redis_mtf_cache.py": {
+    "mtime": 1758816161.429376,
+    "ast_hash": "3ff6a6034d7ce82b8ddfe360b00f8107",
+    "semantic_hash": "3ff6a6034d7ce82b8ddfe360b00f8107"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/tests/test_signal_lifecycle.py": {
+    "mtime": 1758140192.469117,
+    "ast_hash": "a44b7456a94328d867357dc18ea259b8",
+    "semantic_hash": "a44b7456a94328d867357dc18ea259b8"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/tests/test_signal_performance.py": {
+    "mtime": 1760377288.5015707,
+    "ast_hash": "cb0335b9965d8a6b7ec8030950340d28",
+    "semantic_hash": "cb0335b9965d8a6b7ec8030950340d28"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/tests/test_timeframe_aggregator.py": {
+    "mtime": 1758725871.37971,
+    "ast_hash": "d9748fbb55ed799df62e6c8e54b7db57",
+    "semantic_hash": "d9748fbb55ed799df62e6c8e54b7db57"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/tests/test_vpm_calculator.py": {
+    "mtime": 1760470413.0059118,
+    "ast_hash": "2b5f26950b5a34b2755c79c8358968df",
+    "semantic_hash": "2b5f26950b5a34b2755c79c8358968df"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/utils/__init__.py": {
+    "mtime": 1753021264.4801202,
+    "ast_hash": "5ec64b3cd6379a2f2cd13f8a063c49b3",
+    "semantic_hash": "5ec64b3cd6379a2f2cd13f8a063c49b3"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/utils/bar_counter.py": {
+    "mtime": 1758140192.4693246,
+    "ast_hash": "bd0212efd6fc0b4ae602b4f74764199f",
+    "semantic_hash": "bd0212efd6fc0b4ae602b4f74764199f"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/utils/data_provider.py": {
+    "mtime": 1758140192.4694157,
+    "ast_hash": "b69eba6284fe6d152623b8bcfc734b9a",
+    "semantic_hash": "b69eba6284fe6d152623b8bcfc734b9a"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/utils/exceptions.py": {
+    "mtime": 1758140192.4695024,
+    "ast_hash": "a449109ddb1c38c72d04c7e18986b98d",
+    "semantic_hash": "a449109ddb1c38c72d04c7e18986b98d"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/utils/financial_metrics.py": {
+    "mtime": 1758310036.391514,
+    "ast_hash": "9e2da919f364074e7e4df621e417499a",
+    "semantic_hash": "9e2da919f364074e7e4df621e417499a"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/utils/logger.py": {
+    "mtime": 1780002151.7521882,
+    "ast_hash": "2d97fe7133f8f38a4c9f371f533fd7f6",
+    "semantic_hash": "2d97fe7133f8f38a4c9f371f533fd7f6"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/utils/mtf_backfill.py": {
+    "mtime": 1760470092.0720398,
+    "ast_hash": "82d77369929e9e3f6c9d91e01fcb0857",
+    "semantic_hash": "82d77369929e9e3f6c9d91e01fcb0857"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/utils/preprocessing.py": {
+    "mtime": 1758140192.4698582,
+    "ast_hash": "69746032f3b17e16b4404b59b82bac95",
+    "semantic_hash": "69746032f3b17e16b4404b59b82bac95"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/utils/redis_client.py": {
+    "mtime": 1759774761.4857764,
+    "ast_hash": "e3b985197ea8e0bb58542d87a9099a56",
+    "semantic_hash": "e3b985197ea8e0bb58542d87a9099a56"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/utils/signal_performance_analyzer.py": {
+    "mtime": 1780342856.7224565,
+    "ast_hash": "c9a0538cb8fbf98e52f8e3154be8ce98",
+    "semantic_hash": "c9a0538cb8fbf98e52f8e3154be8ce98"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/utils/simple_backtest.py": {
+    "mtime": 1760548801.3775947,
+    "ast_hash": "3e4e08b1f65334b618e39abfdc31902f",
+    "semantic_hash": "3e4e08b1f65334b618e39abfdc31902f"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/utils/timeframe_aggregator.py": {
+    "mtime": 1759084613.0395565,
+    "ast_hash": "5aa57bd664ad7b441de9d3d390921145",
+    "semantic_hash": "5aa57bd664ad7b441de9d3d390921145"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/utils/vpm_calculator.py": {
+    "mtime": 1780079447.2750711,
+    "ast_hash": "f78d49875161b1d2d50fefdea1ff9ce1",
+    "semantic_hash": "f78d49875161b1d2d50fefdea1ff9ce1"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/.github/workflows/ci.yml": {
+    "mtime": 1758140192.4608421,
+    "ast_hash": "76f6fba8ed84f685bbbdf2aae0c08acf",
+    "semantic_hash": "76f6fba8ed84f685bbbdf2aae0c08acf"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/.pre-commit-config.yaml": {
+    "mtime": 1758140192.4616005,
+    "ast_hash": "fb69ac7a20350f016cbcc7f52e35c0ea",
+    "semantic_hash": "fb69ac7a20350f016cbcc7f52e35c0ea"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/ROADMAP.txt": {
+    "mtime": 1758728109.2238529,
+    "ast_hash": "5faa90c9c27558216ff7d2e11d25cc78",
+    "semantic_hash": "5faa90c9c27558216ff7d2e11d25cc78"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/requirements-dev.txt": {
+    "mtime": 1758140192.46719,
+    "ast_hash": "94e8819e74ac8e2ad0207188a0d10a69",
+    "semantic_hash": "94e8819e74ac8e2ad0207188a0d10a69"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/requirements-test.txt": {
+    "mtime": 1758726032.1223197,
+    "ast_hash": "bf8ea50cb81cdf4803263aa78dee98fc",
+    "semantic_hash": "bf8ea50cb81cdf4803263aa78dee98fc"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/requirements.txt": {
+    "mtime": 1758140192.4673615,
+    "ast_hash": "572f6c26a068f4ba042a24ef4c4a5d8b",
+    "semantic_hash": "572f6c26a068f4ba042a24ef4c4a5d8b"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/userlist.txt": {
+    "mtime": 1758140192.4692116,
+    "ast_hash": "8bb059623b37fbef311b58e5cd105b87",
+    "semantic_hash": "8bb059623b37fbef311b58e5cd105b87"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/utils/sorgu.txt": {
+    "mtime": 1780346126.676146,
+    "ast_hash": "d8022326bd7078c0921981faa244f53d",
+    "semantic_hash": "d8022326bd7078c0921981faa244f53d"
+  }
+}
