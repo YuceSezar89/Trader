@@ -258,7 +258,10 @@ class RedisClient:
         try:
             key = cls._get_mtf_key(symbol, timeframe, "live_kline_data")
             ttl = cls._get_ttl_for_timeframe(timeframe)
-            
+
+            if "open_time" in df.columns and df["open_time"].duplicated().any():
+                df = df.drop_duplicates(subset=["open_time"], keep="last")
+
             await cls.set_df(key, df, ex=ttl)
             await cls.publish_kline_update(symbol, timeframe)
             logger.debug(f"MTF klines cache'lendi: {key} (TTL: {ttl}s)")

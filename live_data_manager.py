@@ -437,8 +437,10 @@ class LiveDataManager:
                 "taker_buy_quote_asset_volume": float(kline_data["Q"]),
             }
             limit = self.mtf_buffer_limits.get(interval, 100)
+            tick_open_time = tick_row["open_time"]
+            base = buf[buf["open_time"] != tick_open_time] if "open_time" in buf.columns else buf
             merged = pd.concat(
-                [buf, pd.DataFrame([tick_row])], ignore_index=True
+                [base, pd.DataFrame([tick_row])], ignore_index=True
             ).tail(limit)
             await RedisClient.set_mtf_klines(symbol, interval, merged)
             await RedisClient.publish_kline_update(symbol, interval)
@@ -474,9 +476,12 @@ class LiveDataManager:
             # MTF buffer'a ekle (her timeframe için ayrı buffer)
             if self.mtf_enabled and symbol in self.mtf_buffers:
                 new_df = pd.DataFrame([new_row])
+                existing = self.mtf_buffers[symbol][interval]
+                if "open_time" in existing.columns:
+                    existing = existing[existing["open_time"] != new_row["open_time"]]
                 self.mtf_buffers[symbol][interval] = pd.concat(
-                    [self.mtf_buffers[symbol][interval], new_df], ignore_index=True
-                )
+                    [existing, new_df], ignore_index=True
+                ).drop_duplicates(subset=["open_time"], keep="last")
 
                 # Apply buffer limit
                 limit = self.mtf_buffer_limits.get(interval, 100)
@@ -868,7 +873,7 @@ class LiveDataManager:
                 # Önce Redis cache'e bak (7 günlük TTL — sistem kısa süreli restart'ta sıfırdan çekmez)
                 cached_df = await RedisClient.get_mtf_klines(symbol, tf, limit=limit)
                 if cached_df is not None and len(cached_df) >= limit // 2:
-                    self.mtf_buffers[symbol][tf] = cached_df
+                    self.mtf_buffers[symbol][tf] = cached_df.drop_duplicates(subset=["open_time"], keep="last")
                     loaded_count += 1
                     logger.debug(f"[{symbol}] {tf}: Redis cache'den yüklendi ({len(cached_df)} bar)")
                     continue
@@ -878,7 +883,7 @@ class LiveDataManager:
                 if db_df is not None and len(db_df) >= limit // 2:
                     df_ind = await asyncio.to_thread(add_all_indicators, db_df)
                     buf_limit = self.mtf_buffer_limits.get(tf, 250)
-                    self.mtf_buffers[symbol][tf] = df_ind.tail(buf_limit)
+                    self.mtf_buffers[symbol][tf] = df_ind.tail(buf_limit).drop_duplicates(subset=["open_time"], keep="last")
                     await RedisClient.set_mtf_klines(symbol, tf, self.mtf_buffers[symbol][tf])
                     loaded_count += 1
                     logger.debug(f"[{symbol}] {tf}: DB'den yüklendi ({len(db_df)} bar)")
@@ -904,7 +909,7 @@ class LiveDataManager:
                 if not df.empty:
                     df_with_indicators = await asyncio.to_thread(add_all_indicators, df)
                     buffer_limit = self.mtf_buffer_limits.get(tf, 250)
-                    self.mtf_buffers[symbol][tf] = df_with_indicators.tail(buffer_limit)
+                    self.mtf_buffers[symbol][tf] = df_with_indicators.tail(buffer_limit).drop_duplicates(subset=["open_time"], keep="last")
                     await RedisClient.set_mtf_klines(symbol, tf, self.mtf_buffers[symbol][tf])
                     loaded_count += 1
                     logger.debug(f"[{symbol}] {tf}: Binance'ten çekildi ({len(df)} bar)")

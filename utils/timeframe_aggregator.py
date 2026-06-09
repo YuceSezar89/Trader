@@ -235,7 +235,8 @@ class TimeframeAggregator:
             for col in optional_columns:
                 if col in group_data.columns:
                     if col == 'close_time':
-                        agg_bar[col] = int(group_data[col].iloc[-1])  # Son bar'ın close_time'ı
+                        val = group_data[col].iloc[-1]
+                        agg_bar[col] = int(val) if pd.notna(val) else 0
                     elif col in volume_columns:
                         # Önce numeric'e çevir, sonra topla
                         numeric_values = pd.to_numeric(group_data[col], errors='coerce').fillna(0)
