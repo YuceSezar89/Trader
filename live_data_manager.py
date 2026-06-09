@@ -483,8 +483,8 @@ class LiveDataManager:
                 self.mtf_buffers[symbol][interval] = self.mtf_buffers[symbol][interval].tail(limit)
 
                 # Add indicators
-                self.mtf_buffers[symbol][interval] = add_all_indicators(
-                    self.mtf_buffers[symbol][interval]
+                self.mtf_buffers[symbol][interval] = await asyncio.to_thread(
+                    add_all_indicators, self.mtf_buffers[symbol][interval]
                 )
 
                 # Cache to Redis
@@ -734,9 +734,8 @@ class LiveDataManager:
 
                 if not aggregated_df.empty:
                     limit = self.mtf_buffer_limits.get(target_tf, 100)
-                    self.mtf_buffers[symbol][target_tf] = add_all_indicators(
-                        aggregated_df.tail(limit)
-                    )
+                    result = await asyncio.to_thread(add_all_indicators, aggregated_df.tail(limit))
+                    self.mtf_buffers[symbol][target_tf] = result
                     logger.debug(f"[{symbol}] {target_tf}: {len(aggregated_df)} bar aggregated")
 
             # Sadece aggregate edilen TF'leri Redis'e yaz (4h/1d'yi ezme)

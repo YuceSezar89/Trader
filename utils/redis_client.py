@@ -1,6 +1,8 @@
 import asyncio
+import functools
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from io import StringIO
 from typing import Any, Dict, List, Optional, Union
 
@@ -13,6 +15,7 @@ from config import Config
 logger = logging.getLogger(__name__)
 
 _ARROW_MAGIC = b"ARDF"
+_ARROW_EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="arrow")
 
 
 class RedisClient:
@@ -69,14 +72,12 @@ class RedisClient:
         loop_id = id(loop)
 
         if loop_id not in cls._binary_pools:
-            cls._binary_pools[loop_id] = redis.BlockingConnectionPool.from_url(
+            cls._binary_pools[loop_id] = redis.ConnectionPool.from_url(
                 Config.REDIS_URL,
                 decode_responses=False,
-                max_connections=50,
-                timeout=3,
+                max_connections=100,
                 socket_keepalive=True,
                 socket_connect_timeout=5,
-                retry_on_timeout=True
             )
         return cls._binary_pools[loop_id]
 
@@ -121,7 +122,8 @@ class RedisClient:
         async with sem:
             r = cls._get_binary_client()
             try:
-                arrow_bytes = await asyncio.to_thread(cls._df_to_arrow_bytes, df)
+                loop = asyncio.get_running_loop()
+                arrow_bytes = await loop.run_in_executor(_ARROW_EXECUTOR, cls._df_to_arrow_bytes, df)
                 await r.set(key, arrow_bytes, ex=ex)
                 logger.debug(f"DataFrame Redis'e yazıldı (Arrow). Anahtar: {key}")
             except Exception as e:
@@ -156,11 +158,15 @@ class RedisClient:
             if not data:
                 return None
             logger.debug(f"DataFrame Redis'ten okundu. Anahtar: {key}")
+            loop = asyncio.get_running_loop()
             if isinstance(data, bytes) and data.startswith(_ARROW_MAGIC):
-                df = await asyncio.to_thread(cls._arrow_bytes_to_df, data)
+                df = await loop.run_in_executor(_ARROW_EXECUTOR, cls._arrow_bytes_to_df, data)
             else:
                 text = data.decode("utf-8") if isinstance(data, bytes) else data
-                df = await asyncio.to_thread(pd.read_json, StringIO(text), orient="split")
+                df = await loop.run_in_executor(
+                    _ARROW_EXECUTOR,
+                    functools.partial(pd.read_json, StringIO(text), orient="split")
+                )
                 if "open_time" in df.columns and pd.api.types.is_integer_dtype(df["open_time"]):
                     df["open_time"] = pd.to_datetime(df["open_time"], unit="ms")
             return df
