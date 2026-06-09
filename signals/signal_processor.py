@@ -87,7 +87,7 @@ async def process_and_enrich_signals(
     # 2. Teknik Sinyalleri Hesapla
     try:
         logger.info(f"[{symbol}] Teknik sinyal hesaplama başlatılıyor...")
-        technical_signals = await signal_engine.calculate_all_signals(df)
+        technical_signals = await signal_engine.calculate_all_signals(df, symbol=symbol, interval=interval)
         logger.info(f"[{symbol}] Teknik sinyal hesaplama tamamlandı - {len(technical_signals) if technical_signals else 0} tür")
     except Exception as e:
         logger.error(f"[{symbol}] Teknik sinyal hatası: {e}", exc_info=True)

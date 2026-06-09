@@ -19,6 +19,7 @@ from utils.logger import get_logger
 from utils.exceptions import ValidationError, CalculationError
 from config import Config
 from indicators.core import calculate_rsi
+from signals.signal_filter import SignalFilter
 
 # Eşik değerlerini merkezi yapılandırmadan al
 RSI_THRESHOLDS = Config.RSI_THRESHOLDS
@@ -43,6 +44,7 @@ class SignalEngine:
 
     def __init__(self):
         self.logger = get_logger(self.__class__.__name__)
+        self._filter = SignalFilter()
 
     def _validate_dataframe(
         self, df: pd.DataFrame, required_cols: List[str], min_len: int = 2
@@ -196,7 +198,9 @@ class SignalEngine:
 
         return [signal_data]
 
-    async def rsi_crossover_signal(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
+    async def rsi_crossover_signal(
+        self, df: pd.DataFrame, symbol: str = "", interval: str = ""
+    ) -> List[Dict[str, Any]]:
         fast_len = Config.RSI_FAST_WINDOW
         slow_len = Config.RSI_SLOW_WINDOW
         """RSI crossover sinyalini hesaplar ve standart formatta döndürür.
@@ -235,57 +239,76 @@ class SignalEngine:
             signal_type = "Short"
 
         if signal_type:
-            # Çıktıyı kapanmış bara göre üretmek için DF'i son açık barı atarak gönder
+            indicator_key = f"RSI_Cross({fast_len},{slow_len})"
+            high = float(df[COL_HIGH].iloc[-2])
+            low  = float(df[COL_LOW].iloc[-2])
+            if symbol and interval and not self._filter.check(
+                signal_type, high, low, symbol, interval, indicator_key
+            ):
+                self.logger.info(
+                    f"[{symbol}] {interval} {signal_type} filtreden geçemedi ({indicator_key})"
+                )
+                return []
             return self._create_signal_output(
                 df=df.iloc[:-1],
                 signal_type=signal_type,
-                indicators=f"RSI_Cross({fast_len},{slow_len})",
+                indicators=indicator_key,
                 strength=1,
             )
         return []
 
-    async def ma200_crossover_signal(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
+    async def ma200_crossover_signal(
+        self, df: pd.DataFrame, symbol: str = "", interval: str = ""
+    ) -> List[Dict[str, Any]]:
         """MA200 ve fiyat kesişimini kontrol eder (TradingView basit crossover mantığı).
-        
+
         TradingView ta.crossover/crossunder mantığı:
         - Sadece close fiyatlarının kesişimine bakar
         - Önceki close bir tarafta, şimdiki close diğer tarafta
         """
         required_cols = [COL_CLOSE, COL_MA200, "open_time"]
-        # Kapalı mum üzerinde çalış: son açık mumu at
         if len(df) < 3:
             return []
         df_closed = df.iloc[:-1]
         if not self._validate_dataframe(df_closed, required_cols):
             return []
 
-        # Önceki ve şimdiki bar
         prev = df_closed.iloc[-2]
         curr = df_closed.iloc[-1]
-        
+
         signal_type = ""
-        # Basit crossover kontrolü (TradingView ta.crossover/crossunder)
-        # Yukarı kesişim: önceki close altında, şimdi üstte
         if prev[COL_CLOSE] < prev[COL_MA200] and curr[COL_CLOSE] > curr[COL_MA200]:
             signal_type = "Long"
-        # Aşağı kesişim: önceki close üstte, şimdi altında
         elif prev[COL_CLOSE] > prev[COL_MA200] and curr[COL_CLOSE] < curr[COL_MA200]:
             signal_type = "Short"
 
         if signal_type:
+            indicator_key = "MA200_Cross"
+            high = float(curr[COL_HIGH])
+            low  = float(curr[COL_LOW])
+            if symbol and interval and not self._filter.check(
+                signal_type, high, low, symbol, interval, indicator_key
+            ):
+                self.logger.info(
+                    f"[{symbol}] {interval} {signal_type} filtreden geçemedi ({indicator_key})"
+                )
+                return []
             return self._create_signal_output(
-                df=df_closed, signal_type=signal_type, indicators="MA200_Cross", strength=1
+                df=df_closed, signal_type=signal_type, indicators=indicator_key, strength=1
             )
         return []
 
     async def calculate_all_signals(
-        self, df: pd.DataFrame, signal_types: Optional[List[str]] = None
+        self,
+        df: pd.DataFrame,
+        symbol: str = "",
+        interval: str = "",
+        signal_types: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Tüm sinyal türlerini hesaplar ve birleştirilmiş sonuç döndürür.
         Daha sağlam ve genişletilebilir görev yönetimi kullanır.
         """
-        # `method(df)` bir Coroutine döndürdüğü için Callable tanımını güncelledik.
         signal_methods: Dict[
             str, Callable[[pd.DataFrame], Coroutine[Any, Any, Any]]
         ] = {
@@ -295,14 +318,12 @@ class SignalEngine:
 
         active_signals: List[str]
         if signal_types is None:
-            # Tür uyumluluğu için dict_keys'i listeye çeviriyoruz.
             active_signals = list(signal_methods.keys())
         else:
             active_signals = [st for st in signal_types if st in signal_methods]
 
-        # `tasks` için tür tanımı eklendi.
         tasks: Dict[str, asyncio.Task] = {
-            name: asyncio.create_task(method(df))
+            name: asyncio.create_task(method(df, symbol, interval))
             for name, method in signal_methods.items()
             if name in active_signals
         }
