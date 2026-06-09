@@ -184,6 +184,22 @@ function loadData(candlesJson, emaJson, volJson, rsiJson, attempt) {{
     console.log('loadData error:', e.message);
   }}
 }}
+
+function updateLastBar(candleJson, emaJson, volJson, rsiJson) {{
+  if (!window._chartReady || !candleSeries) return;
+  try {{
+    const candle = JSON.parse(candleJson);
+    const ema    = JSON.parse(emaJson);
+    const vol    = JSON.parse(volJson);
+    const rsi    = JSON.parse(rsiJson);
+    candleSeries.update(candle);
+    emaSeries.update(ema);
+    volSeries.update(vol);
+    if (rsi !== null) rsiSeries.update(rsi);
+  }} catch(e) {{
+    console.log('updateLastBar error:', e.message);
+  }}
+}}
 </script>
 </body>
 </html>
@@ -252,6 +268,24 @@ class TVChart(QWebEngineView):
             self._pending_df = (df, symbol, tf)
             return
         self._send_data(df, symbol, tf)
+
+    def update_last_bar(self, df: pd.DataFrame) -> None:
+        """Sadece son mumu günceller — fitContent çağırmaz, zoom/pan korunur."""
+        if df is None or df.empty or not self._ready:
+            return
+        candles, ema_data, vol_data, rsi_data = self._prepare(df)
+        candle = candles[-1]
+        ema    = ema_data[-1]
+        vol    = vol_data[-1]
+        rsi    = rsi_data[-1] if rsi_data else None
+        js = (
+            f"updateLastBar("
+            f"{json.dumps(json.dumps(candle))},"
+            f"{json.dumps(json.dumps(ema))},"
+            f"{json.dumps(json.dumps(vol))},"
+            f"{json.dumps(json.dumps(rsi))})"
+        )
+        self.page().runJavaScript(js)
 
     def _send_data(self, df: pd.DataFrame, symbol: str, tf: str) -> None:
         candles, ema_data, vol_data, rsi_data = self._prepare(df)

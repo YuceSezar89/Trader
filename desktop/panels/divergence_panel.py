@@ -58,8 +58,8 @@ class DivergencePanel(QWidget):  # pylint: disable=too-many-instance-attributes
         self._color_map: dict[str, str] = {}
         self._color_cycle = cycle(_PALETTE)
         self._plot: pg.PlotWidget
-        self._curves: list
-        self._labels: list
+        self._curves: dict[str, pg.PlotCurveItem]
+        self._labels: dict[str, pg.TextItem]
         self._avg_pos_line: pg.InfiniteLine
         self._avg_neg_line: pg.InfiniteLine
         self._setup_ui()
@@ -120,8 +120,8 @@ class DivergencePanel(QWidget):  # pylint: disable=too-many-instance-attributes
         self._plot.setBackground(COLORS["bg_primary"])
         self._plot.setLabel("left", "Z-score", color=COLORS["text_muted"])
         self._plot.showGrid(x=False, y=True, alpha=0.12)
-        self._curves = []
-        self._labels = []
+        self._curves = {}
+        self._labels = {}
 
         dash = Qt.PenStyle.DashLine
         dot = Qt.PenStyle.DotLine
@@ -250,15 +250,19 @@ class DivergencePanel(QWidget):  # pylint: disable=too-many-instance-attributes
         self._table.setSortingEnabled(True)
 
     def _populate_chart(self, series: dict, current: dict, timestamps: dict) -> None:
-        for item in self._curves + self._labels:
-            self._plot.removeItem(item)
-        self._curves.clear()
-        self._labels.clear()
-
         if not series:
+            for sym in list(self._curves):
+                self._plot.removeItem(self._curves.pop(sym))
+                self._plot.removeItem(self._labels.pop(sym))
             self._avg_pos_line.setVisible(False)
             self._avg_neg_line.setVisible(False)
             return
+
+        # Artık olmayan sembolleri temizle
+        for sym in list(self._curves):
+            if sym not in series:
+                self._plot.removeItem(self._curves.pop(sym))
+                self._plot.removeItem(self._labels.pop(sym))
 
         for symbol, z_arr in series.items():
             ts = timestamps.get(symbol)
@@ -270,24 +274,28 @@ class DivergencePanel(QWidget):  # pylint: disable=too-many-instance-attributes
             abs_z = abs(current.get(symbol, 0.0))
             width = 2.5 if abs_z >= 2.0 else (1.8 if abs_z >= 1.0 else 1.0)
 
-            curve = pg.PlotCurveItem(
-                x=xs, y=z_arr.tolist(),
-                pen=pg.mkPen(color, width=width),
-            )
-            self._plot.addItem(curve)
-            self._curves.append(curve)
+            if symbol in self._curves:
+                self._curves[symbol].setData(x=xs, y=z_arr.tolist())
+                self._curves[symbol].setPen(pg.mkPen(color, width=width))
+                self._labels[symbol].setPos(xs[-1], float(z_arr[-1]))
+            else:
+                curve = pg.PlotCurveItem(
+                    x=xs, y=z_arr.tolist(),
+                    pen=pg.mkPen(color, width=width),
+                )
+                self._plot.addItem(curve)
+                self._curves[symbol] = curve
 
-            # Sağ uca sembol etiketi
-            lbl = pg.TextItem(
-                text=symbol.replace("USDT", ""),
-                color=color,
-                anchor=(0.0, 0.5),
-            )
-            lbl.setFont(QFont("Monospace", 8))
-            lbl.setPos(xs[-1], float(z_arr[-1]))
-            lbl.setZValue(15)
-            self._plot.addItem(lbl)
-            self._labels.append(lbl)
+                lbl = pg.TextItem(
+                    text=symbol.replace("USDT", ""),
+                    color=color,
+                    anchor=(0.0, 0.5),
+                )
+                lbl.setFont(QFont("Monospace", 8))
+                lbl.setPos(xs[-1], float(z_arr[-1]))
+                lbl.setZValue(15)
+                self._plot.addItem(lbl)
+                self._labels[symbol] = lbl
 
         # Ortalama çizgileri
         pos_vals = [v for v in current.values() if v > 0]

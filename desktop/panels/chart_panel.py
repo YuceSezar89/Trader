@@ -199,7 +199,7 @@ class ChartPanel(QWidget):  # pylint: disable=too-many-instance-attributes
             return
         df_norm = self._normalize_df(df.tail(_LIMIT))
         if df_norm is not None:
-            self._chart.load_df(df_norm, symbol, tf)
+            self._chart.update_last_bar(df_norm)
             self._price_label.setText(f"{float(df_norm['close'].iloc[-1]):,.4f}")
 
     @pyqtSlot(str)
