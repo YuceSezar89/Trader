@@ -66,10 +66,10 @@ class Config:
     MTF_BUFFER_LIMITS = {
         '1m': 1000,   # 16+ hours of 1m data
         '5m': 300,    # 25 hours of 5m data
-        '15m': 100,   # 25 hours of 15m data
-        '1h': 48,     # 48 hours of 1h data
-        '4h': 30,     # 5 days of 4h data
-        '1d': 30      # 30 days of 1d data
+        '15m': 250,   # MA200 warm-up + headroom
+        '1h': 250,    # MA200 warm-up + headroom
+        '4h': 250,    # MA200 warm-up + headroom
+        '1d': 250,    # MA200 warm-up + headroom
     }
 
     # WebSocket per-connection stream limit (tunable)

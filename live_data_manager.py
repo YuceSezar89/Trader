@@ -186,7 +186,6 @@ class LiveDataManager:
             start_time = last_timestamp + 1 if last_timestamp else None
 
             if start_time:
-                # start_time bir sonraki ms olduğundan, görüntüleme için 1 ms geri alıyoruz
                 logger.info(
                     f"[{symbol}] Son kayıt: {pd.to_datetime(start_time - 1, unit='ms')}. Eksik veriler çekiliyor..."
                 )
@@ -195,37 +194,41 @@ class LiveDataManager:
                     f"[{symbol}] Veritabanında kayıt bulunamadı. Son 1500 mum çekiliyor..."
                 )
 
-            # Hızlı retry mekanizması - sadece gerçekten gerektiğinde
-            max_retries = 2  # Daha az retry
-            for attempt in range(max_retries):
-                try:
-                    df_missing = await BinanceClientManager.fetch_klines(
-                        symbol=symbol,
-                        interval=self.interval,
-                        limit=1500,
-                        startTime=start_time,
-                    )
-                    break  # Başarılı ise döngüden çık
-                except BinanceAPIError as e:
-                    if "Timeout" in str(e) and attempt < max_retries - 1:
-                        wait_time = 0.5  # Sabit kısa bekleme
-                        logger.warning(
-                            f"[{symbol}] Timeout hatası, {wait_time}s sonra tekrar denenecek (attempt {attempt + 1}/{max_retries})"
+            total_inserted = 0
+            while True:
+                max_retries = 2
+                for attempt in range(max_retries):
+                    try:
+                        df_missing = await BinanceClientManager.fetch_klines(
+                            symbol=symbol,
+                            interval=self.interval,
+                            limit=1500,
+                            startTime=start_time,
                         )
-                        await asyncio.sleep(wait_time)
-                        continue
-                    else:
-                        raise  # Son deneme veya farklı hata ise exception'ı fırlat
+                        break
+                    except BinanceAPIError as e:
+                        if "Timeout" in str(e) and attempt < max_retries - 1:
+                            await asyncio.sleep(0.5)
+                            continue
+                        raise
 
-            if not df_missing.empty:
-                logger.info(
-                    f"[{symbol}] {len(df_missing)} adet yeni mum verisi bulundu. Veritabanına kaydediliyor..."
-                )
-                # İndikatör hesaplamadan doğrudan ham veriyi kaydet
+                if df_missing.empty:
+                    break
+
                 async with self.db_lock:
                     await bulk_insert_price_data(
                         symbol, df_missing, interval=self.interval
                     )
+                total_inserted += len(df_missing)
+                logger.info(f"[{symbol}] {len(df_missing)} mum kaydedildi (toplam: {total_inserted})")
+
+                if len(df_missing) < 1500:
+                    break
+
+                start_time = int(df_missing["open_time"].iloc[-1]) + 1
+
+            if total_inserted:
+                logger.info(f"[{symbol}] Senkronizasyon tamamlandı: {total_inserted} mum eklendi.")
             else:
                 logger.info(f"[{symbol}] Yeni veri bulunamadı, sistem güncel.")
 
@@ -806,14 +809,14 @@ class LiveDataManager:
             bool: Başarılı ise True
         """
         try:
-            # Her timeframe için gerekli bar sayısı
+            # Her timeframe için gerekli bar sayısı (MA200 warm-up için min 250)
             timeframe_limits = {
                 '1m': 500,   # ~8 saat
                 '5m': 300,   # ~25 saat
-                '15m': 100,  # ~25 saat
-                '1h': 48,    # 48 saat
-                '4h': 30,    # 5 gün
-                '1d': 30     # 30 gün
+                '15m': 250,  # ~62 saat
+                '1h': 250,   # ~10 gün
+                '4h': 250,   # ~41 gün
+                '1d': 250,   # ~250 gün
             }
 
             loaded_count = 0
@@ -1172,9 +1175,7 @@ class LiveDataManager:
     async def run(self):
         """Ana çalıştırma döngüsü."""
         try:
-            # SKIP: 1m historical sync - MTF init will provide all data
-            # await self.sync_historical_data()
-            # await self._initialize_dataframes()
+            await self.sync_historical_data()
 
             # 1. MTF buffers'ı başlat (tüm timeframe'ler için batch halinde)
             if self.mtf_enabled:
