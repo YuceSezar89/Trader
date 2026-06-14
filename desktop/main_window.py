@@ -3,6 +3,7 @@ MainWindow — TRader Desktop Terminal ana penceresi.
 Dockable panel layout, menü/toolbar/status bar barındırır.
 """
 
+import subprocess
 import sys
 from typing import Optional
 
@@ -15,6 +16,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QPushButton,
     QStatusBar,
     QToolBar,
     QWidget,
@@ -151,6 +153,19 @@ class MainWindow(QMainWindow):
         self._tf_combo.setFixedWidth(70)
         self._tf_combo.currentTextChanged.connect(self._on_toolbar_tf_changed)
         tb.addWidget(self._tf_combo)
+
+        tb.addSeparator()
+
+        # Servis başlat/durdur butonu
+        self._service_btn = QPushButton("▶  Başlat")
+        self._service_btn.setFixedWidth(110)
+        self._service_btn.clicked.connect(self._toggle_service)
+        tb.addWidget(self._service_btn)
+        self._update_service_btn()
+
+        self._service_poll = QTimer(self)
+        self._service_poll.timeout.connect(self._update_service_btn)
+        self._service_poll.start(10_000)
 
         tb.addSeparator()
 
@@ -392,6 +407,48 @@ class MainWindow(QMainWindow):
             self._connect_btn.setText("⬤  Bağlı")
         else:
             self._connect_btn.setText("⬤  Bağlantı Hatası")
+
+    def _is_service_running(self) -> bool:
+        try:
+            out = subprocess.run(
+                "launchctl list | grep com.trader.runner",
+                shell=True, capture_output=True, text=True, timeout=3,
+            ).stdout.strip()
+            if out:
+                return out.split()[0] != "-"
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
+        return False
+
+    def _update_service_btn(self) -> None:
+        running = self._is_service_running()
+        if running:
+            self._service_btn.setText("■  Durdur")
+            self._service_btn.setStyleSheet(
+                f"QPushButton {{ background: {COLORS['bg_secondary']}; color: {COLORS['red']};"
+                f" border: 1px solid {COLORS['border']}; border-radius: 4px;"
+                f" padding: 2px 8px; font-size: 11px; }}"
+                f" QPushButton:hover {{ border-color: {COLORS['red']}; }}"
+            )
+        else:
+            self._service_btn.setText("▶  Başlat")
+            self._service_btn.setStyleSheet(
+                f"QPushButton {{ background: {COLORS['bg_secondary']}; color: {COLORS['green']};"
+                f" border: 1px solid {COLORS['border']}; border-radius: 4px;"
+                f" padding: 2px 8px; font-size: 11px; }}"
+                f" QPushButton:hover {{ border-color: {COLORS['green']}; }}"
+            )
+
+    @pyqtSlot()
+    def _toggle_service(self) -> None:
+        import os
+        uid = os.getuid()
+        if self._is_service_running():
+            cmd = ["launchctl", "kill", "SIGTERM", f"gui/{uid}/com.trader.runner"]
+        else:
+            cmd = ["launchctl", "kickstart", f"gui/{uid}/com.trader.runner"]
+        subprocess.run(cmd, timeout=5, check=False)
+        QTimer.singleShot(2000, self._update_service_btn)
 
     @pyqtSlot(str)
     def _on_toolbar_search(self, text: str) -> None:

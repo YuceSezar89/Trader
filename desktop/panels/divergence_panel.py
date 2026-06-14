@@ -195,25 +195,38 @@ class DivergencePanel(QWidget):  # pylint: disable=too-many-instance-attributes
     def _populate_table(self, current: dict, diverge_since: dict) -> None:
         rows = sorted(current.items(), key=lambda x: abs(x[1]), reverse=True)
         self._table.setSortingEnabled(False)
-        self._table.setRowCount(len(rows))
+
+        if self._table.rowCount() != len(rows):
+            self._table.setRowCount(len(rows))
 
         mono = QFont("Monospace", 11)
         bold = QFont("Monospace", 11, QFont.Weight.Bold)
         now = datetime.now()
+        _transparent = QColor(0, 0, 0, 0)
 
         for row, (symbol, z) in enumerate(rows):
             color_hex = self._symbol_color(symbol)
             sym_color = QColor(color_hex)
 
-            sym_item = QTableWidgetItem(symbol)
-            sym_item.setForeground(sym_color)
-            sym_item.setFont(bold)
-            self._table.setItem(row, _COL_IDX["Sembol"], sym_item)
+            # Sembol — sadece satır değiştiyse yeni item oluştur
+            sym_item = self._table.item(row, _COL_IDX["Sembol"])
+            if sym_item is None or sym_item.text() != symbol:
+                sym_item = QTableWidgetItem(symbol)
+                sym_item.setForeground(sym_color)
+                sym_item.setFont(bold)
+                self._table.setItem(row, _COL_IDX["Sembol"], sym_item)
 
-            z_item = _NumericItem(f"{z:+.2f}")
+            # Z-score — metin ve arka plan güncelle
+            z_text = f"{z:+.2f}"
+            z_item = self._table.item(row, _COL_IDX["Z-score"])
+            if z_item is None:
+                z_item = _NumericItem(z_text)
+                z_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                z_item.setFont(mono)
+                self._table.setItem(row, _COL_IDX["Z-score"], z_item)
+            else:
+                z_item.setText(z_text)
             z_item.setData(Qt.ItemDataRole.UserRole, z)
-            z_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            z_item.setFont(mono)
             if z >= 2.0:
                 z_item.setBackground(QColor(0, 120, 40, 140))
             elif z >= 1.0:
@@ -222,30 +235,37 @@ class DivergencePanel(QWidget):  # pylint: disable=too-many-instance-attributes
                 z_item.setBackground(QColor(180, 20, 20, 140))
             elif z <= -1.0:
                 z_item.setBackground(QColor(120, 10, 10, 80))
-            self._table.setItem(row, _COL_IDX["Z-score"], z_item)
-
-            if z > 0.5:
-                direction, fg = "▲", _C_GREEN
-            elif z < -0.5:
-                direction, fg = "▼", _C_RED
             else:
-                direction, fg = "—", _C_MUTED
-            d_item = QTableWidgetItem(direction)
-            d_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            d_item.setForeground(fg)
-            self._table.setItem(row, _COL_IDX["Yön"], d_item)
+                z_item.setBackground(_transparent)
 
+            # Yön — sadece değer değiştiyse güncelle
+            direction = "▲" if z > 0.5 else ("▼" if z < -0.5 else "—")
+            fg = _C_GREEN if z > 0.5 else (_C_RED if z < -0.5 else _C_MUTED)
+            d_item = self._table.item(row, _COL_IDX["Yön"])
+            if d_item is None:
+                d_item = QTableWidgetItem(direction)
+                d_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self._table.setItem(row, _COL_IDX["Yön"], d_item)
+            elif d_item.text() != direction:
+                d_item.setText(direction)
+            d_item.setForeground(fg)
+
+            # Zaman — sadece değer değiştiyse güncelle
             ts = diverge_since.get(symbol)
             if ts:
                 dt = datetime.fromtimestamp(ts)
                 time_str = dt.strftime("%H:%M") if dt.date() == now.date() else dt.strftime("%m/%d %H:%M")
             else:
                 time_str = "—"
-            t_item = QTableWidgetItem(time_str)
-            t_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            t_item.setFont(mono)
-            t_item.setForeground(_C_MUTED)
-            self._table.setItem(row, _COL_IDX["Zaman"], t_item)
+            t_item = self._table.item(row, _COL_IDX["Zaman"])
+            if t_item is None:
+                t_item = QTableWidgetItem(time_str)
+                t_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                t_item.setFont(mono)
+                t_item.setForeground(_C_MUTED)
+                self._table.setItem(row, _COL_IDX["Zaman"], t_item)
+            elif t_item.text() != time_str:
+                t_item.setText(time_str)
 
         self._table.setSortingEnabled(True)
 

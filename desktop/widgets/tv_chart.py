@@ -21,6 +21,11 @@ from desktop.theme import COLORS
 _ASSETS_DIR = Path(__file__).parent.parent / "assets"
 _JS_PATH = _ASSETS_DIR / "lightweight-charts.js"
 
+_EMA_SPAN = 21
+_EMA_ALPHA = 2 / (_EMA_SPAN + 1)   # ≈ 0.0909
+_RSI_PERIOD = 14
+_RSI_ALPHA = 1 / _RSI_PERIOD        # ≈ 0.0714
+
 _HTML_TEMPLATE = """<!DOCTYPE html>
 <html>
 <head>
@@ -180,6 +185,7 @@ function loadData(candlesJson, emaJson, volJson, rsiJson, attempt) {{
     }}
 
     chart.timeScale().fitContent();
+    try {{ chart.priceScale('right').applyOptions({{ autoScale: true }}); }} catch(e) {{}}
   }} catch(e) {{
     console.log('loadData error:', e.message);
   }}
@@ -240,6 +246,7 @@ class TVChart(QWebEngineView):
         self._tf = ""
         self._ready = False
         self._pending_df: Optional[pd.DataFrame] = None
+        self._bar_state: Optional[dict] = None  # son kapalı bar'ın EMA/RSI durumu
 
         self.loadFinished.connect(self._on_load_finished)
         self.setHtml(_build_html(), QUrl("about:blank"))
@@ -273,22 +280,48 @@ class TVChart(QWebEngineView):
         """Sadece son mumu günceller — fitContent çağırmaz, zoom/pan korunur."""
         if df is None or df.empty or not self._ready:
             return
-        candles, ema_data, vol_data, rsi_data = self._prepare(df)
-        candle = candles[-1]
-        ema    = ema_data[-1]
-        vol    = vol_data[-1]
-        rsi    = rsi_data[-1] if rsi_data else None
+
+        ts_series = df["timestamp"].astype("int64") // 10**9 + 3 * 3600
+
+        # Bar[-2] değişmişse (yeni bar kapandı) → state'i yenile
+        state_ts = int(ts_series.iloc[-2]) if len(ts_series) >= 2 else None
+        if self._bar_state is None or self._bar_state["ts"] != state_ts:
+            self._bar_state = self._compute_state(df.tail(70), ts_series.iloc[-2:-1])
+
+        # Son bar için incremental EMA + RSI — 200 bar hesaplama yok
+        t = int(ts_series.iloc[-1])
+        row = df.iloc[-1]
+        o = float(row["open"]); h = float(row["high"])
+        l = float(row["low"]);  c = float(row["close"]); v = float(row["volume"])
+
+        ema_val = _EMA_ALPHA * c + (1 - _EMA_ALPHA) * self._bar_state["ema"]
+
+        delta = c - self._bar_state["close"]
+        g  = max(delta, 0.0)
+        lo = max(-delta, 0.0)
+        avg_gain = (1 - _RSI_ALPHA) * self._bar_state["avg_gain"] + _RSI_ALPHA * g
+        avg_loss = (1 - _RSI_ALPHA) * self._bar_state["avg_loss"] + _RSI_ALPHA * lo
+        rsi_val  = 100.0 - 100.0 / (1.0 + avg_gain / (avg_loss + 1e-9))
+
+        green = COLORS["green"]
+        red   = COLORS["red"]
+        candle  = {"time": t, "open": o, "high": h, "low": l, "close": c}
+        ema_pt  = {"time": t, "value": round(ema_val, 6)}
+        vol_pt  = {"time": t, "value": v, "color": (green + "99") if c >= o else (red + "99")}
+        rsi_pt  = {"time": t, "value": round(rsi_val, 2)}
+
         js = (
             f"updateLastBar("
             f"{json.dumps(json.dumps(candle))},"
-            f"{json.dumps(json.dumps(ema))},"
-            f"{json.dumps(json.dumps(vol))},"
-            f"{json.dumps(json.dumps(rsi))})"
+            f"{json.dumps(json.dumps(ema_pt))},"
+            f"{json.dumps(json.dumps(vol_pt))},"
+            f"{json.dumps(json.dumps(rsi_pt))})"
         )
         self.page().runJavaScript(js)
 
     def _send_data(self, df: pd.DataFrame, symbol: str, tf: str) -> None:
         candles, ema_data, vol_data, rsi_data = self._prepare(df)
+        self._bar_state = self._compute_state(df)  # tam hesaplamadan state sakla
         js = (
             f"loadData("
             f"{json.dumps(json.dumps(candles))},"
@@ -299,6 +332,24 @@ class TVChart(QWebEngineView):
         self.page().runJavaScript(js)
 
     @staticmethod
+    def _compute_state(df: pd.DataFrame, _ts_hint=None) -> dict:
+        """Son kapalı bar'ın (bar[-2]) EMA/RSI durumunu döner."""
+        closes = df["close"].astype(float).reset_index(drop=True)
+        ts     = df["timestamp"].astype("int64") // 10**9 + 3 * 3600
+        ema    = closes.ewm(span=_EMA_SPAN, adjust=False).mean()
+        delta  = closes.diff()
+        gain   = delta.clip(lower=0).ewm(alpha=_RSI_ALPHA, min_periods=_RSI_PERIOD).mean()
+        loss   = (-delta.clip(upper=0)).ewm(alpha=_RSI_ALPHA, min_periods=_RSI_PERIOD).mean()
+        idx    = -2 if len(closes) >= 2 else -1
+        return {
+            "ts":       int(ts.iloc[idx]),
+            "ema":      float(ema.iloc[idx]),
+            "avg_gain": float(gain.iloc[idx]),
+            "avg_loss": float(loss.iloc[idx]),
+            "close":    float(closes.iloc[idx]),
+        }
+
+    @staticmethod
     def _prepare(df: pd.DataFrame):
         ts     = df["timestamp"].astype("int64") // 10**9 + 3 * 3600
         opens  = df["open"].astype(float)
@@ -307,10 +358,10 @@ class TVChart(QWebEngineView):
         closes = df["close"].astype(float)
         vols   = df["volume"].astype(float)
 
-        ema   = closes.ewm(span=21, adjust=False).mean()
+        ema   = closes.ewm(span=_EMA_SPAN, adjust=False).mean()
         delta = closes.diff()
-        gain  = delta.clip(lower=0).ewm(alpha=1/14, min_periods=14).mean()
-        loss  = (-delta.clip(upper=0)).ewm(alpha=1/14, min_periods=14).mean()
+        gain  = delta.clip(lower=0).ewm(alpha=_RSI_ALPHA, min_periods=_RSI_PERIOD).mean()
+        loss  = (-delta.clip(upper=0)).ewm(alpha=_RSI_ALPHA, min_periods=_RSI_PERIOD).mean()
         rsi   = 100 - 100 / (1 + gain / (loss + 1e-9))
 
         candles, ema_data, vol_data, rsi_data = [], [], [], []

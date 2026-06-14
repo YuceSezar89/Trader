@@ -184,6 +184,130 @@ async def daily_performance_update_task():
             await asyncio.sleep(3600)
 
 
+async def periodic_gap_scan_task():
+    """Her 6 saatte bir tüm MTF intervallar için gap taraması yapar."""
+    gap_logger = get_logger("GapScanner")
+    _INTERVAL_MS_MAP = {
+        "1m": 60_000,
+    }
+    _SCAN_INTERVAL_HOURS = 6
+    _LOOKBACK_DAYS = 7
+
+    gap_logger.info("Periyodik gap scanner başlatıldı (her %d saatte bir)", _SCAN_INTERVAL_HOURS)
+
+    while True:
+        try:
+            await asyncio.sleep(_SCAN_INTERVAL_HOURS * 3600)
+
+            gap_logger.info("Gap taraması başlıyor (son %d gün)...", _LOOKBACK_DAYS)
+
+            from database.engine import get_session
+            from sqlalchemy import text
+            from binance_client import BinanceClientManager
+            from database.crud import bulk_insert_price_data
+
+            async with get_session() as session:
+                result = await session.execute(
+                    text("SELECT DISTINCT symbol FROM price_data WHERE interval = '1m' "
+                         "AND timestamp >= NOW() - INTERVAL '1 day'")
+                )
+                symbols = [r[0] for r in result.fetchall()]
+
+            if not symbols:
+                gap_logger.warning("Aktif sembol bulunamadı, tarama atlandı.")
+                continue
+
+            gap_logger.info("%d aktif sembol taranacak", len(symbols))
+            total_filled = 0
+            sem = asyncio.Semaphore(3)
+
+            async def fill_one(symbol: str, interval: str, interval_ms: int) -> int:
+                async with sem:
+                    try:
+                        async with get_session() as session:
+                            r = await session.execute(
+                                text("""
+                                    SELECT symbol,
+                                           EXTRACT(EPOCH FROM prev_ts)::bigint * 1000,
+                                           EXTRACT(EPOCH FROM curr_ts)::bigint * 1000
+                                    FROM (
+                                        SELECT symbol, timestamp AS curr_ts,
+                                               LAG(timestamp) OVER (PARTITION BY symbol ORDER BY timestamp) AS prev_ts
+                                        FROM price_data
+                                        WHERE symbol = :sym AND interval = :iv
+                                          AND timestamp >= NOW() - (:days * INTERVAL '1 day')
+                                    ) t
+                                    WHERE prev_ts IS NOT NULL
+                                      AND EXTRACT(EPOCH FROM (curr_ts - prev_ts)) * 1000 > :thresh
+                                    ORDER BY prev_ts
+                                """),
+                                {"sym": symbol, "iv": interval, "days": _LOOKBACK_DAYS, "thresh": interval_ms * 2},
+                            )
+                            gaps = [(int(row[1]), int(row[2])) for row in r.fetchall()]
+
+                            r2 = await session.execute(
+                                text("SELECT EXTRACT(EPOCH FROM MAX(timestamp))::bigint * 1000 "
+                                     "FROM price_data WHERE symbol = :sym AND interval = :iv"),
+                                {"sym": symbol, "iv": interval},
+                            )
+                            last_row = r2.fetchone()
+                            last_ms = last_row[0] if last_row and last_row[0] else None
+
+                        import time as _t
+                        now_ms = int(_t.time() * 1000)
+                        lookback_start_ms = now_ms - int(_LOOKBACK_DAYS * 86_400_000)
+                        if last_ms and (now_ms - last_ms) > interval_ms * 2:
+                            tail_start = max(last_ms, lookback_start_ms)
+                            if (now_ms - tail_start) > interval_ms * 2:
+                                if not any(g[0] >= tail_start for g in gaps):
+                                    gaps.append((tail_start, now_ms))
+
+                    except Exception as exc:
+                        gap_logger.debug("[GapScan] %s %s sorgu hatası: %s", symbol, interval, exc)
+                        return 0
+
+                    filled = 0
+                    for gap_start_ms, gap_end_ms in gaps:
+                        fetch_start = gap_start_ms + interval_ms
+                        while fetch_start < gap_end_ms:
+                            try:
+                                df = await BinanceClientManager.fetch_klines(
+                                    symbol=symbol, interval=interval, limit=1000, startTime=fetch_start,
+                                )
+                            except Exception:
+                                break
+                            if df is None or df.empty:
+                                break
+                            df = df[df["open_time"] < gap_end_ms]
+                            if df.empty:
+                                break
+                            await bulk_insert_price_data(symbol, df, interval=interval)
+                            filled += len(df)
+                            last_ts = int(df["open_time"].iloc[-1])
+                            if last_ts <= fetch_start or len(df) < 1000:
+                                break
+                            fetch_start = last_ts + interval_ms
+                            await asyncio.sleep(0.2)
+                    return filled
+
+            for interval, interval_ms in _INTERVAL_MS_MAP.items():
+                tasks_inner = [fill_one(s, interval, interval_ms) for s in symbols]
+                results = await asyncio.gather(*tasks_inner, return_exceptions=True)
+                n = sum(r for r in results if isinstance(r, int))
+                total_filled += n
+                if n:
+                    gap_logger.info("[GapScan] %s: %d bar eklendi", interval, n)
+
+            gap_logger.info("Gap taraması tamamlandı: toplam %d bar eklendi", total_filled)
+
+        except asyncio.CancelledError:
+            gap_logger.info("Gap scanner iptal edildi.")
+            break
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            gap_logger.error("Gap scanner hatası: %s", exc, exc_info=True)
+            await asyncio.sleep(300)
+
+
 async def run_all_services():
     """Tüm servisleri doğru sırada başlatır ve yönetir."""
     logger.info("Tüm servisler başlatılıyor...")
@@ -202,12 +326,17 @@ async def run_all_services():
 
     live_task = asyncio.create_task(live_data_main(), name="live_data_manager")
 
-    # 5. Daily Performance Update Task'ı başlat
+    # 4. Daily Performance Update Task
     perf_task = asyncio.create_task(
         daily_performance_update_task(), name="performance_updater"
     )
 
-    tasks = {live_task, perf_task}
+    # 5. Periyodik Gap Scanner (her 6 saatte bir)
+    gap_task = asyncio.create_task(
+        periodic_gap_scan_task(), name="gap_scanner"
+    )
+
+    tasks = {live_task, perf_task, gap_task}
 
     # Sinyal yakalayıcı: görevleri iptal et ve shutdown akışını başlat
     def _signal_handler(sig_name: str):

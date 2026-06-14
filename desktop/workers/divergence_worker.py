@@ -126,12 +126,19 @@ class DivergenceWorker(QThread):  # pylint: disable=too-many-instance-attributes
         sub_thread = threading.Thread(target=self._subscribe_loop, daemon=True)
         sub_thread.start()
 
+        _last_compute = 0.0
+        _MIN_INTERVAL = 5.0
+
         while self._running:
             self._wake.wait(timeout=self._interval_ms / 1000)
             self._wake.clear()
 
             if not self._running:
                 break
+
+            now = time.monotonic()
+            if now - _last_compute < _MIN_INTERVAL:
+                continue
 
             with self._lock:
                 symbols = set(self._symbols)
@@ -144,6 +151,7 @@ class DivergenceWorker(QThread):  # pylint: disable=too-many-instance-attributes
 
             try:
                 result = self._compute(symbols, pending)
+                _last_compute = time.monotonic()
                 if result:
                     self.divergence_updated.emit(result)
                     n = len(result["current"])
