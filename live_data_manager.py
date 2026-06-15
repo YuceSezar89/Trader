@@ -815,14 +815,23 @@ class LiveDataManager:
 
             logger.info(f"📦 Batch {batch_num}/{total_batches}: {len(batch)} sembol yükleniyor...")
 
-            # Bu batch'teki sembolleri paralel yükle
-            tasks = [self._load_symbol_all_timeframes(symbol) for symbol in batch]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            # Batch timeout: 120s — takılı semboller iptal edilerek batch ilerler
+            batch_tasks = [asyncio.create_task(self._load_symbol_all_timeframes(s)) for s in batch]
+            done, pending = await asyncio.wait(batch_tasks, timeout=120)
+            for p in pending:
+                p.cancel()
+                try:
+                    await p
+                except (asyncio.CancelledError, Exception):
+                    pass
+            if pending:
+                logger.warning(f"⚠️ Batch {batch_num}: {len(pending)} sembol timeout ile atlandı.")
+
+            results = [t.result() if not t.cancelled() and t.exception() is None else None for t in done]
 
             # Başarı oranını hesapla
-            # _load_symbol_all_timeframes True (cache hit) veya False (Binance çağrısı yapıldı) döner
-            binance_used = any(r is False for r in results if not isinstance(r, Exception))
-            success_count = sum(1 for r in results if r is not None and not isinstance(r, Exception))
+            binance_used = any(r is False for r in results if r is not None)
+            success_count = sum(1 for r in results if r is not None)
             logger.info(f"✅ Batch {batch_num}/{total_batches} tamamlandı ({success_count}/{len(batch)} başarılı)")
 
             # Son batch değilse bekle
