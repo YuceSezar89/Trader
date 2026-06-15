@@ -1658,7 +1658,7 @@ class LiveDataManager:
             # 3. 30s sonra kuyruk gap fill (son timestamp → şu an)
             asyncio.create_task(self._deferred_sync_historical(delay_seconds=30))
             # 4. 120s sonra iç gap kontrolü (startup penceresi LAG analizi)
-            asyncio.create_task(self._deferred_internal_gap_check(delay_seconds=120))
+            asyncio.create_task(self._deferred_internal_gap_check(delay_seconds=240))
             # 5. Periyodik sağlık kontrolü
             asyncio.create_task(self._health_loop())
 
