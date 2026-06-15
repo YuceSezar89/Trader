@@ -219,17 +219,15 @@ async def periodic_gap_scan_task():
 
             gap_logger.info("%d aktif sembol taranacak", len(symbols))
             total_filled = 0
-            sem = asyncio.Semaphore(3)
+            import time as _t
 
-            async def fill_one(symbol: str, interval: str, interval_ms: int) -> int:
-                async with sem:
+            for interval, interval_ms in _INTERVAL_MS_MAP.items():
+                for symbol in symbols:
                     try:
                         async with get_session() as session:
                             r = await session.execute(
                                 text("""
-                                    SELECT symbol,
-                                           EXTRACT(EPOCH FROM prev_ts)::bigint * 1000,
-                                           EXTRACT(EPOCH FROM curr_ts)::bigint * 1000
+                                    SELECT symbol, prev_ts, curr_ts
                                     FROM (
                                         SELECT symbol, timestamp AS curr_ts,
                                                LAG(timestamp) OVER (PARTITION BY symbol ORDER BY timestamp) AS prev_ts
@@ -243,17 +241,19 @@ async def periodic_gap_scan_task():
                                 """),
                                 {"sym": symbol, "iv": interval, "days": _LOOKBACK_DAYS, "thresh": interval_ms * 2},
                             )
-                            gaps = [(int(row[1]), int(row[2])) for row in r.fetchall()]
+                            gaps = [
+                                (int(row[1].timestamp() * 1000), int(row[2].timestamp() * 1000))
+                                for row in r.fetchall()
+                            ]
 
                             r2 = await session.execute(
-                                text("SELECT EXTRACT(EPOCH FROM MAX(timestamp))::bigint * 1000 "
-                                     "FROM price_data WHERE symbol = :sym AND interval = :iv"),
+                                text("SELECT MAX(timestamp) FROM price_data WHERE symbol = :sym AND interval = :iv"),
                                 {"sym": symbol, "iv": interval},
                             )
                             last_row = r2.fetchone()
-                            last_ms = last_row[0] if last_row and last_row[0] else None
+                            last_dt = last_row[0] if last_row and last_row[0] else None
+                            last_ms = int(last_dt.timestamp() * 1000) if last_dt else None
 
-                        import time as _t
                         now_ms = int(_t.time() * 1000)
                         lookback_start_ms = now_ms - int(_LOOKBACK_DAYS * 86_400_000)
                         if last_ms and (now_ms - last_ms) > interval_ms * 2:
@@ -264,12 +264,12 @@ async def periodic_gap_scan_task():
 
                     except Exception as exc:
                         gap_logger.debug("[GapScan] %s %s sorgu hatası: %s", symbol, interval, exc)
-                        return 0
+                        continue
 
-                    filled = 0
                     for gap_start_ms, gap_end_ms in gaps:
                         fetch_start = gap_start_ms + interval_ms
                         while fetch_start < gap_end_ms:
+                            await asyncio.sleep(0.5)
                             try:
                                 df = await BinanceClientManager.fetch_klines(
                                     symbol=symbol, interval=interval, limit=1000, startTime=fetch_start,
@@ -282,21 +282,14 @@ async def periodic_gap_scan_task():
                             if df.empty:
                                 break
                             await bulk_insert_price_data(symbol, df, interval=interval)
-                            filled += len(df)
+                            total_filled += len(df)
                             last_ts = int(df["open_time"].iloc[-1])
                             if last_ts <= fetch_start or len(df) < 1000:
                                 break
                             fetch_start = last_ts + interval_ms
-                            await asyncio.sleep(0.2)
-                    return filled
 
-            for interval, interval_ms in _INTERVAL_MS_MAP.items():
-                tasks_inner = [fill_one(s, interval, interval_ms) for s in symbols]
-                results = await asyncio.gather(*tasks_inner, return_exceptions=True)
-                n = sum(r for r in results if isinstance(r, int))
-                total_filled += n
-                if n:
-                    gap_logger.info("[GapScan] %s: %d bar eklendi", interval, n)
+            if total_filled:
+                gap_logger.info("[GapScan] %d bar eklendi", total_filled)
 
             gap_logger.info("Gap taraması tamamlandı: toplam %d bar eklendi", total_filled)
 

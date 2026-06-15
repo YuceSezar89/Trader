@@ -1,4 +1,5 @@
 import asyncio
+import concurrent.futures
 import json
 import logging
 import os
@@ -28,6 +29,9 @@ from utils.exceptions import BinanceAPIError, DatabaseError
 from config import Config
 from utils.redis_client import RedisClient
 from utils.timeframe_aggregator import TimeframeAggregator
+
+# MTF init/refresh için ayrı thread pool — default executor'ı (WS sinyalleri) bloklamaz
+_MTF_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="mtf_init")
 
 
 def setup_logging():
@@ -105,6 +109,7 @@ class LiveDataManager:
         self.consecutive_errors = 0  # Ardışık hata sayısı
         self.db_lock = asyncio.Lock()  # Veritabanı yazma işlemleri için kilit
         self._startup_lookback_days: float = 1.0
+        self._startup_fill_end_ms: int = 0
 
         # Multi-WebSocket configuration
         self.max_streams_per_connection = 200  # Binance limit
@@ -233,6 +238,8 @@ class LiveDataManager:
 
             if total_inserted:
                 logger.info(f"[{symbol}] Senkronizasyon tamamlandı: {total_inserted} mum eklendi.")
+                if self.mtf_enabled:
+                    await self._refresh_mtf_redis(symbol)
             else:
                 logger.info(f"[{symbol}] Yeni veri bulunamadı, sistem güncel.")
 
@@ -854,7 +861,8 @@ class LiveDataManager:
                 df_1m = await BinanceClientManager.fetch_klines(symbol=symbol, interval="1m", limit=1500)
 
             if not df_1m.empty:
-                df_1m_ind = await asyncio.to_thread(add_all_indicators, df_1m)
+                loop = asyncio.get_event_loop()
+                df_1m_ind = await loop.run_in_executor(_MTF_EXECUTOR, add_all_indicators, df_1m)
                 self.mtf_buffers[symbol]['1m'] = df_1m_ind.tail(self.mtf_buffer_limits.get('1m', 250))
                 await RedisClient.set_mtf_klines(symbol, '1m', self.mtf_buffers[symbol]['1m'])
                 loaded_count += 1
@@ -866,7 +874,7 @@ class LiveDataManager:
                     agg_df = TimeframeAggregator.aggregate_ohlcv(df_1m, '1m', agg_tf)
                     if not agg_df.empty:
                         limit = self.mtf_buffer_limits.get(agg_tf, 250)
-                        agg_ind = await asyncio.to_thread(add_all_indicators, agg_df.tail(limit))
+                        agg_ind = await loop.run_in_executor(_MTF_EXECUTOR, add_all_indicators, agg_df.tail(limit))
                         self.mtf_buffers[symbol][agg_tf] = agg_ind
                         await RedisClient.set_mtf_klines(symbol, agg_tf, agg_ind)
                         loaded_count += 1
@@ -885,7 +893,7 @@ class LiveDataManager:
                 # Cache miss → önce DB'yi dene (4h/1d artık DB'ye yazılıyor)
                 db_df = await get_recent_klines(symbol, tf, limit)
                 if db_df is not None and len(db_df) >= limit // 2:
-                    df_ind = await asyncio.to_thread(add_all_indicators, db_df)
+                    df_ind = await loop.run_in_executor(_MTF_EXECUTOR, add_all_indicators, db_df)
                     buf_limit = self.mtf_buffer_limits.get(tf, 250)
                     self.mtf_buffers[symbol][tf] = df_ind.tail(buf_limit).drop_duplicates(subset=["open_time"], keep="last")
                     await RedisClient.set_mtf_klines(symbol, tf, self.mtf_buffers[symbol][tf])
@@ -911,7 +919,7 @@ class LiveDataManager:
                         raise
 
                 if not df.empty:
-                    df_with_indicators = await asyncio.to_thread(add_all_indicators, df)
+                    df_with_indicators = await loop.run_in_executor(_MTF_EXECUTOR, add_all_indicators, df)
                     buffer_limit = self.mtf_buffer_limits.get(tf, 250)
                     self.mtf_buffers[symbol][tf] = df_with_indicators.tail(buffer_limit).drop_duplicates(subset=["open_time"], keep="last")
                     await RedisClient.set_mtf_klines(symbol, tf, self.mtf_buffers[symbol][tf])
@@ -1240,8 +1248,88 @@ class LiveDataManager:
         logger.info(f"🔄 Tarihsel veri senkronizasyonu başlatılıyor (arka plan, {delay_seconds}s sonra)...")
         await self.sync_historical_data()
 
+    async def _deferred_internal_gap_check(self, delay_seconds: int = 90) -> None:
+        """WebSocket bağlantısından sonra son 1 saatte oluşan iç gap'leri doldurur.
+
+        _deferred_sync_historical sadece kuyruktan doldurur; WebSocket başlamadan önce
+        oluşan iç gap'leri (örn. PostInit penceresi) bu metot yakalar.
+        """
+        import time as _time
+        await asyncio.sleep(delay_seconds)
+        logger.info("[DeferredGapCheck] Son 1 saatin iç gap analizi başlıyor...")
+        symbols_list = list(self.symbols)
+        _INTERVAL_MS = 60_000
+
+        try:
+            async with get_session() as session:
+                r = await session.execute(
+                    text("""
+                        SELECT symbol, prev_ts, curr_ts
+                        FROM (
+                            SELECT symbol, timestamp AS curr_ts,
+                                   LAG(timestamp) OVER (PARTITION BY symbol ORDER BY timestamp) AS prev_ts
+                            FROM price_data
+                            WHERE symbol = ANY(:syms) AND interval = '1m'
+                              AND timestamp >= NOW() - INTERVAL '1 hour'
+                        ) t
+                        WHERE prev_ts IS NOT NULL
+                          AND EXTRACT(EPOCH FROM (curr_ts - prev_ts)) * 1000 > 90000
+                        ORDER BY symbol, prev_ts
+                    """),
+                    {"syms": symbols_list},
+                )
+                rows = r.fetchall()
+        except Exception as exc:
+            logger.warning("[DeferredGapCheck] Sorgu hatası: %s", exc)
+            return
+
+        gaps_by_sym: dict = {}
+        for sym, prev_dt, curr_dt in rows:
+            g_start = int(prev_dt.timestamp() * 1000)
+            g_end = int(curr_dt.timestamp() * 1000)
+            gaps_by_sym.setdefault(sym, []).append((g_start, g_end))
+
+        if not gaps_by_sym:
+            logger.info("[DeferredGapCheck] Gap yok, sistem temiz.")
+            return
+
+        total_gaps = sum(len(g) for g in gaps_by_sym.values())
+        logger.info("[DeferredGapCheck] %d sembolde %d gap bulundu.", len(gaps_by_sym), total_gaps)
+        total_filled = 0
+
+        for sym, gaps in gaps_by_sym.items():
+            sym_filled = 0
+            for gap_start_ms, gap_end_ms in gaps:
+                fetch_start = gap_start_ms + _INTERVAL_MS
+                while fetch_start < gap_end_ms:
+                    await asyncio.sleep(0.5)
+                    try:
+                        df = await BinanceClientManager.fetch_klines(
+                            symbol=sym, interval="1m", limit=1000, startTime=fetch_start,
+                        )
+                    except Exception:
+                        break
+                    if df is None or df.empty:
+                        break
+                    df = df[df["open_time"] < gap_end_ms]
+                    if df.empty:
+                        break
+                    async with self.db_lock:
+                        await bulk_insert_price_data(sym, df, interval="1m")
+                    sym_filled += len(df)
+                    last_ts = int(df["open_time"].iloc[-1])
+                    if last_ts <= fetch_start or len(df) < 1000:
+                        break
+                    fetch_start = last_ts + _INTERVAL_MS
+
+            if sym_filled > 0 and self.mtf_enabled:
+                await self._refresh_mtf_redis(sym)
+            total_filled += sym_filled
+
+        logger.info("[DeferredGapCheck] Tamamlandı: %d bar eklendi.", total_filled)
+
     async def _startup_gap_fill(self) -> None:
-        """Startup gap fill: 1m ve MTF intervallar için dinamik lookback ile gap doldurur."""
+        """Startup gap fill: 1m için dinamik lookback ile gap doldurur."""
         import time as _time
 
         _INTERVAL_MS = 60_000
@@ -1249,26 +1337,29 @@ class LiveDataManager:
         _MAX_LOOKBACK_DAYS = 30
         symbols_list = list(self.symbols)
 
-        # Dinamik lookback: tüm sembollerin son 1m kaydına bak
+        # Dinamik lookback: tüm sembollerin son 1m kaydına bak.
+        # NOT: EXTRACT(EPOCH FROM naive_ts) naive'i UTC gibi işler (PostgreSQL davranışı).
+        # Python .timestamp() ise sistem TZ (+3) ile doğru UTC epoch'u verir.
+        # Bu yüzden raw timestamp döndürüp Python'da dönüştürüyoruz.
         try:
             async with get_session() as session:
                 result = await session.execute(
                     text("""
-                        SELECT EXTRACT(EPOCH FROM MAX(timestamp))::bigint * 1000
+                        SELECT MAX(timestamp)
                         FROM price_data
                         WHERE symbol = ANY(:syms) AND interval = '1m'
                     """),
                     {"syms": symbols_list},
                 )
                 row = result.fetchone()
-                last_1m_ms = row[0] if row and row[0] else None
+                last_dt = row[0] if row and row[0] else None
+                last_1m_ms = int(last_dt.timestamp() * 1000) if last_dt else None
         except Exception as exc:
             logger.warning("[Startup] Son kayıt sorgusu başarısız: %s", exc)
             last_1m_ms = None
 
         now_ms = int(_time.time() * 1000)
         if last_1m_ms:
-            # DB timestamp timezone farkından dolayı offline_ms negatif çıkabilir; max ile 1 güne sabitlenir
             offline_ms = max(now_ms - last_1m_ms, 0)
             lookback_days = min(max(offline_ms / 86_400_000, 1), _MAX_LOOKBACK_DAYS)
             logger.info(
@@ -1279,15 +1370,13 @@ class LiveDataManager:
         else:
             lookback_days = 1
 
-        # --- 1m gap fill ---
+        # --- 1m gap fill: iç gap'ler (LAG sorgusu, raw timestamp → Python dönüşümü) ---
         logger.info("[Startup] 1m gap analizi yapılıyor...")
         try:
             async with get_session() as session:
                 result = await session.execute(
                     text("""
-                        SELECT symbol,
-                               EXTRACT(EPOCH FROM prev_ts)::bigint * 1000,
-                               EXTRACT(EPOCH FROM curr_ts)::bigint * 1000
+                        SELECT symbol, prev_ts, curr_ts
                         FROM (
                             SELECT symbol,
                                    timestamp AS curr_ts,
@@ -1308,20 +1397,48 @@ class LiveDataManager:
             rows = []
 
         all_gaps: dict[str, list[tuple[int, int]]] = {}
-        for sym, g_start, g_end in rows:
-            all_gaps.setdefault(sym, []).append((int(g_start), int(g_end)))
+        for sym, prev_dt, curr_dt in rows:
+            g_start = int(prev_dt.timestamp() * 1000)
+            g_end = int(curr_dt.timestamp() * 1000)
+            all_gaps.setdefault(sym, []).append((g_start, g_end))
+
+        # --- Kuyruk gap'i: her sembol için son kayıt → şu an ---
+        try:
+            async with get_session() as session:
+                result = await session.execute(
+                    text("""
+                        SELECT symbol, MAX(timestamp)
+                        FROM price_data
+                        WHERE symbol = ANY(:syms) AND interval = '1m'
+                        GROUP BY symbol
+                    """),
+                    {"syms": symbols_list},
+                )
+                tail_rows = result.fetchall()
+        except Exception as exc:
+            logger.warning("[Startup] Kuyruk gap sorgusu başarısız: %s", exc)
+            tail_rows = []
+
+        for sym, last_dt in tail_rows:
+            tail_ms = int(last_dt.timestamp() * 1000)
+            if (now_ms - tail_ms) > _THRESHOLD_MS:
+                existing = all_gaps.get(sym, [])
+                if not any(gs >= tail_ms for gs, _ in existing):
+                    all_gaps.setdefault(sym, []).append((tail_ms, now_ms))
 
         if all_gaps:
             total_gaps = sum(len(g) for g in all_gaps.values())
             logger.info("[Startup] 1m: %d sembolde %d gap bulundu, dolduruluyor...", len(all_gaps), total_gaps)
             total_filled = 0
-            for symbol, gaps in all_gaps.items():
+
+            for sym, gaps in all_gaps.items():
                 for gap_start_ms, gap_end_ms in gaps:
                     fetch_start = gap_start_ms + _INTERVAL_MS
                     while fetch_start < gap_end_ms:
+                        await asyncio.sleep(0.5)
                         try:
                             df = await BinanceClientManager.fetch_klines(
-                                symbol=symbol, interval="1m", limit=1000, startTime=fetch_start,
+                                symbol=sym, interval="1m", limit=1000, startTime=fetch_start,
                             )
                         except Exception:
                             break
@@ -1331,18 +1448,148 @@ class LiveDataManager:
                         if df.empty:
                             break
                         async with self.db_lock:
-                            await bulk_insert_price_data(symbol, df, interval="1m")
+                            await bulk_insert_price_data(sym, df, interval="1m")
                         total_filled += len(df)
                         last_ts = int(df["open_time"].iloc[-1])
                         if last_ts <= fetch_start or len(df) < 1000:
                             break
                         fetch_start = last_ts + _INTERVAL_MS
-                        await asyncio.sleep(0.1)
+
             logger.info("[Startup] 1m gap fill tamamlandı: %d bar eklendi", total_filled)
         else:
             logger.info("[Startup] 1m: gap yok.")
 
+        self._startup_fill_end_ms = int(_time.time() * 1000)
         self._startup_lookback_days = float(lookback_days)
+
+    async def _refresh_mtf_redis(self, symbol: str) -> None:
+        """1m DB verisinden 5m/15m aggregate ederek Redis'i günceller."""
+        if not self.mtf_enabled or symbol not in self.mtf_buffers:
+            return
+        try:
+            loop = asyncio.get_event_loop()
+            limit_1m = max(1500, int(self._startup_lookback_days * 24 * 60))
+            df_1m = await get_recent_klines(symbol, "1m", limit_1m)
+            if df_1m.empty:
+                return
+            df_1m_ind = await loop.run_in_executor(_MTF_EXECUTOR, add_all_indicators, df_1m)
+            self.mtf_buffers[symbol]["1m"] = df_1m_ind.tail(self.mtf_buffer_limits.get("1m", 1000))
+            await RedisClient.set_mtf_klines(symbol, "1m", self.mtf_buffers[symbol]["1m"])
+            for agg_tf in ["5m", "15m"]:
+                if not TimeframeAggregator.can_aggregate("1m", agg_tf):
+                    continue
+                agg_df = TimeframeAggregator.aggregate_ohlcv(df_1m, "1m", agg_tf)
+                if agg_df.empty:
+                    continue
+                limit = self.mtf_buffer_limits.get(agg_tf, 250)
+                agg_ind = await loop.run_in_executor(_MTF_EXECUTOR, add_all_indicators, agg_df.tail(limit * 2))
+                self.mtf_buffers[symbol][agg_tf] = agg_ind.tail(limit)
+                await RedisClient.set_mtf_klines(symbol, agg_tf, self.mtf_buffers[symbol][agg_tf])
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.debug("[MTF-Refresh] %s hata: %s", symbol, exc)
+
+    async def _post_init_catchup(self) -> None:
+        """MTF init sonrası startup penceresindeki 1m gap'leri doldurur ve MTF Redis'i günceller."""
+        import time as _time
+
+        if not self._startup_fill_end_ms:
+            return
+
+        now_ms = int(_time.time() * 1000)
+        window_ms = now_ms - self._startup_fill_end_ms
+        if window_ms < 60_000:
+            return
+
+        logger.info("[PostInit] Startup penceresi gap fill başlıyor (%.1f dk)...", window_ms / 60_000)
+        symbols_list = list(self.symbols)
+
+        try:
+            async with get_session() as session:
+                result = await session.execute(
+                    text("""
+                        SELECT symbol, prev_ts, curr_ts
+                        FROM (
+                            SELECT symbol,
+                                   timestamp AS curr_ts,
+                                   LAG(timestamp) OVER (PARTITION BY symbol ORDER BY timestamp) AS prev_ts
+                            FROM price_data
+                            WHERE symbol = ANY(:syms) AND interval = '1m'
+                              AND timestamp >= NOW() - INTERVAL '2 hours'
+                        ) t
+                        WHERE prev_ts IS NOT NULL
+                          AND EXTRACT(EPOCH FROM (curr_ts - prev_ts)) * 1000 > 90000
+                        ORDER BY symbol, prev_ts
+                    """),
+                    {"syms": symbols_list},
+                )
+                gap_rows = result.fetchall()
+
+                result2 = await session.execute(
+                    text("""
+                        SELECT symbol, MAX(timestamp)
+                        FROM price_data
+                        WHERE symbol = ANY(:syms) AND interval = '1m'
+                        GROUP BY symbol
+                    """),
+                    {"syms": symbols_list},
+                )
+                tail_rows = {row[0]: int(row[1].timestamp() * 1000) for row in result2.fetchall() if row[1]}
+        except Exception as exc:
+            logger.warning("[PostInit] Gap sorgusu başarısız: %s", exc)
+            return
+
+        catchup_gaps: dict[str, list[tuple[int, int]]] = {}
+        for sym, prev_dt, curr_dt in gap_rows:
+            g_start = int(prev_dt.timestamp() * 1000)
+            g_end = int(curr_dt.timestamp() * 1000)
+            catchup_gaps.setdefault(sym, []).append((g_start, g_end))
+
+        for sym, last_ms in tail_rows.items():
+            if (now_ms - last_ms) > 90_000:
+                existing = catchup_gaps.get(sym, [])
+                if not any(gs >= last_ms for gs, _ in existing):
+                    catchup_gaps.setdefault(sym, []).append((last_ms, now_ms))
+
+        if not catchup_gaps:
+            logger.info("[PostInit] Startup penceresi temiz, gap yok.")
+            return
+
+        total_gaps = sum(len(g) for g in catchup_gaps.values())
+        logger.info("[PostInit] %d sembolde %d gap bulundu, dolduruluyor...", len(catchup_gaps), total_gaps)
+
+        _INTERVAL_MS = 60_000
+        total = 0
+
+        for sym, gaps in catchup_gaps.items():
+            sym_filled = 0
+            for gap_start_ms, gap_end_ms in gaps:
+                fetch_start = gap_start_ms + _INTERVAL_MS
+                while fetch_start < gap_end_ms:
+                    await asyncio.sleep(0.5)
+                    try:
+                        df = await BinanceClientManager.fetch_klines(
+                            symbol=sym, interval="1m", limit=1000, startTime=fetch_start,
+                        )
+                    except Exception:
+                        break
+                    if df is None or df.empty:
+                        break
+                    df = df[df["open_time"] < gap_end_ms]
+                    if df.empty:
+                        break
+                    async with self.db_lock:
+                        await bulk_insert_price_data(sym, df, interval="1m")
+                    sym_filled += len(df)
+                    last_ts = int(df["open_time"].iloc[-1])
+                    if last_ts <= fetch_start or len(df) < 1000:
+                        break
+                    fetch_start = last_ts + _INTERVAL_MS
+
+            if sym_filled > 0 and self.mtf_enabled:
+                await self._refresh_mtf_redis(sym)
+            total += sym_filled
+
+        logger.info("[PostInit] Tamamlandı: %d bar eklendi", total)
 
     async def _health_loop(self):
         """Her 15 dakikada price_data tazeliğini kontrol eder; gap tespit ederse doldurur."""
@@ -1379,19 +1626,31 @@ class LiveDataManager:
             else:
                 logger.debug("[Health] Tüm semboller güncel")
 
+    async def _background_startup(self) -> None:
+        """WebSocket başladıktan sonra MTF init + gap fill arka planda çalışır.
+
+        Eski mimari: gap_fill → mtf_init → post_init → WS  (20+ dk gap)
+        Yeni mimari: WS → bu task arka planda  (~0 dk gap)
+        """
+        logger.info("[BackgroundStartup] Başladı (WebSocket zaten aktif).")
+        if self.mtf_enabled:
+            await self._initialize_mtf_dataframes()
+        await self._startup_gap_fill()
+        await self._post_init_catchup()
+        logger.info("[BackgroundStartup] Tamamlandı.")
+
     async def run(self):
         """Ana çalıştırma döngüsü."""
         try:
-            # 0. Startup gap fill — WebSocket açılmadan önce iç gap'leri doldur
-            await self._startup_gap_fill()
-            # 1. MTF buffers'ı başlat (tüm timeframe'ler için batch halinde)
-            if self.mtf_enabled:
-                await self._initialize_mtf_dataframes()
-            # 2. Canlı veri akışını başlat
+            # 1. WebSocket önce başlat — canlı veri hemen akar, gap oluşmaz
             await self.start_streams()
-            # 3. Tarihsel gap fill → WebSocket açıldıktan 30s sonra arka planda
+            # 2. MTF init + gap fill arka planda (WS'yi bloklamaz)
+            asyncio.create_task(self._background_startup())
+            # 3. 30s sonra kuyruk gap fill (son timestamp → şu an)
             asyncio.create_task(self._deferred_sync_historical(delay_seconds=30))
-            # 4. Periyodik sağlık kontrolü
+            # 4. 120s sonra iç gap kontrolü (startup penceresi LAG analizi)
+            asyncio.create_task(self._deferred_internal_gap_check(delay_seconds=120))
+            # 5. Periyodik sağlık kontrolü
             asyncio.create_task(self._health_loop())
 
             logger.info(
