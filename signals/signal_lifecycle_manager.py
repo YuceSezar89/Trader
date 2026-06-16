@@ -23,7 +23,7 @@ class SignalLifecycleManager:
     def __init__(self):
         self.logger = logging.getLogger(__name__)
     
-    async def add_new_signal(self, signal_data: Dict[str, Any]) -> str:
+    async def add_new_signal(self, signal_data: Dict[str, Any], close_price: Optional[float] = None) -> str:
         """
         Yeni sinyal ekler ve gerekirse eski sinyalleri supersede eder
         
@@ -37,11 +37,12 @@ class SignalLifecycleManager:
             try:
                 # 1. Önce aynı sembol + interval + indicators için aktif sinyalleri supersede et (signal_type fark etmez)
                 superseded_count = await self._supersede_existing_signals(
-                    session, 
-                    signal_data['symbol'], 
+                    session,
+                    signal_data['symbol'],
                     signal_data['interval'],
                     signal_data.get('indicators'),
-                    None  # signal_type'ı geçmiyoruz - aynı indikatörün tüm yönleri supersede edilecek
+                    None,
+                    close_price=close_price,
                 )
                 
                 # 2. Yeni sinyali ekle (UPSERT ile duplicate key hatalarını önle)
@@ -89,12 +90,13 @@ class SignalLifecycleManager:
                 raise
     
     async def _supersede_existing_signals(
-        self, 
-        session: AsyncSession, 
-        symbol: str, 
+        self,
+        session: AsyncSession,
+        symbol: str,
         interval: str,
         indicators: Optional[str] = None,
-        signal_type: Optional[str] = None
+        signal_type: Optional[str] = None,
+        close_price: Optional[float] = None,
     ) -> int:
         """
         Aynı sembol + interval + indicators için aktif sinyalleri supersede eder
@@ -133,13 +135,18 @@ class SignalLifecycleManager:
         current_time = datetime.now()
         
         for signal in active_signals:
-            # Doğrudan nesne üzerinde güncelleme (mypy uyumlu)
             signal.status = 'superseded'  # type: ignore
             signal.superseded_at = current_time  # type: ignore
             signal.lifecycle_end_reason = 'supersede'  # type: ignore
-            # performance_period trigger tarafından hesaplanacak
-            
-            # Değişiklikleri session'a ekle
+
+            if close_price is not None and signal.price:
+                signal.close_price = close_price  # type: ignore
+                entry = float(signal.price)
+                if signal.signal_type == 'Long':
+                    signal.realized_pnl = (close_price - entry) / entry * 100  # type: ignore
+                else:
+                    signal.realized_pnl = (entry - close_price) / entry * 100  # type: ignore
+
             session.add(signal)
             
             superseded_count += 1

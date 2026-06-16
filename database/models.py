@@ -90,6 +90,10 @@ class Signal(Base):
     mtf_score = Column(Float, nullable=True)
     vpms_mtf_score = Column(Float, nullable=True)
 
+    # Gerçekleşmiş P&L (supersede anında yazılır)
+    close_price = Column(Float, nullable=True)
+    realized_pnl = Column(Float, nullable=True)
+
     # Lifecycle yönetimi kolonları
     status = Column(String(20), nullable=True, default='active')
     superseded_by = Column(Integer, nullable=True)

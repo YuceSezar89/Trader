@@ -231,8 +231,9 @@ async def process_and_enrich_signals(
                     "vpms_mtf_score":           mtf_score,
                 }
 
+                current_close = float(df["close"].iloc[-2]) if len(df) >= 2 else None
                 logger.info(f"[{symbol}] Sinyal kaydediliyor: {signal_name} - {sig_type}")
-                signal_id = await signal_lifecycle_manager.add_new_signal(enriched_signal)
+                signal_id = await signal_lifecycle_manager.add_new_signal(enriched_signal, close_price=current_close)
                 logger.info(f"[{symbol}] Sinyal kaydedildi: ID {signal_id}")
 
             except Exception as e:
