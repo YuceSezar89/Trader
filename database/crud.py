@@ -1,6 +1,6 @@
 from typing import List, Dict, Any, Optional
 import pandas as pd
-from sqlalchemy import func, select, update, insert, delete
+from sqlalchemy import func, select, update, insert, delete, text
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.exc import OperationalError
 import asyncio
@@ -11,6 +11,43 @@ from datetime import datetime, timedelta
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+_CAGG_MAP = {
+    "5m":  "cagg_5m",
+    "15m": "cagg_15m",
+    "1h":  "cagg_1h",
+    "4h":  "cagg_4h",
+}
+
+
+async def get_cagg_klines(symbol: str, interval: str, limit: int) -> pd.DataFrame:
+    """CA view'larından (cagg_5m/15m/1h/4h) son N bar'ı Binance formatında döndürür."""
+    view = _CAGG_MAP[interval]
+    async with get_session() as session:
+        result = await session.execute(
+            text(f"""
+                SELECT bucket, open, high, low, close, volume
+                FROM {view}
+                WHERE symbol = :sym
+                ORDER BY bucket DESC
+                LIMIT :lim
+            """),
+            {"sym": symbol, "lim": limit},
+        )
+        rows = result.fetchall()
+
+    if not rows:
+        return pd.DataFrame()
+
+    rows = sorted(rows, key=lambda r: r[0])
+    return pd.DataFrame({
+        "open_time": [int(r[0].timestamp() * 1000) for r in rows],
+        "open":      [r[1] for r in rows],
+        "high":      [r[2] for r in rows],
+        "low":       [r[3] for r in rows],
+        "close":     [r[4] for r in rows],
+        "volume":    [r[5] for r in rows],
+    })
 
 async def initialize_database():
     """Veritabanını ve tabloları oluşturur."""
@@ -38,7 +75,12 @@ async def get_last_timestamp(symbol: str, interval: Optional[str] = None) -> Opt
         return None
 
 async def get_recent_klines(symbol: str, interval: str, limit: int) -> pd.DataFrame:
-    """DB'den son N kline'ı Binance formatında (open_time ms) döndürür."""
+    """DB'den son N kline'ı Binance formatında (open_time ms) döndürür.
+    5m/15m/1h/4h → CA view'larından çekilir (boşluksuz, otomatik hesaplanan).
+    """
+    if interval in _CAGG_MAP:
+        return await get_cagg_klines(symbol, interval, limit)
+
     async with get_session() as session:
         stmt = (
             select(PriceData)

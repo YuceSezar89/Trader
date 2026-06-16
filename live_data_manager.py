@@ -17,6 +17,7 @@ from utils.exceptions import BinanceAPIError
 from indicators.core import add_all_indicators
 from database.crud import (
     bulk_insert_price_data,
+    get_cagg_klines,
     get_last_timestamp,
     get_recent_klines,
     initialize_database,
@@ -739,7 +740,8 @@ class LiveDataManager:
                 return
 
             # Yalnızca 1m buffer'dan güvenilir şekilde üretilebilen TF'ler
-            aggregation_targets = ['5m', '15m', '1h']
+            # 1h/4h → CA view'larından periyodik olarak yenilenir (_refresh_mtf_redis)
+            aggregation_targets = ['5m', '15m']
 
             for target_tf in aggregation_targets:
                 if not TimeframeAggregator.can_aggregate('1m', target_tf):
@@ -889,56 +891,39 @@ class LiveDataManager:
                         loaded_count += 1
                         logger.debug(f"[{symbol}] {agg_tf}: {len(agg_df)} bar aggregated from 1m")
 
-            # ── 1h / 4h / 1d: Redis cache → yoksa Binance ───────────────────
-            for tf, limit in binance_timeframe_limits.items():
-                # Önce Redis cache'e bak (7 günlük TTL — sistem kısa süreli restart'ta sıfırdan çekmez)
-                cached_df = await RedisClient.get_mtf_klines(symbol, tf, limit=limit)
-                if cached_df is not None and len(cached_df) >= limit // 2:
-                    self.mtf_buffers[symbol][tf] = cached_df.drop_duplicates(subset=["open_time"], keep="last")
-                    loaded_count += 1
-                    logger.debug(f"[{symbol}] {tf}: Redis cache'den yüklendi ({len(cached_df)} bar)")
-                    continue
-
-                # Cache miss → önce DB'yi dene (4h/1d artık DB'ye yazılıyor)
-                db_df = await get_recent_klines(symbol, tf, limit)
-                if db_df is not None and len(db_df) >= limit // 2:
-                    df_ind = await loop.run_in_executor(_MTF_EXECUTOR, add_all_indicators, db_df)
-                    buf_limit = self.mtf_buffer_limits.get(tf, 250)
-                    self.mtf_buffers[symbol][tf] = df_ind.tail(buf_limit).drop_duplicates(subset=["open_time"], keep="last")
+            # ── 1h / 4h: CA view'larından (boşluksuz, 1m'den otomatik türetilmiş) ──
+            for tf in ['1h', '4h']:
+                limit = self.mtf_buffer_limits.get(tf, 250)
+                ca_df = await get_cagg_klines(symbol, tf, limit)
+                if not ca_df.empty:
+                    df_ind = await loop.run_in_executor(_MTF_EXECUTOR, add_all_indicators, ca_df)
+                    self.mtf_buffers[symbol][tf] = df_ind.drop_duplicates(subset=["open_time"], keep="last")
                     await RedisClient.set_mtf_klines(symbol, tf, self.mtf_buffers[symbol][tf])
                     loaded_count += 1
-                    logger.debug(f"[{symbol}] {tf}: DB'den yüklendi ({len(db_df)} bar)")
-                    continue
-
-                # DB de boş → Binance'ten çek
-                binance_call_made = True
-                max_retries = 3
-                df = pd.DataFrame()
-                for retry in range(max_retries):
-                    try:
-                        df = await BinanceClientManager.fetch_klines(symbol=symbol, interval=tf, limit=limit)
-                        break
-                    except Exception as e:
-                        if "418" in str(e) or "429" in str(e):
-                            if retry < max_retries - 1:
-                                wait_time = (retry + 1) * 10
-                                logger.warning(f"[{symbol}] {tf} Rate limit, {wait_time}s bekleniyor...")
-                                await asyncio.sleep(wait_time)
-                                continue
-                        raise
-
-                if not df.empty:
-                    df_with_indicators = await loop.run_in_executor(_MTF_EXECUTOR, add_all_indicators, df)
-                    buffer_limit = self.mtf_buffer_limits.get(tf, 250)
-                    self.mtf_buffers[symbol][tf] = df_with_indicators.tail(buffer_limit).drop_duplicates(subset=["open_time"], keep="last")
-                    await RedisClient.set_mtf_klines(symbol, tf, self.mtf_buffers[symbol][tf])
-                    loaded_count += 1
-                    logger.debug(f"[{symbol}] {tf}: Binance'ten çekildi ({len(df)} bar)")
+                    logger.debug(f"[{symbol}] {tf}: CA'dan yüklendi ({len(ca_df)} bar)")
                 else:
-                    logger.warning(f"[{symbol}] {tf}: Veri boş")
+                    logger.warning(f"[{symbol}] {tf}: CA boş")
 
-            logger.info(f"✅ [{symbol}] {loaded_count} TF yüklendi (1m+5m+15m=aggregated, 1h/4h/1d=cache→Binance)")
-            # False döndür → batch'e "Binance kullanıldı" sinyali ver
+            # ── 1d: Redis cache → yoksa Binance (CA için çok fazla 1m gerekir) ──
+            limit_1d = binance_timeframe_limits.get('1d', 250)
+            cached_df = await RedisClient.get_mtf_klines(symbol, '1d', limit=limit_1d)
+            if cached_df is not None and len(cached_df) >= limit_1d // 2:
+                self.mtf_buffers[symbol]['1d'] = cached_df.drop_duplicates(subset=["open_time"], keep="last")
+                loaded_count += 1
+                logger.debug(f"[{symbol}] 1d: Redis cache'den yüklendi ({len(cached_df)} bar)")
+            else:
+                binance_call_made = True
+                df_1d = await BinanceClientManager.fetch_klines(symbol=symbol, interval='1d', limit=limit_1d)
+                if not df_1d.empty:
+                    df_ind = await loop.run_in_executor(_MTF_EXECUTOR, add_all_indicators, df_1d)
+                    self.mtf_buffers[symbol]['1d'] = df_ind.tail(limit_1d).drop_duplicates(subset=["open_time"], keep="last")
+                    await RedisClient.set_mtf_klines(symbol, '1d', self.mtf_buffers[symbol]['1d'])
+                    loaded_count += 1
+                    logger.debug(f"[{symbol}] 1d: Binance'ten çekildi ({len(df_1d)} bar)")
+                else:
+                    logger.warning(f"[{symbol}] 1d: Veri boş")
+
+            logger.info(f"✅ [{symbol}] {loaded_count} TF yüklendi (1m+5m+15m=aggregated, 1h/4h=CA, 1d=cache→Binance)")
             return not binance_call_made
 
         except Exception as e:
@@ -1472,7 +1457,7 @@ class LiveDataManager:
         self._startup_lookback_days = float(lookback_days)
 
     async def _refresh_mtf_redis(self, symbol: str) -> None:
-        """1m DB verisinden 5m/15m aggregate ederek Redis'i günceller."""
+        """1m DB verisinden 5m/15m aggregate, 1h/4h CA'dan yenileyerek Redis'i günceller."""
         if not self.mtf_enabled or symbol not in self.mtf_buffers:
             return
         try:
@@ -1494,6 +1479,14 @@ class LiveDataManager:
                 agg_ind = await loop.run_in_executor(_MTF_EXECUTOR, add_all_indicators, agg_df.tail(limit * 2))
                 self.mtf_buffers[symbol][agg_tf] = agg_ind.tail(limit)
                 await RedisClient.set_mtf_klines(symbol, agg_tf, self.mtf_buffers[symbol][agg_tf])
+            for ca_tf in ["1h", "4h"]:
+                limit = self.mtf_buffer_limits.get(ca_tf, 250)
+                ca_df = await get_cagg_klines(symbol, ca_tf, limit)
+                if ca_df.empty:
+                    continue
+                df_ind = await loop.run_in_executor(_MTF_EXECUTOR, add_all_indicators, ca_df)
+                self.mtf_buffers[symbol][ca_tf] = df_ind.drop_duplicates(subset=["open_time"], keep="last")
+                await RedisClient.set_mtf_klines(symbol, ca_tf, self.mtf_buffers[symbol][ca_tf])
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.debug("[MTF-Refresh] %s hata: %s", symbol, exc)
 
