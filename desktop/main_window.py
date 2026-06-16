@@ -5,7 +5,10 @@ Dockable panel layout, menü/toolbar/status bar barındırır.
 
 import subprocess
 import sys
+from pathlib import Path
 from typing import Optional
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSlot
 from PyQt6.QtGui import QAction, QFont, QKeySequence
