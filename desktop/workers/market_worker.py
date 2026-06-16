@@ -22,7 +22,7 @@ _FALLBACK_MS = 30_000
 class MarketWorker(QThread):  # pylint: disable=too-many-instance-attributes
     """Redis pub/sub ile anlık fiyat ve kline güncellemelerini yayınlar."""
 
-    price_updated = pyqtSignal(str, float, float)   # symbol, price, change_pct
+    price_updated = pyqtSignal(str, float, float, float)   # symbol, price, change_pct, volume
     klines_updated = pyqtSignal(str, str, object)   # symbol, timeframe, DataFrame
     connection_changed = pyqtSignal(bool, str)       # connected, message
 
@@ -117,7 +117,8 @@ class MarketWorker(QThread):  # pylint: disable=too-many-instance-attributes
                 price = float(df["close"].iloc[-1])
                 open_price = float(df["open"].iloc[0])
                 change_pct = (price - open_price) / open_price * 100 if open_price else 0.0
-                self.price_updated.emit(symbol, price, change_pct)
+                volume = float(df["volume"].sum()) if "volume" in df.columns else 0.0
+                self.price_updated.emit(symbol, price, change_pct, volume)
                 self.klines_updated.emit(symbol, "1m", df)
 
         if symbol == chart_sym and tf == chart_tf:
@@ -138,7 +139,8 @@ class MarketWorker(QThread):  # pylint: disable=too-many-instance-attributes
                 price = float(df_1m["close"].iloc[-1])
                 open_price = float(df_1m["open"].iloc[0])
                 change_pct = (price - open_price) / open_price * 100 if open_price else 0.0
-                self.price_updated.emit(symbol, price, change_pct)
+                volume = float(df_1m["volume"].sum()) if "volume" in df_1m.columns else 0.0
+                self.price_updated.emit(symbol, price, change_pct, volume)
 
         if chart_sym:
             df = self._fetch_klines(chart_sym, chart_tf)

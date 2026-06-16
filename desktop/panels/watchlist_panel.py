@@ -138,9 +138,9 @@ class WatchlistPanel(QWidget):
 
     # ── Worker Sinyalleri ─────────────────────────────────────────────────
 
-    @pyqtSlot(str, float, float)
-    def on_price_updated(self, symbol: str, price: float, change_pct: float) -> None:
-        self._model.on_price_updated(symbol, price, change_pct)
+    @pyqtSlot(str, float, float, float)
+    def on_price_updated(self, symbol: str, price: float, change_pct: float, volume: float = 0.0) -> None:
+        self._model.on_price_updated(symbol, price, change_pct, volume)
 
     @pyqtSlot(dict)
     def on_new_signal(self, signal: dict) -> None:

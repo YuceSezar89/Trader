@@ -19,14 +19,12 @@ from PyQt6.QtGui import QColor
 
 from desktop.theme import COLORS
 
-COLUMNS = ["Sembol", "Fiyat", "Değişim %", "Hacim", "VPM", "Sinyal", "TF"]
-COL_SYMBOL   = 0
-COL_PRICE    = 1
-COL_CHANGE   = 2
-COL_VOLUME   = 3
-COL_VPM      = 4
-COL_SIGNAL   = 5
-COL_TF       = 6
+COLUMNS = ["Sembol", "Fiyat", "Değişim %", "Hacim", "VPM"]
+COL_SYMBOL = 0
+COL_PRICE  = 1
+COL_CHANGE = 2
+COL_VOLUME = 3
+COL_VPM    = 4
 
 
 @dataclass
@@ -40,10 +38,12 @@ class SymbolRow:
     interval: str = ""
     prev_price: float = 0.0     # flaş animasyonu için
 
-    def update_price(self, price: float, change_pct: float) -> None:
+    def update_price(self, price: float, change_pct: float, volume: float = 0.0) -> None:
         self.prev_price = self.price
         self.price = price
         self.change_pct = change_pct
+        if volume:
+            self.volume = volume
 
 
 def _format_price(price: float) -> str:
@@ -119,23 +119,15 @@ class WatchlistModel(QAbstractTableModel):
 
     def _display(self, row: SymbolRow, col: int) -> str:
         match col:
-            case _ if col == COL_SYMBOL:
-                return row.symbol
-            case _ if col == COL_PRICE:
-                return _format_price(row.price) if row.price else "—"
+            case _ if col == COL_SYMBOL: return row.symbol
+            case _ if col == COL_PRICE:  return _format_price(row.price) if row.price else "—"
             case _ if col == COL_CHANGE:
                 if row.change_pct == 0:
                     return "—"
                 sign = "+" if row.change_pct > 0 else ""
                 return f"{sign}{row.change_pct:.2f}%"
-            case _ if col == COL_VOLUME:
-                return _format_volume(row.volume) if row.volume else "—"
-            case _ if col == COL_VPM:
-                return f"{row.vpm_score:.1f}" if row.vpm_score is not None else "—"
-            case _ if col == COL_SIGNAL:
-                return row.signal_type or "—"
-            case _ if col == COL_TF:
-                return row.interval or "—"
+            case _ if col == COL_VOLUME: return _format_volume(row.volume) if row.volume else "—"
+            case _ if col == COL_VPM:    return f"{row.vpm_score:.1f}" if row.vpm_score is not None else "—"
         return ""
 
     def _foreground(self, row: SymbolRow, col: int) -> Optional[QColor]:
@@ -145,21 +137,12 @@ class WatchlistModel(QAbstractTableModel):
             if row.change_pct < 0:
                 return QColor(COLORS["red"])
             return QColor(COLORS["text_muted"])
-
-        if col == COL_SIGNAL:
-            if row.signal_type == "LONG":
-                return QColor(COLORS["green"])
-            if row.signal_type == "SHORT":
-                return QColor(COLORS["red"])
-            return QColor(COLORS["text_muted"])
-
         if col == COL_VPM and row.vpm_score is not None:
             if row.vpm_score >= 70:
                 return QColor(COLORS["green"])
             if row.vpm_score >= 50:
                 return QColor(COLORS["yellow"])
             return QColor(COLORS["text_muted"])
-
         return None
 
     # ── Veri yükleme / güncelleme ─────────────────────────────────────────
@@ -171,14 +154,14 @@ class WatchlistModel(QAbstractTableModel):
         self._symbol_index = {r.symbol: i for i, r in enumerate(self._rows)}
         self.endResetModel()
 
-    @pyqtSlot(str, float, float)
-    def on_price_updated(self, symbol: str, price: float, change_pct: float) -> None:
+    @pyqtSlot(str, float, float, float)
+    def on_price_updated(self, symbol: str, price: float, change_pct: float, volume: float = 0.0) -> None:
         idx = self._symbol_index.get(symbol)
         if idx is None:
             return
-        self._rows[idx].update_price(price, change_pct)
+        self._rows[idx].update_price(price, change_pct, volume)
         top_left = self.index(idx, COL_PRICE)
-        bottom_right = self.index(idx, COL_CHANGE)
+        bottom_right = self.index(idx, COL_VOLUME)
         self.dataChanged.emit(top_left, bottom_right, [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ForegroundRole])
 
     def update_signal(self, symbol: str, signal_type: str, vpm: Optional[float], interval: str) -> None:
@@ -190,7 +173,7 @@ class WatchlistModel(QAbstractTableModel):
         row.vpm_score = vpm
         row.interval = interval
         top_left = self.index(idx, COL_VPM)
-        bottom_right = self.index(idx, COL_SIGNAL)
+        bottom_right = self.index(idx, COL_VPM)
         self.dataChanged.emit(top_left, bottom_right, [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ForegroundRole])
 
     def symbol_at(self, row: int) -> Optional[str]:
