@@ -57,7 +57,8 @@ class SignalWorker(QThread):
                     SELECT id, symbol, signal_type, timestamp,
                            price, interval, vpms_score, vpms_mtf_score,
                            alpha, beta, zscore_ratio_percent, status, indicators,
-                           st_confirmed
+                           st_confirmed, sharpe_ratio, sortino_ratio,
+                           calmar_ratio, omega_ratio, treynor_ratio, information_ratio
                     FROM signals
                     WHERE status = 'active'
                     ORDER BY timestamp DESC
@@ -79,7 +80,8 @@ class SignalWorker(QThread):
                     SELECT id, symbol, signal_type, timestamp,
                            price, interval, vpms_score, vpms_mtf_score,
                            alpha, beta, zscore_ratio_percent, status, indicators,
-                           st_confirmed
+                           st_confirmed, sharpe_ratio, sortino_ratio,
+                           calmar_ratio, omega_ratio, treynor_ratio, information_ratio
                     FROM signals
                     WHERE id > %s
                     ORDER BY id ASC

@@ -89,6 +89,12 @@ class SignalRow:
     status: str = "active"
     current_price: float = 0.0
     st_confirmed: Optional[bool] = None
+    sharpe: Optional[float] = None
+    sortino: Optional[float] = None
+    calmar: Optional[float] = None
+    omega: Optional[float] = None
+    treynor: Optional[float] = None
+    info_ratio: Optional[float] = None
     pnl_pct: Optional[float] = field(default=None, init=False)
 
     def update_price(self, price: float) -> None:
@@ -132,6 +138,8 @@ class SignalsModel(QAbstractTableModel):
 
         if role == Qt.ItemDataRole.DisplayRole:
             return self._display(row, col)
+        if role == Qt.ItemDataRole.ToolTipRole:
+            return self._tooltip(row)
         if role == Qt.ItemDataRole.ForegroundRole:
             return self._foreground(row, col)
         if role == Qt.ItemDataRole.TextAlignmentRole:
@@ -149,13 +157,28 @@ class SignalsModel(QAbstractTableModel):
             case _ if col == COL_TF:        return row.interval
             case _ if col == COL_INDICATOR: return row.indicators or "—"
             case _ if col == COL_VPM:       return _fmt_score(row.vpm)
-            case _ if col == COL_MTF:       return _fmt_score(row.mtf)
+            case _ if col == COL_MTF:       return f"{int(row.mtf)}" if row.mtf is not None else "—"
             case _ if col == COL_ALPHA:     return _fmt_ratio(row.alpha)
             case _ if col == COL_BETA:      return _fmt_ratio(row.beta)
             case _ if col == COL_ZSCORE:    return _fmt_score(row.zscore)
             case _ if col == COL_PNL:       return _fmt_pnl(row.pnl_pct)
             case _ if col == COL_AGE:       return _fmt_age(row.timestamp)
         return ""
+
+    def _tooltip(self, row: SignalRow) -> str:
+        def _r(v, fmt=".2f"): return f"{v:{fmt}}" if v is not None else "—"
+        st = ("✓ Onaylı" if row.st_confirmed else "✗ Onaysız") if row.st_confirmed is not None else "—"
+        mtf = f"{int(row.mtf)}" if row.mtf is not None else "—"
+        return (
+            f"{row.symbol}  {row.signal_type}  {row.interval}  |  {row.indicators}\n"
+            f"{'─'*52}\n"
+            f"  Alpha    {_r(row.alpha, '+.4f'):>10}    Beta     {_r(row.beta):>8}\n"
+            f"  Sharpe   {_r(row.sharpe):>10}    Sortino  {_r(row.sortino):>8}\n"
+            f"  Calmar   {_r(row.calmar):>10}    Omega    {_r(row.omega):>8}\n"
+            f"  Treynor  {_r(row.treynor):>10}    Info R   {_r(row.info_ratio):>8}\n"
+            f"{'─'*52}\n"
+            f"  VPMV: {_r(row.vpm, '.1f')}   MTF: {mtf}   ST: {st}"
+        )
 
     def _foreground(self, row: SignalRow, col: int) -> Optional[QColor]:
         if col == COL_TYPE:
@@ -169,6 +192,12 @@ class SignalsModel(QAbstractTableModel):
                 return QColor(COLORS["green"])
             if row.pnl_pct < 0:
                 return QColor(COLORS["red"])
+        if col == COL_MTF and row.mtf is not None:
+            if row.mtf >= 100:
+                return QColor(COLORS["green"])
+            if row.mtf >= 50:
+                return QColor(COLORS["yellow"])
+            return QColor(COLORS["red"])
         if col == COL_VPM and row.vpm is not None:
             if row.vpm >= 70:
                 return QColor(COLORS["green"])
@@ -229,6 +258,12 @@ class SignalsModel(QAbstractTableModel):
             indicators=s.get("indicators") or "",
             status=s.get("status", "active"),
             st_confirmed=s.get("st_confirmed"),
+            sharpe=s.get("sharpe_ratio"),
+            sortino=s.get("sortino_ratio"),
+            calmar=s.get("calmar_ratio"),
+            omega=s.get("omega_ratio"),
+            treynor=s.get("treynor_ratio"),
+            info_ratio=s.get("information_ratio"),
         )
         idx = len(self._rows)
         self._rows.append(row)

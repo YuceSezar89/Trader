@@ -138,6 +138,17 @@ class ActiveSignalsPanel(QWidget):
         )
         root.addWidget(self._stats_label)
 
+        # Detay şeridi — seçili sinyal metrikleri
+        self._detail_bar = QLabel("")
+        self._detail_bar.setStyleSheet(
+            f"background: {COLORS['bg_tertiary']}; color: {COLORS['text_primary']}; "
+            f"font-size: 11px; font-family: monospace; padding: 4px 8px; "
+            f"border-top: 1px solid {COLORS['border']};"
+        )
+        self._detail_bar.setWordWrap(False)
+        self._detail_bar.hide()
+        root.addWidget(self._detail_bar)
+
     def _make_filter_btn(self, text: str, active: bool) -> QPushButton:
         btn = QPushButton(text)
         btn.setCheckable(True)
@@ -244,6 +255,33 @@ class ActiveSignalsPanel(QWidget):
     @pyqtSlot()
     def _on_row_clicked(self) -> None:
         self._update_stats()
+        self._update_detail_bar()
+
+    def _update_detail_bar(self) -> None:
+        row = self._selected_row()
+        if row is None:
+            self._detail_bar.hide()
+            return
+
+        def _r(v, fmt=".2f"): return f"{v:{fmt}}" if v is not None else "—"
+        st = ("✓" if row.st_confirmed else "✗") if row.st_confirmed is not None else "—"
+        mtf = f"{int(row.mtf)}" if row.mtf is not None else "—"
+        pnl = (f"{row.pnl_pct:+.2f}%" if row.pnl_pct is not None else "—")
+
+        text = (
+            f"  α {_r(row.alpha, '+.4f')}  "
+            f"β {_r(row.beta)}  │  "
+            f"Sharpe {_r(row.sharpe)}  "
+            f"Sortino {_r(row.sortino)}  "
+            f"Calmar {_r(row.calmar)}  "
+            f"Omega {_r(row.omega)}  │  "
+            f"VPMV {_r(row.vpm, '.1f')}  "
+            f"MTF {mtf}  "
+            f"ST {st}  │  "
+            f"P&L {pnl}"
+        )
+        self._detail_bar.setText(text)
+        self._detail_bar.show()
 
     @pyqtSlot()
     def _on_row_double_clicked(self) -> None:

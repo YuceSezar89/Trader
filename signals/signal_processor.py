@@ -14,8 +14,53 @@ from utils.preprocessing import (
     normalize_volatility_0_100,
     normalize_price_0_100,
 )
+from utils.redis_client import RedisClient
 
 logger = get_logger(__name__)
+
+_MTF_HIGHER: dict[str, list[str]] = {
+    "1m":  ["5m",  "15m"],
+    "5m":  ["15m", "1h"],
+    "15m": ["1h",  "4h"],
+    "1h":  ["4h",  "1d"],
+    "4h":  ["1d"],
+    "1d":  [],
+}
+
+
+async def _compute_mtf_score(symbol: str, interval: str, signal_type: str) -> float:
+    """
+    Üst TF'lerin ST yönüne göre MTF konfirmasyon skoru döner (0 / 50 / 100).
+
+    Her üst TF için sinyal yönüyle ST direction uyuşuyorsa +1 puan.
+    Toplam puan normalize edilerek 0-100 arasında döner.
+    """
+    higher_tfs = _MTF_HIGHER.get(interval, [])
+    if not higher_tfs:
+        return 100.0
+
+    confirmed = 0
+    checked = 0
+    for tf in higher_tfs:
+        try:
+            df = await RedisClient.get_mtf_klines(symbol, tf)
+            if df is None or df.empty or "st_direction" not in df.columns:
+                continue
+            valid = df["st_direction"].dropna()
+            if valid.empty:
+                continue
+            st_bullish = float(valid.iloc[-1]) == -1
+            checked += 1
+            if (signal_type == "Long" and st_bullish) or \
+               (signal_type == "Short" and not st_bullish):
+                confirmed += 1
+        except Exception:
+            pass
+
+    if checked == 0:
+        return 100.0
+
+    return round(confirmed / checked * 100)
 
 
 def _compute_vpmv_scores(df: pd.DataFrame, signal_type: str) -> tuple[float, float, float, float]:
@@ -154,7 +199,15 @@ async def process_and_enrich_signals(
                     )
                     continue
 
-                # 5. Sinyali zenginleştir ve kaydet
+                # 5. MTF konfirmasyon skoru hesapla
+                mtf_score = await _compute_mtf_score(symbol, interval, sig_type)
+                logger.info(
+                    f"[{symbol}] MTF konfirmasyon | {interval} {sig_type} "
+                    f"→ score={mtf_score:.0f} "
+                    f"(higher TFs: {_MTF_HIGHER.get(interval, [])})"
+                )
+
+                # 6. Sinyali zenginleştir ve kaydet
                 signal_data_clean = {k: v for k, v in signal_data.items() if k != "id"}
                 enriched_signal = {
                     "symbol":                   symbol,
@@ -175,6 +228,7 @@ async def process_and_enrich_signals(
                     "vpms_score":               float(vpms_score) if vpms_score is not None else None,
                     "vpm_confirmed":            True,
                     "st_confirmed":             st_confirmed,
+                    "vpms_mtf_score":           mtf_score,
                 }
 
                 logger.info(f"[{symbol}] Sinyal kaydediliyor: {signal_name} - {sig_type}")
