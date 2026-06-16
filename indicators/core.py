@@ -1,7 +1,6 @@
 import pandas as pd
 import numpy as np
 from scipy.signal import argrelextrema
-from typing import Optional, Tuple, List, Union
 
 # Config import
 from config import Config
@@ -11,9 +10,7 @@ from utils.exceptions import (
     CalculationError,
     ValidationError,
     raise_missing_column,
-    raise_insufficient_data,
-    raise_calculation_error,
-    ErrorCodes
+    raise_insufficient_data
 )
 from utils.logger import get_logger
 
@@ -175,6 +172,69 @@ def calculate_macd(df, fast=12, slow=26, signal=9, price_col='close'):
     signal_line = macd.ewm(span=signal, adjust=False).mean()
     histogram = macd - signal_line
     return macd, signal_line, histogram
+
+
+def calculate_supertrend(
+    df: pd.DataFrame, atr_length: int = 10, factor: float = 3.0
+) -> tuple:
+    """
+    SuperTrend hesaplar (TradingView/ChartPrime uyumlu, RMA seed=SMA).
+
+    Döner: (st_line, direction, long_signal, short_signal) — hepsi pd.Series
+    direction: -1=bullish, 1=bearish
+    long_signal / short_signal: direction değiştiği bar True
+    """
+    close = df["close"].astype(float)
+    high  = df["high"].astype(float)
+    low   = df["low"].astype(float)
+
+    tr = pd.concat([
+        high - low,
+        (high - close.shift(1)).abs(),
+        (low  - close.shift(1)).abs(),
+    ], axis=1).max(axis=1)
+
+    alpha = 1.0 / atr_length
+    atr = tr.copy().astype(float)
+    atr.iloc[:atr_length] = np.nan
+    atr.iloc[atr_length - 1] = tr.iloc[:atr_length].mean()
+    for i in range(atr_length, len(tr)):
+        atr.iloc[i] = alpha * tr.iloc[i] + (1 - alpha) * atr.iloc[i - 1]
+
+    hl2     = (high + low) / 2
+    upper_b = hl2 + factor * atr
+    lower_b = hl2 - factor * atr
+
+    upper     = pd.Series(np.nan, index=df.index, dtype=float)
+    lower     = pd.Series(np.nan, index=df.index, dtype=float)
+    direction = pd.Series(np.nan, index=df.index, dtype=float)
+
+    s = atr_length - 1
+    upper.iloc[s]     = upper_b.iloc[s]
+    lower.iloc[s]     = lower_b.iloc[s]
+    direction.iloc[s] = 1.0
+
+    for i in range(s + 1, len(df)):
+        ub, lb       = upper_b.iloc[i], lower_b.iloc[i]
+        pu, pl       = upper.iloc[i - 1], lower.iloc[i - 1]
+        prev_close   = close.iloc[i - 1]
+        prev_dir     = direction.iloc[i - 1]
+
+        upper.iloc[i] = ub if ub < pu or prev_close > pu else pu
+        lower.iloc[i] = lb if lb > pl or prev_close < pl else pl
+
+        if prev_dir == -1:
+            direction.iloc[i] = 1.0 if close.iloc[i] < lower.iloc[i] else -1.0
+        else:
+            direction.iloc[i] = -1.0 if close.iloc[i] > upper.iloc[i] else 1.0
+
+    st_line      = pd.Series(
+        np.where(direction == -1, lower, upper), index=df.index, dtype=float
+    )
+    long_signal  = ((direction == -1) & (direction.shift(1) != -1)).astype(bool)
+    short_signal = ((direction ==  1) & (direction.shift(1) !=  1)).astype(bool)
+
+    return st_line, direction, long_signal, short_signal
 
 
 def wilder_rma(series, period):
@@ -509,6 +569,15 @@ def add_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
                 df.loc[:, 'atr'] = calculate_atr(df, period=Config.ATR_PERIOD)
             else:
                 df.loc[:, 'atr'] = np.nan
+
+            # SuperTrend(10, 3.0)
+            if len(df) >= 20:
+                _st_line, _st_dir, _, _ = calculate_supertrend(df)
+                df.loc[:, 'st_line']      = _st_line
+                df.loc[:, 'st_direction'] = _st_dir
+            else:
+                df.loc[:, 'st_line']      = np.nan
+                df.loc[:, 'st_direction'] = np.nan
 
             # Momentum (ROC)
             if len(df) >= Config.ROC_PERIOD:

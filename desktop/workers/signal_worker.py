@@ -56,7 +56,8 @@ class SignalWorker(QThread):
                 cur.execute("""
                     SELECT id, symbol, signal_type, timestamp,
                            price, interval, vpms_score, vpms_mtf_score,
-                           alpha, beta, zscore_ratio_percent, status, indicators
+                           alpha, beta, zscore_ratio_percent, status, indicators,
+                           st_confirmed
                     FROM signals
                     WHERE status = 'active'
                     ORDER BY timestamp DESC
@@ -77,7 +78,8 @@ class SignalWorker(QThread):
                 cur.execute("""
                     SELECT id, symbol, signal_type, timestamp,
                            price, interval, vpms_score, vpms_mtf_score,
-                           alpha, beta, zscore_ratio_percent, status, indicators
+                           alpha, beta, zscore_ratio_percent, status, indicators,
+                           st_confirmed
                     FROM signals
                     WHERE id > %s
                     ORDER BY id ASC

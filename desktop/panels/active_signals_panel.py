@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from config import Config
 from desktop.models.signals_model import SignalsModel, SignalsProxyModel
 from desktop.theme import COLORS
 
@@ -84,10 +85,19 @@ class ActiveSignalsPanel(QWidget):
         filter_row.addWidget(self._tf_combo)
 
         self._ind_combo = QComboBox()
-        self._ind_combo.addItems(["İnd: Hepsi", "RSI_Cross", "MA200_Cross"])
+        self._ind_combo.addItems(["İnd: Hepsi", "RSI_Cross", "MA200_Cross", "Supertrend"])
         self._ind_combo.setFixedWidth(110)
         self._ind_combo.currentTextChanged.connect(self._on_indicator_changed)
         filter_row.addWidget(self._ind_combo)
+
+        self._btn_st_filter = QPushButton("ST Filtre: Açık")
+        self._btn_st_filter.setCheckable(True)
+        self._btn_st_filter.setChecked(Config.ST_FILTER_ENABLED)
+        self._btn_st_filter.setFixedHeight(24)
+        self._btn_st_filter.setFixedWidth(110)
+        self._btn_st_filter.setStyleSheet(self._st_filter_style(Config.ST_FILTER_ENABLED))
+        self._btn_st_filter.clicked.connect(self._on_st_filter_toggled)
+        filter_row.addWidget(self._btn_st_filter)
 
         self._search = QLineEdit()
         self._search.setPlaceholderText("Sembol ara…")
@@ -149,6 +159,27 @@ class ActiveSignalsPanel(QWidget):
             f"border-radius: 3px; font-size: 11px; padding: 0 10px; }}"
             f"QPushButton:hover {{ color: {COLORS['text_primary']}; }}"
         )
+
+    @staticmethod
+    def _st_filter_style(active: bool) -> str:
+        if active:
+            return (
+                f"QPushButton {{ background-color: {COLORS['accent']}; color: #fff; "
+                f"border: none; border-radius: 3px; font-size: 10px; padding: 0 6px; }}"
+            )
+        return (
+            f"QPushButton {{ background-color: {COLORS['bg_tertiary']}; "
+            f"color: {COLORS['text_muted']}; border: 1px solid {COLORS['border']}; "
+            f"border-radius: 3px; font-size: 10px; padding: 0 6px; }}"
+            f"QPushButton:hover {{ color: {COLORS['text_primary']}; }}"
+        )
+
+    def _on_st_filter_toggled(self) -> None:
+        enabled = self._btn_st_filter.isChecked()
+        Config.ST_FILTER_ENABLED = enabled
+        self._proxy.set_st_filter(enabled)
+        self._btn_st_filter.setText("ST Filtre: Açık" if enabled else "ST Filtre: Kapalı")
+        self._btn_st_filter.setStyleSheet(self._st_filter_style(enabled))
 
     def _on_tf_changed(self, text: str) -> None:
         self._proxy.set_tf_filter("" if text.startswith("TF:") else text)

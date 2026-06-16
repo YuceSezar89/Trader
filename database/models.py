@@ -83,6 +83,9 @@ class Signal(Base):
     vpms_score = Column(Float, nullable=True)
     vpm_confirmed = Column(Boolean, nullable=True)
 
+    # SuperTrend trend onayı
+    st_confirmed = Column(Boolean, nullable=True)
+
     # MTF bonus ve birleşik skor
     mtf_score = Column(Float, nullable=True)
     vpms_mtf_score = Column(Float, nullable=True)

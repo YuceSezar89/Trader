@@ -100,6 +100,13 @@ async def process_and_enrich_signals(
     min_vpmv = float(Config.VPM.get("MIN_SCORE", 40.0))
     vpm_weights = Config.VPM.get("WEIGHTS")
 
+    # Mevcut ST yönünü bir kez oku (st_confirmed hesabı için)
+    st_direction = None
+    if "st_direction" in df.columns and len(df) >= 2:
+        st_dir_val = df["st_direction"].iloc[-2]
+        if st_dir_val is not None and not (isinstance(st_dir_val, float) and st_dir_val != st_dir_val):
+            st_direction = float(st_dir_val)  # -1=bullish, 1=bearish
+
     for signal_name, signal_list in technical_signals.items():
         if not isinstance(signal_list, list) or not signal_list:
             continue
@@ -107,6 +114,19 @@ async def process_and_enrich_signals(
         for signal_data in signal_list:
             try:
                 sig_type = signal_data.get("signal_type", "Long")
+
+                # st_confirmed: ST yönüyle uyumlu mu? (supertrend kendi sinyali için her zaman True)
+                if signal_name == "supertrend" or st_direction is None:
+                    st_confirmed = True
+                else:
+                    st_bullish = st_direction == -1
+                    st_confirmed = (sig_type == "Long" and st_bullish) or \
+                                   (sig_type == "Short" and not st_bullish)
+                    if not st_confirmed:
+                        logger.info(
+                            f"[{symbol}] {signal_name} {sig_type} ST onaysız "
+                            f"(ST {'bullish' if st_bullish else 'bearish'}) — yine de kaydediliyor"
+                        )
 
                 # 3. VPMV Hesapla
                 vpms_score: Optional[float] = None
@@ -154,6 +174,7 @@ async def process_and_enrich_signals(
                     "zscore_ratio_percent":     latest_metrics.get("zscore_ratio_percent"),
                     "vpms_score":               float(vpms_score) if vpms_score is not None else None,
                     "vpm_confirmed":            True,
+                    "st_confirmed":             st_confirmed,
                 }
 
                 logger.info(f"[{symbol}] Sinyal kaydediliyor: {signal_name} - {sig_type}")

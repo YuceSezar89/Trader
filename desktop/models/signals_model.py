@@ -88,6 +88,7 @@ class SignalRow:
     indicators: str = ""
     status: str = "active"
     current_price: float = 0.0
+    st_confirmed: Optional[bool] = None
     pnl_pct: Optional[float] = field(default=None, init=False)
 
     def update_price(self, price: float) -> None:
@@ -227,6 +228,7 @@ class SignalsModel(QAbstractTableModel):
             timestamp=ts,
             indicators=s.get("indicators") or "",
             status=s.get("status", "active"),
+            st_confirmed=s.get("st_confirmed"),
         )
         idx = len(self._rows)
         self._rows.append(row)
@@ -256,6 +258,7 @@ class SignalsProxyModel(QSortFilterProxyModel):
         self._type_filter = ""
         self._tf_filter = ""
         self._indicator_filter = ""
+        self._st_only = False
         self.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self.setFilterKeyColumn(COL_SYMBOL)
 
@@ -271,6 +274,10 @@ class SignalsProxyModel(QSortFilterProxyModel):
         self._indicator_filter = indicator
         self.invalidateFilter()
 
+    def set_st_filter(self, only_confirmed: bool) -> None:
+        self._st_only = only_confirmed
+        self.invalidateFilter()
+
     def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
         src = self.sourceModel()
         if source_row >= len(src._rows):  # noqa: SLF001
@@ -281,6 +288,8 @@ class SignalsProxyModel(QSortFilterProxyModel):
         if self._tf_filter and row.interval != self._tf_filter:
             return False
         if self._indicator_filter and not row.indicators.startswith(self._indicator_filter):
+            return False
+        if self._st_only and row.st_confirmed is False:
             return False
         return super().filterAcceptsRow(source_row, source_parent)
 

@@ -82,6 +82,9 @@ def supertrend(df: pd.DataFrame, atr_length: int = 10, factor: float = 3.0) -> p
 
 # ── Veri çekme ────────────────────────────────────────────────────────────────
 
+_CAGG_MAP = {"5m": "cagg_5m", "15m": "cagg_15m", "1h": "cagg_1h", "4h": "cagg_4h"}
+
+
 def fetch(symbol, interval, from_date, to_date, limit=1000):
     import psycopg2
     conn = psycopg2.connect(
@@ -89,7 +92,21 @@ def fetch(symbol, interval, from_date, to_date, limit=1000):
         dbname=Config.DB_NAME, user=Config.DB_USER, password=Config.DB_PASSWORD,
     )
     cur = conn.cursor()
-    if from_date and to_date:
+    if interval in _CAGG_MAP:
+        view = _CAGG_MAP[interval]
+        if from_date and to_date:
+            cur.execute(
+                f"SELECT bucket,open,high,low,close FROM {view} "
+                "WHERE symbol=%s AND bucket BETWEEN %s AND %s ORDER BY bucket",
+                (symbol, from_date, to_date),
+            )
+        else:
+            cur.execute(
+                f"SELECT bucket,open,high,low,close FROM {view} "
+                "WHERE symbol=%s ORDER BY bucket DESC LIMIT %s",
+                (symbol, limit),
+            )
+    elif from_date and to_date:
         cur.execute(
             "SELECT timestamp,open,high,low,close FROM price_data "
             "WHERE symbol=%s AND interval=%s AND timestamp BETWEEN %s AND %s ORDER BY timestamp",

@@ -186,6 +186,9 @@ class Config:
     # RSI Crossover Ayarları
     RSI_FAST_WINDOW = 9
     RSI_SLOW_WINDOW = 24
+
+    # SuperTrend Filtresi — diğer indikatörler ST yönüyle uyumlu değilse atlanır
+    ST_FILTER_ENABLED: bool = True
     
     # RSI Log Change Ayarları
     RSI_LOG_WINDOW = 14

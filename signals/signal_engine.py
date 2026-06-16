@@ -12,13 +12,11 @@ Tüm fonksiyonlar asenkron olarak çalışır ve sağlam hata yönetimi içerir.
 
 import pandas as pd
 import asyncio
-from typing import List, Dict, Any, Optional, Union, Callable, Awaitable, Coroutine
+from typing import List, Dict, Any, Optional, Callable, Coroutine
 from datetime import timedelta
-import numpy as np
 from utils.logger import get_logger
-from utils.exceptions import ValidationError, CalculationError
 from config import Config
-from indicators.core import calculate_rsi
+from indicators.core import calculate_rsi, calculate_supertrend
 from signals.signal_filter import SignalFilter
 
 # Eşik değerlerini merkezi yapılandırmadan al
@@ -45,6 +43,7 @@ class SignalEngine:
     def __init__(self):
         self.logger = get_logger(self.__class__.__name__)
         self._filter = SignalFilter()
+        self._st_last_valid: dict[tuple, str] = {}
 
     def _validate_dataframe(
         self, df: pd.DataFrame, required_cols: List[str], min_len: int = 2
@@ -298,6 +297,67 @@ class SignalEngine:
             )
         return []
 
+    async def supertrend_signal(
+        self, df: pd.DataFrame, symbol: str = "", interval: str = ""
+    ) -> List[Dict[str, Any]]:
+        """SuperTrend(10,3.0) sinyali — ChartPrime Filtered Signals uyumlu.
+
+        Kurallar:
+        - Son kapanmış barda direction değişimi → raw sinyal
+        - SignalFilter'dan geçmeli (high/low filtresi)
+        - Son geçerli ST sinyaliyle aynı yönde ise üretilmez (trend devam)
+        """
+        required = ["open_time", COL_HIGH, COL_LOW, COL_CLOSE]
+        if not self._validate_dataframe(df, required, min_len=3):
+            return []
+
+        df_closed = df.iloc[:-1]
+
+        # st_direction sütunu yoksa hesapla
+        if "st_direction" not in df_closed.columns or df_closed["st_direction"].isna().all():
+            _, direction, _, _ = calculate_supertrend(df_closed)
+            df_closed = df_closed.copy()
+            df_closed["st_direction"] = direction
+
+        dir_now  = df_closed["st_direction"].iloc[-1]
+        dir_prev = df_closed["st_direction"].iloc[-2]
+
+        if pd.isna(dir_now) or pd.isna(dir_prev):
+            return []
+
+        long_signal  = (dir_now == -1 and dir_prev != -1)
+        short_signal = (dir_now ==  1 and dir_prev !=  1)
+
+        if not long_signal and not short_signal:
+            return []
+
+        signal_type   = "Long" if long_signal else "Short"
+        indicator_key = "Supertrend(10,3.0)"
+        high = float(df_closed[COL_HIGH].iloc[-1])
+        low  = float(df_closed[COL_LOW].iloc[-1])
+
+        if symbol and interval:
+            if not self._filter.check(signal_type, high, low, symbol, interval, indicator_key):
+                self.logger.info(
+                    f"[{symbol}] {interval} {signal_type} filtreden geçemedi ({indicator_key})"
+                )
+                return []
+
+            key = (symbol, interval)
+            if self._st_last_valid.get(key) == signal_type:
+                self.logger.info(
+                    f"[{symbol}] {interval} {signal_type} tekrar — trend devam, atlandı ({indicator_key})"
+                )
+                return []
+            self._st_last_valid[key] = signal_type
+
+        return self._create_signal_output(
+            df=df_closed,
+            signal_type=signal_type,
+            indicators=indicator_key,
+            strength=1,
+        )
+
     async def calculate_all_signals(
         self,
         df: pd.DataFrame,
@@ -314,6 +374,7 @@ class SignalEngine:
         ] = {
             "rsi_crossover": self.rsi_crossover_signal,
             "ma200_crossover": self.ma200_crossover_signal,
+            "supertrend": self.supertrend_signal,
         }
 
         active_signals: List[str]
