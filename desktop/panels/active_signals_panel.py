@@ -271,10 +271,7 @@ class ActiveSignalsPanel(QWidget):
         text = (
             f"  α {_r(row.alpha, '+.4f')}  "
             f"β {_r(row.beta)}  │  "
-            f"Sharpe {_r(row.sharpe)}  "
-            f"Sortino {_r(row.sortino)}  "
-            f"Calmar {_r(row.calmar)}  "
-            f"Omega {_r(row.omega)}  │  "
+            f"Sharpe {_r(row.sharpe)}  │  "
             f"VPMV {_r(row.vpm, '.1f')}  "
             f"MTF {mtf}  "
             f"ST {st}  │  "

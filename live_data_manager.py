@@ -19,6 +19,7 @@ from database.crud import (
     bulk_insert_price_data,
     get_cagg_klines,
     get_last_timestamp,
+    get_oldest_timestamp,
     get_recent_klines,
     initialize_database,
     delete_symbol_data,
@@ -192,17 +193,33 @@ class LiveDataManager:
     async def _sync_symbol_data(self, symbol: str):
         """Helper method to sync historical data for a single symbol."""
         try:
-            last_timestamp = await get_last_timestamp(symbol, interval=self.interval)
-            start_time = last_timestamp + 1 if last_timestamp else None
+            _INTERVAL_MS_MAP = {
+                "1m": 60_000, "3m": 180_000, "5m": 300_000, "15m": 900_000,
+                "30m": 1_800_000, "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000,
+            }
+            interval_ms = _INTERVAL_MS_MAP.get(self.interval, 60_000)
+            desired_bars = 1500
+            now_ms = int(time.time() * 1000)
+            desired_start_ms = now_ms - (desired_bars * interval_ms)
 
-            if start_time:
+            oldest_timestamp = await get_oldest_timestamp(symbol, interval=self.interval)
+            if oldest_timestamp is None or oldest_timestamp > (desired_start_ms + interval_ms):
+                start_time = desired_start_ms
                 logger.info(
-                    f"[{symbol}] Son kayıt: {pd.to_datetime(start_time - 1, unit='ms')}. Eksik veriler çekiliyor..."
+                    f"[{symbol}] Geçmiş yetersiz (oldest={oldest_timestamp}), {desired_bars} bar çekiliyor..."
                 )
             else:
-                logger.info(
-                    f"[{symbol}] Veritabanında kayıt bulunamadı. Son 1500 mum çekiliyor..."
-                )
+                last_timestamp = await get_last_timestamp(symbol, interval=self.interval)
+                start_time = last_timestamp + 1 if last_timestamp else None
+                if start_time:
+                    logger.info(
+                        f"[{symbol}] Son kayıt: {pd.to_datetime(start_time - 1, unit='ms')}. Eksik veriler çekiliyor..."
+                    )
+                else:
+                    logger.info(
+                        f"[{symbol}] Veritabanında kayıt bulunamadı. Son {desired_bars} mum çekiliyor..."
+                    )
+                    start_time = desired_start_ms
 
             total_inserted = 0
             while True:
@@ -791,18 +808,39 @@ class LiveDataManager:
         except Exception as e:
             logger.error(f"[{symbol}] MTF Redis cache error: {e}", exc_info=True)
     
-    async def _initialize_mtf_dataframes(self):
+    async def _initialize_mtf_dataframes(self, reload_symbols: set[str] | None = None):
         """
         Hibrit batch initialization: Tarihsel tüm TF'leri batch halinde yükle + sonra WebSocket.
-        API rate limit safe: 10 sembol/batch, 2 saniye delay.
+
+        reload_symbols: None → tüm sembolleri yükle (ilk açılış).
+                        set  → sadece bu sembolleri DB'den yükle; diğerlerini Redis'ten hızlı yükle.
         """
         if not self.mtf_enabled:
+            return
+
+        # ── Hızlı yükleme: gap dolmayan semboller Redis'ten buffer'a alınır (DB yok, hesap yok) ──
+        if reload_symbols is not None:
+            quick_symbols = [s for s in self.symbols if s not in reload_symbols]
+            if quick_symbols:
+                logger.info("[MTF] %d sembol Redis'ten hızlı yükleniyor...", len(quick_symbols))
+                for sym in quick_symbols:
+                    for tf in self.supported_timeframes:
+                        df = await RedisClient.get_mtf_klines(sym, tf)
+                        if df is not None and not df.empty:
+                            self.mtf_buffers[sym][tf] = df.tail(self.mtf_buffer_limits.get(tf, 1000))
+                logger.info("[MTF] Hızlı yükleme tamamlandı: %d sembol", len(quick_symbols))
+            symbols_to_reload = [s for s in self.symbols if s in reload_symbols]
+        else:
+            symbols_to_reload = list(self.symbols)
+
+        if not symbols_to_reload:
+            logger.info("🎉 MTF Batch Initialization tamamlandı! WebSocket canlı mod başlatılabilir.")
             return
 
         batch_size = 10  # Her batch'te 10 sembol
         delay_between_batches = 5  # 5 saniye delay (10×3TF×2weight=60/batch → 720 weight/dk, limit 1200)
 
-        total_symbols = len(self.symbols)
+        total_symbols = len(symbols_to_reload)
         total_batches = (total_symbols + batch_size - 1) // batch_size
 
         logger.info(f"🚀 MTF Batch Initialization başlatılıyor:")
@@ -812,7 +850,7 @@ class LiveDataManager:
 
         # Sembolleri batch'lere böl
         for i in range(0, total_symbols, batch_size):
-            batch = self.symbols[i:i + batch_size]
+            batch = symbols_to_reload[i:i + batch_size]
             batch_num = (i // batch_size) + 1
 
             logger.info(f"📦 Batch {batch_num}/{total_batches}: {len(batch)} sembol yükleniyor...")
@@ -1322,8 +1360,9 @@ class LiveDataManager:
 
         logger.info("[DeferredGapCheck] Tamamlandı: %d bar eklendi.", total_filled)
 
-    async def _startup_gap_fill(self) -> None:
-        """Startup gap fill: 1m için dinamik lookback ile gap doldurur."""
+    async def _startup_gap_fill(self) -> set[str]:
+        """Startup gap fill: 1m için dinamik lookback ile gap doldurur.
+        Gap doldurulan sembollerin setini döndürür (MTF init optimizasyonu için)."""
         import time as _time
 
         _INTERVAL_MS = 60_000
@@ -1455,6 +1494,83 @@ class LiveDataManager:
 
         self._startup_fill_end_ms = int(_time.time() * 1000)
         self._startup_lookback_days = float(lookback_days)
+        return set(all_gaps.keys())
+
+    async def _continuous_gap_heal_loop(self) -> None:
+        """Her 5 dakikada bir son 1 saatin 1m gap'lerini tarar ve doldurur."""
+        _INTERVAL_MS = 60_000
+        _THRESHOLD_MS = _INTERVAL_MS * 2
+
+        while True:
+            await asyncio.sleep(300)
+            try:
+                symbols_list = list(self.symbols)
+                async with get_session() as session:
+                    result = await session.execute(
+                        text("""
+                            SELECT symbol, prev_ts, curr_ts
+                            FROM (
+                                SELECT symbol,
+                                       timestamp AS curr_ts,
+                                       LAG(timestamp) OVER (PARTITION BY symbol ORDER BY timestamp) AS prev_ts
+                                FROM price_data
+                                WHERE symbol = ANY(:syms) AND interval = '1m'
+                                  AND timestamp >= NOW() - INTERVAL '1 hour'
+                            ) t
+                            WHERE prev_ts IS NOT NULL
+                              AND EXTRACT(EPOCH FROM (curr_ts - prev_ts)) * 1000 > :thresh
+                            ORDER BY symbol, prev_ts
+                        """),
+                        {"syms": symbols_list, "thresh": _THRESHOLD_MS},
+                    )
+                    rows = result.fetchall()
+
+                if not rows:
+                    logger.debug("[GapHeal] Gap yok.")
+                    continue
+
+                gaps: dict[str, list[tuple[int, int]]] = {}
+                for sym, prev_dt, curr_dt in rows:
+                    g_start = int(prev_dt.timestamp() * 1000)
+                    g_end = int(curr_dt.timestamp() * 1000)
+                    gaps.setdefault(sym, []).append((g_start, g_end))
+
+                logger.warning("[GapHeal] %d sembolde gap bulundu, dolduruluyor...", len(gaps))
+                total_filled = 0
+
+                for sym, sym_gaps in gaps.items():
+                    for gap_start_ms, gap_end_ms in sym_gaps:
+                        fetch_start = gap_start_ms + _INTERVAL_MS
+                        while fetch_start < gap_end_ms:
+                            await asyncio.sleep(0.3)
+                            try:
+                                df = await BinanceClientManager.fetch_klines(
+                                    symbol=sym, interval="1m", limit=1000, startTime=fetch_start,
+                                )
+                            except Exception:
+                                break
+                            if df is None or df.empty:
+                                break
+                            df = df[df["open_time"] < gap_end_ms]
+                            if df.empty:
+                                break
+                            async with self.db_lock:
+                                await bulk_insert_price_data(sym, df, interval="1m")
+                            total_filled += len(df)
+                            last_ts = int(df["open_time"].iloc[-1])
+                            if last_ts <= fetch_start or len(df) < 1000:
+                                break
+                            fetch_start = last_ts + _INTERVAL_MS
+
+                if total_filled:
+                    logger.info("[GapHeal] %d bar dolduruldu.", total_filled)
+                    if self.mtf_enabled:
+                        for sym in gaps:
+                            await self._refresh_mtf_redis(sym)
+                        logger.info("[GapHeal] %d sembol MTF Redis yenilendi.", len(gaps))
+
+            except Exception as exc:
+                logger.error("[GapHeal] Hata: %s", exc)
 
     async def _refresh_mtf_redis(self, symbol: str) -> None:
         """1m DB verisinden 5m/15m aggregate, 1h/4h CA'dan yenileyerek Redis'i günceller."""
@@ -1629,15 +1745,15 @@ class LiveDataManager:
                 logger.debug("[Health] Tüm semboller güncel")
 
     async def _background_startup(self) -> None:
-        """WebSocket başladıktan sonra MTF init + gap fill arka planda çalışır.
+        """WebSocket başladıktan sonra gap fill → MTF init → post_init sırayla çalışır.
 
-        Eski mimari: gap_fill → mtf_init → post_init → WS  (20+ dk gap)
-        Yeni mimari: WS → bu task arka planda  (~0 dk gap)
+        Sıralı çalışma zorunlu: MTF init gap fill bitmeden DB'den okursa kirli buffer yüklenir.
+        WS zaten ayakta olduğu için sıralama chart'a herhangi bir gap yaratmaz.
         """
         logger.info("[BackgroundStartup] Başladı (WebSocket zaten aktif).")
+        filled_symbols = await self._startup_gap_fill()
         if self.mtf_enabled:
-            await self._initialize_mtf_dataframes()
-        await self._startup_gap_fill()
+            await self._initialize_mtf_dataframes(reload_symbols=filled_symbols)
         await self._post_init_catchup()
         logger.info("[BackgroundStartup] Tamamlandı.")
 
@@ -1654,6 +1770,8 @@ class LiveDataManager:
             asyncio.create_task(self._deferred_internal_gap_check(delay_seconds=240))
             # 5. Periyodik sağlık kontrolü
             asyncio.create_task(self._health_loop())
+            # 6. Her 5 dakikada bir gap heal loop
+            asyncio.create_task(self._continuous_gap_heal_loop())
 
             logger.info(
                 "Canlı veri yöneticisi çalışıyor. Bağlantı izleniyor... Çıkmak için CTRL+C."

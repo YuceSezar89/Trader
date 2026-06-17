@@ -19,12 +19,11 @@ from PyQt6.QtGui import QColor
 
 from desktop.theme import COLORS
 
-COLUMNS = ["Sembol", "Fiyat", "Değişim %", "Hacim", "VPM"]
+COLUMNS = ["Sembol", "Fiyat", "Değişim %", "Hacim"]
 COL_SYMBOL = 0
 COL_PRICE  = 1
 COL_CHANGE = 2
 COL_VOLUME = 3
-COL_VPM    = 4
 
 
 @dataclass
@@ -33,10 +32,7 @@ class SymbolRow:
     price: float = 0.0
     change_pct: float = 0.0
     volume: float = 0.0
-    vpm_score: Optional[float] = None
-    signal_type: str = ""       # "LONG" | "SHORT" | ""
-    interval: str = ""
-    prev_price: float = 0.0     # flaş animasyonu için
+    prev_price: float = 0.0
 
     def update_price(self, price: float, change_pct: float, volume: float = 0.0) -> None:
         self.prev_price = self.price
@@ -127,7 +123,6 @@ class WatchlistModel(QAbstractTableModel):
                 sign = "+" if row.change_pct > 0 else ""
                 return f"{sign}{row.change_pct:.2f}%"
             case _ if col == COL_VOLUME: return _format_volume(row.volume) if row.volume else "—"
-            case _ if col == COL_VPM:    return f"{row.vpm_score:.1f}" if row.vpm_score is not None else "—"
         return ""
 
     def _foreground(self, row: SymbolRow, col: int) -> Optional[QColor]:
@@ -136,12 +131,6 @@ class WatchlistModel(QAbstractTableModel):
                 return QColor(COLORS["green"])
             if row.change_pct < 0:
                 return QColor(COLORS["red"])
-            return QColor(COLORS["text_muted"])
-        if col == COL_VPM and row.vpm_score is not None:
-            if row.vpm_score >= 70:
-                return QColor(COLORS["green"])
-            if row.vpm_score >= 50:
-                return QColor(COLORS["yellow"])
             return QColor(COLORS["text_muted"])
         return None
 
@@ -162,18 +151,6 @@ class WatchlistModel(QAbstractTableModel):
         self._rows[idx].update_price(price, change_pct, volume)
         top_left = self.index(idx, COL_PRICE)
         bottom_right = self.index(idx, COL_VOLUME)
-        self.dataChanged.emit(top_left, bottom_right, [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ForegroundRole])
-
-    def update_signal(self, symbol: str, signal_type: str, vpm: Optional[float], interval: str) -> None:
-        idx = self._symbol_index.get(symbol)
-        if idx is None:
-            return
-        row = self._rows[idx]
-        row.signal_type = signal_type.upper()
-        row.vpm_score = vpm
-        row.interval = interval
-        top_left = self.index(idx, COL_VPM)
-        bottom_right = self.index(idx, COL_VPM)
         self.dataChanged.emit(top_left, bottom_right, [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ForegroundRole])
 
     def symbol_at(self, row: int) -> Optional[str]:
@@ -204,9 +181,5 @@ class WatchlistProxyModel(QSortFilterProxyModel):
                 return l_row.change_pct < r_row.change_pct
             case _ if col == COL_VOLUME:
                 return l_row.volume < r_row.volume
-            case _ if col == COL_VPM:
-                lv = l_row.vpm_score or 0.0
-                rv = r_row.vpm_score or 0.0
-                return lv < rv
             case _:
                 return super().lessThan(left, right)

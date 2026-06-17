@@ -51,25 +51,38 @@ def _fmt_pnl(v: Optional[float]) -> str:
     return f"{sign}{v:.2f}%"
 
 
-def _fmt_age(ts: Optional[datetime]) -> str:
+_INTERVAL_MINUTES: dict[str, int] = {
+    "1m": 1, "5m": 5, "15m": 15, "30m": 30,
+    "1h": 60, "2h": 120, "4h": 240, "1d": 1440,
+}
+
+
+def _fmt_age(ts: Optional[datetime], interval: str = "") -> str:
     if ts is None:
         return "—"
     now = datetime.now() if ts.tzinfo is None else datetime.now(tz=timezone.utc)
     secs = int((now - ts).total_seconds())
     if secs < 0:
         return "—"
-    if secs < 60:
-        return f"{secs}s"
     mins = secs // 60
-    if mins < 60:
-        return f"{mins}dk"
-    hours = mins // 60
-    rem_min = mins % 60
-    if hours < 24:
-        return f"{hours}sa {rem_min}dk"
-    days = hours // 24
-    rem_hr = hours % 24
-    return f"{days}g {rem_hr}sa"
+    if secs < 60:
+        elapsed = f"{secs}s"
+    elif mins < 60:
+        elapsed = f"{mins}dk"
+    elif mins < 1440:
+        hours = mins // 60
+        rem = mins % 60
+        elapsed = f"{hours}sa {rem}dk" if rem else f"{hours}sa"
+    else:
+        days = mins // 1440
+        rem_h = (mins % 1440) // 60
+        elapsed = f"{days}g {rem_h}sa" if rem_h else f"{days}g"
+
+    iv_min = _INTERVAL_MINUTES.get(interval)
+    if iv_min and mins > 0:
+        candles = mins // iv_min
+        return f"{elapsed} • {candles}m"
+    return elapsed
 
 
 @dataclass
@@ -90,11 +103,6 @@ class SignalRow:
     current_price: float = 0.0
     st_confirmed: Optional[bool] = None
     sharpe: Optional[float] = None
-    sortino: Optional[float] = None
-    calmar: Optional[float] = None
-    omega: Optional[float] = None
-    treynor: Optional[float] = None
-    info_ratio: Optional[float] = None
     pnl_pct: Optional[float] = field(default=None, init=False)
 
     def update_price(self, price: float) -> None:
@@ -162,7 +170,7 @@ class SignalsModel(QAbstractTableModel):
             case _ if col == COL_BETA:      return _fmt_ratio(row.beta)
             case _ if col == COL_ZSCORE:    return _fmt_score(row.zscore)
             case _ if col == COL_PNL:       return _fmt_pnl(row.pnl_pct)
-            case _ if col == COL_AGE:       return _fmt_age(row.timestamp)
+            case _ if col == COL_AGE:       return _fmt_age(row.timestamp, row.interval)
         return ""
 
     def _tooltip(self, row: SignalRow) -> str:
@@ -173,9 +181,7 @@ class SignalsModel(QAbstractTableModel):
             f"{row.symbol}  {row.signal_type}  {row.interval}  |  {row.indicators}\n"
             f"{'─'*52}\n"
             f"  Alpha    {_r(row.alpha, '+.4f'):>10}    Beta     {_r(row.beta):>8}\n"
-            f"  Sharpe   {_r(row.sharpe):>10}    Sortino  {_r(row.sortino):>8}\n"
-            f"  Calmar   {_r(row.calmar):>10}    Omega    {_r(row.omega):>8}\n"
-            f"  Treynor  {_r(row.treynor):>10}    Info R   {_r(row.info_ratio):>8}\n"
+            f"  Sharpe   {_r(row.sharpe):>10}\n"
             f"{'─'*52}\n"
             f"  VPMV: {_r(row.vpm, '.1f')}   MTF: {mtf}   ST: {st}"
         )
@@ -236,7 +242,7 @@ class SignalsModel(QAbstractTableModel):
             self.endInsertRows()
 
     def _append_row(self, s: dict) -> None:
-        ts = s.get("timestamp")
+        ts = s.get("opened_at")
         if isinstance(ts, str):
             try:
                 ts = datetime.fromisoformat(ts)
@@ -248,22 +254,17 @@ class SignalsModel(QAbstractTableModel):
             symbol=s.get("symbol", ""),
             signal_type=s.get("signal_type", "").upper(),
             interval=s.get("interval", ""),
-            entry_price=float(s.get("price") or 0),
+            entry_price=float(s.get("open_price") or 0),
             vpm=s.get("vpms_score"),
-            mtf=s.get("vpms_mtf_score"),
+            mtf=s.get("mtf_score"),
             alpha=s.get("alpha"),
             beta=s.get("beta"),
-            zscore=s.get("zscore_ratio_percent"),
+            zscore=None,
             timestamp=ts,
             indicators=s.get("indicators") or "",
             status=s.get("status", "active"),
             st_confirmed=s.get("st_confirmed"),
             sharpe=s.get("sharpe_ratio"),
-            sortino=s.get("sortino_ratio"),
-            calmar=s.get("calmar_ratio"),
-            omega=s.get("omega_ratio"),
-            treynor=s.get("treynor_ratio"),
-            info_ratio=s.get("information_ratio"),
         )
         idx = len(self._rows)
         self._rows.append(row)

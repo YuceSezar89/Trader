@@ -54,14 +54,13 @@ class SignalWorker(QThread):
             conn = self._connect()
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute("""
-                    SELECT id, symbol, signal_type, timestamp,
-                           price, interval, vpms_score, vpms_mtf_score,
-                           alpha, beta, zscore_ratio_percent, status, indicators,
-                           st_confirmed, sharpe_ratio, sortino_ratio,
-                           calmar_ratio, omega_ratio, treynor_ratio, information_ratio
+                    SELECT id, symbol, signal_type, opened_at,
+                           open_price, interval, vpms_score, mtf_score,
+                           alpha, beta, status, indicators,
+                           st_confirmed, sharpe_ratio
                     FROM signals
                     WHERE status = 'active'
-                    ORDER BY timestamp DESC
+                    ORDER BY opened_at DESC
                     LIMIT 500
                 """)
                 rows = [dict(r) for r in cur.fetchall()]
@@ -77,11 +76,10 @@ class SignalWorker(QThread):
             conn = self._connect()
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute("""
-                    SELECT id, symbol, signal_type, timestamp,
-                           price, interval, vpms_score, vpms_mtf_score,
-                           alpha, beta, zscore_ratio_percent, status, indicators,
-                           st_confirmed, sharpe_ratio, sortino_ratio,
-                           calmar_ratio, omega_ratio, treynor_ratio, information_ratio
+                    SELECT id, symbol, signal_type, opened_at,
+                           open_price, interval, vpms_score, mtf_score,
+                           alpha, beta, status, indicators,
+                           st_confirmed, sharpe_ratio
                     FROM signals
                     WHERE id > %s
                     ORDER BY id ASC

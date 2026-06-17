@@ -358,8 +358,6 @@ class MainWindow(QMainWindow):
         # Signal worker — watchlist + aktif sinyaller paneline bağlı
         self._signal_worker = SignalWorker(db_cfg, parent=self)
         self._signal_worker.connection_changed.connect(self._on_signal_connection)
-        self._signal_worker.signals_loaded.connect(self._watchlist_panel.on_signals_loaded)
-        self._signal_worker.new_signal.connect(self._watchlist_panel.on_new_signal)
         self._signal_worker.signals_loaded.connect(self._active_signals_panel.on_signals_loaded)
         self._signal_worker.new_signal.connect(self._active_signals_panel.on_new_signal)
         self._market_worker.price_updated.connect(self._active_signals_panel.on_price_updated)

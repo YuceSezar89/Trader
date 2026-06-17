@@ -3,7 +3,7 @@ MarketWorker — Redis pub/sub ile anlık fiyat ve kline güncellemelerini yayı
 QThread içinde çalışır, Qt sinyalleriyle ana pencereye veri gönderir.
 """
 
-import json
+import datetime
 import logging
 import threading
 import time
@@ -12,14 +12,12 @@ from typing import Optional
 
 import pandas as pd
 import redis
-import websocket  # websocket-client
 from PyQt6.QtCore import QThread, pyqtSignal  # pylint: disable=no-name-in-module
 
 logger = logging.getLogger(__name__)
 
 _ARROW_MAGIC = b"ARDF"
 _FALLBACK_MS = 30_000
-_MINI_TICKER_URL = "wss://fstream.binance.com/ws/!miniTicker@arr"
 
 
 class MarketWorker(QThread):  # pylint: disable=too-many-instance-attributes
@@ -39,18 +37,22 @@ class MarketWorker(QThread):  # pylint: disable=too-many-instance-attributes
         self._watched_symbols: list[str] = []
         self._chart_symbol: str = ""
         self._chart_tf: str = ""
-        self._change_cache: dict[str, float] = {}   # symbol → 24h priceChangePercent
+        # symbol → (day_ordinal, daily_open_price)
+        self._daily_open_cache: dict[str, tuple[int, float]] = {}
 
     def set_symbols(self, symbols: list[str]) -> None:
+        """İzlenecek sembol listesini günceller."""
         with self._lock:
             self._watched_symbols = list(symbols)
 
     def set_chart_watch(self, symbol: str, tf: str) -> None:
+        """Grafik için takip edilecek sembol ve zaman dilimini ayarlar."""
         with self._lock:
             self._chart_symbol = symbol
             self._chart_tf = tf
 
     def run(self) -> None:
+        """Thread başlatır: Redis bağlantısı kurar, pub/sub ve poll döngülerini çalıştırır."""
         self._running = True
         try:
             self._redis = redis.Redis.from_url(
@@ -65,37 +67,10 @@ class MarketWorker(QThread):  # pylint: disable=too-many-instance-attributes
             return
 
         threading.Thread(target=self._subscribe_loop, daemon=True).start()
-        threading.Thread(target=self._mini_ticker_loop, daemon=True).start()
 
         while self._running:
             self._poll()
             self.msleep(self._interval_ms)
-
-    # ── Binance miniTicker WebSocket ──────────────────────────────────────
-
-    def _mini_ticker_loop(self) -> None:
-        """!miniTicker@arr stream — her saniye tüm sembollerin 24h değişimi."""
-        while self._running:
-            try:
-                ws = websocket.create_connection(_MINI_TICKER_URL, timeout=10)
-                while self._running:
-                    raw = ws.recv()
-                    if not raw:
-                        continue
-                    items = json.loads(raw)
-                    if not isinstance(items, list):
-                        continue
-                    with self._lock:
-                        for item in items:
-                            sym = item.get("s", "")
-                            pct = item.get("P")
-                            if sym and pct is not None:
-                                self._change_cache[sym] = float(pct)
-                ws.close()
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.warning("miniTicker WS kesildi: %s — 5s sonra yeniden bağlanılıyor", exc)
-                if self._running:
-                    time.sleep(5)
 
     # ── Redis kline pub/sub ───────────────────────────────────────────────
 
@@ -132,21 +107,56 @@ class MarketWorker(QThread):  # pylint: disable=too-many-instance-attributes
                 except Exception:  # pylint: disable=broad-exception-caught
                     pass
 
+    # ── Daily open hesabı ─────────────────────────────────────────────────
+
+    def _daily_open_price(self, symbol: str, df: pd.DataFrame) -> Optional[float]:
+        """Bugünün UTC 00:00 (Istanbul 03:00) açılış fiyatı.
+
+        1m Redis verisinde 03:00 barı yoksa (gap) bir sonraki mevcut barı kullanır.
+        Startup gap fill tamamlandıkça doğru bara geçer (cache günlük sıfırlanır).
+        """
+        today = datetime.date.today()
+        day_ordinal = today.toordinal()
+
+        cached = self._daily_open_cache.get(symbol)
+        if cached and cached[0] == day_ordinal:
+            return cached[1]
+
+        # Bugünün 03:00 Istanbul (= UTC 00:00)
+        daily_open_dt = datetime.datetime.combine(today, datetime.time(3, 0, 0))
+        now = datetime.datetime.now()
+        if now < daily_open_dt:
+            # Gece 00:00–03:00 arası: dünün 03:00'ı esas alınır
+            daily_open_dt -= datetime.timedelta(days=1)
+            day_ordinal -= 1
+
+        after_open = df[df["open_time"] >= daily_open_dt]
+        if not after_open.empty:
+            price = float(after_open["open"].iloc[0])
+        elif not df.empty:
+            # Gap var: ilk mevcut bar (startup gap fill sonra düzelir)
+            price = float(df["open"].iloc[0])
+        else:
+            return None
+
+        self._daily_open_cache[symbol] = (day_ordinal, price)
+        return price
+
+    # ── Update / poll ─────────────────────────────────────────────────────
+
     def _handle_update(self, symbol: str, tf: str) -> None:
         with self._lock:
             watched = list(self._watched_symbols)
             chart_sym = self._chart_symbol
             chart_tf = self._chart_tf
-            change_pct = self._change_cache.get(symbol)
 
         if tf == "1m" and symbol in watched:
             df = self._fetch_klines(symbol, "1m")
             if df is not None and not df.empty:
                 price = float(df["close"].iloc[-1])
                 volume = float(df["volume"].sum()) if "volume" in df.columns else 0.0
-                if change_pct is None:
-                    open_price = float(df["open"].iloc[0])
-                    change_pct = (price - open_price) / open_price * 100 if open_price else 0.0
+                open_price = self._daily_open_price(symbol, df)
+                change_pct = (price - open_price) / open_price * 100 if open_price else 0.0
                 self.price_updated.emit(symbol, price, change_pct, volume)
                 self.klines_updated.emit(symbol, "1m", df)
 
@@ -166,11 +176,8 @@ class MarketWorker(QThread):  # pylint: disable=too-many-instance-attributes
             if df_1m is not None and not df_1m.empty:
                 price = float(df_1m["close"].iloc[-1])
                 volume = float(df_1m["volume"].sum()) if "volume" in df_1m.columns else 0.0
-                with self._lock:
-                    change_pct = self._change_cache.get(symbol)
-                if change_pct is None:
-                    open_price = float(df_1m["open"].iloc[0])
-                    change_pct = (price - open_price) / open_price * 100 if open_price else 0.0
+                open_price = self._daily_open_price(symbol, df_1m)
+                change_pct = (price - open_price) / open_price * 100 if open_price else 0.0
                 self.price_updated.emit(symbol, price, change_pct, volume)
 
         if chart_sym:
@@ -197,5 +204,6 @@ class MarketWorker(QThread):  # pylint: disable=too-many-instance-attributes
             return None
 
     def stop(self) -> None:
+        """Thread'i durdurur ve bitmesini bekler."""
         self._running = False
         self.wait()

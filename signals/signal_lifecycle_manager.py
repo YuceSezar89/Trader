@@ -1,319 +1,203 @@
 """
-Sinyal Lifecycle Yönetimi - Supersede Yaklaşımı
-Aynı sembolde yeni sinyal geldiğinde eski aktif sinyali pasife çeker
+Sinyal yaşam döngüsü — temiz state machine.
+
+active → closed  (reversal | timeout | manual)
+
+Geçiş kuralları:
+  - Aynı key, ters yön   → aktifi kapat (reversal), yenisini aç
+  - Aynı key, aynı yön   → sadece skorları güncelle
+  - Aktif sinyal yok      → aç
+  - Sweeper               → timeout eşiği geçmişse kapat
 """
 
 import logging
-from datetime import datetime
-from typing import Optional, List, Dict, Any, TYPE_CHECKING
+from datetime import datetime, timedelta
+from typing import Any, Dict, Optional
 
-if TYPE_CHECKING:
-    # Mypy için tip bilgisi, runtime'da import edilmez
-    pass
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, and_
-from database.models import Signal
+
 from database.engine import get_session
+from database.models import Signal
 
 logger = logging.getLogger(__name__)
 
+TIMEOUT_HOURS: dict[str, int] = {
+    "1m":  4,
+    "5m":  24,
+    "15m": 48,
+    "1h":  7 * 24,
+    "4h":  21 * 24,
+    "1d":  60 * 24,
+}
+_DEFAULT_TIMEOUT = 24
+
+
+def _calc_pnl(signal_type: str, open_price: float, close_price: float) -> float:
+    if open_price == 0:
+        return 0.0
+    if signal_type == "Long":
+        return (close_price - open_price) / open_price * 100
+    return (open_price - close_price) / open_price * 100
+
+
 class SignalLifecycleManager:
-    """Sinyal yaşam döngüsü yöneticisi - supersede mekaniği"""
-    
-    def __init__(self):
-        self.logger = logging.getLogger(__name__)
-    
-    async def add_new_signal(self, signal_data: Dict[str, Any], close_price: Optional[float] = None) -> str:
+
+    async def process(
+        self,
+        signal_data: Dict[str, Any],
+        current_price: Optional[float] = None,
+    ) -> Optional[int]:
         """
-        Yeni sinyal ekler ve gerekirse eski sinyalleri supersede eder
-        
-        Args:
-            signal_data: Sinyal verisi dictionary'si
-            
-        Returns:
-            str: Eklenen sinyalin ID'si
+        Yeni sinyal işler.
+        Returns: yeni sinyalin id'si, sadece güncelleme yapıldıysa None.
         """
+        symbol     = signal_data["symbol"]
+        interval   = signal_data["interval"]
+        indicators = signal_data["indicators"]
+        sig_type   = signal_data["signal_type"]
+        open_price = float(signal_data["open_price"])
+
         async with get_session() as session:
             try:
-                # 1. Önce aynı sembol + interval + indicators için aktif sinyalleri supersede et (signal_type fark etmez)
-                superseded_count = await self._supersede_existing_signals(
-                    session,
-                    signal_data['symbol'],
-                    signal_data['interval'],
-                    signal_data.get('indicators'),
-                    None,
-                    close_price=close_price,
+                active = await self._get_active(session, symbol, interval, indicators)
+
+                if active:
+                    if active.signal_type == sig_type:
+                        await self._update_scores(session, active, signal_data)
+                        logger.debug(
+                            "[%s] %s %s skor güncellendi (%s)", symbol, interval, sig_type, indicators
+                        )
+                        return None
+
+                    close_px = current_price or open_price
+                    await self._close(session, active, close_px, "reversal")
+                    logger.info(
+                        "[%s] %s %s kapatıldı → %s açılıyor",
+                        symbol, interval, active.signal_type, sig_type,
+                    )
+
+                new_sig = Signal(
+                    symbol       = symbol,
+                    interval     = interval,
+                    indicators   = indicators,
+                    signal_type  = sig_type,
+                    opened_at    = signal_data.get("opened_at", datetime.now()),
+                    open_price   = open_price,
+                    status       = "active",
+                    vpms_score   = signal_data.get("vpms_score"),
+                    mtf_score    = signal_data.get("mtf_score"),
+                    st_confirmed = signal_data.get("st_confirmed"),
+                    rsi          = signal_data.get("rsi"),
+                    strength     = signal_data.get("strength"),
+                    atr          = signal_data.get("atr"),
+                    alpha        = signal_data.get("alpha"),
+                    beta         = signal_data.get("beta"),
+                    sharpe_ratio = signal_data.get("sharpe_ratio"),
                 )
-                
-                # 2. Yeni sinyali ekle (UPSERT ile duplicate key hatalarını önle)
-                from sqlalchemy.dialects.postgresql import insert
-                
-                # Signal data'yı hazırla
-                signal_data_copy = signal_data.copy()
-                signal_data_copy['status'] = 'active'
-                
-                # UPSERT (ON CONFLICT DO UPDATE) kullan
-                stmt = insert(Signal).values(**signal_data_copy)
-                stmt = stmt.on_conflict_do_update(
-                    index_elements=['symbol', 'timestamp'],
-                    set_={
-                        'signal_type': stmt.excluded.signal_type,
-                        'strength': stmt.excluded.strength,
-                        'indicators': stmt.excluded.indicators,
-                        'rsi': stmt.excluded.rsi,
-                        'macd': stmt.excluded.macd,
-                        'momentum': stmt.excluded.momentum,
-                        'vpms_score': stmt.excluded.vpms_score,
-                        'status': stmt.excluded.status,
-                        'price': stmt.excluded.price,
-                        'interval': stmt.excluded.interval
-                    }
+                session.add(new_sig)
+                await session.flush()
+
+                if active:
+                    active.closed_by = new_sig.id
+
+                await session.commit()
+                logger.info(
+                    "[%s] %s %s sinyal açıldı (id=%s, %s)",
+                    symbol, interval, sig_type, new_sig.id, indicators,
                 )
-                
-                result = await session.execute(stmt)
-                await session.commit()  # Transaction'ı tamamla
-                
-                # Primary key (symbol, timestamp) kullan - UPSERT sonrası ID oluştur
-                new_signal_id = f"{signal_data['symbol']}_{signal_data['timestamp']}"
-                
-                self.logger.info(
-                    f"Yeni sinyal eklendi/güncellendi: {signal_data['symbol']} "
-                    f"{signal_data['signal_type']} ({signal_data.get('indicators', 'N/A')}) "
-                    f"(ID: {new_signal_id}) - {superseded_count} eski sinyal supersede edildi"
-                )
-                
-                return new_signal_id
-                
-            except Exception as e:
+                return new_sig.id
+
+            except Exception as exc:
                 await session.rollback()
-                self.logger.error(f"Sinyal ekleme hatası: {e}", exc_info=True)
+                logger.error("[%s] sinyal işleme hatası: %s", symbol, exc, exc_info=True)
                 raise
-    
-    async def _supersede_existing_signals(
+
+    async def sweep_timeouts(self) -> int:
+        """Timeout eşiğini geçmiş aktif sinyalleri kapatır."""
+        closed = 0
+        async with get_session() as session:
+            try:
+                result = await session.execute(
+                    select(Signal).where(Signal.status == "active")
+                )
+                actives = result.scalars().all()
+
+                now = datetime.now()
+                for sig in actives:
+                    hours = TIMEOUT_HOURS.get(sig.interval, _DEFAULT_TIMEOUT)
+                    if sig.opened_at < now - timedelta(hours=hours):
+                        await self._close(session, sig, float(sig.open_price), "timeout")
+                        closed += 1
+
+                if closed:
+                    await session.commit()
+                    logger.info("Timeout sweep: %d sinyal kapatıldı", closed)
+
+            except Exception as exc:
+                await session.rollback()
+                logger.error("Sweep hatası: %s", exc, exc_info=True)
+
+        return closed
+
+    async def manual_close(self, signal_id: int, close_price: float) -> bool:
+        async with get_session() as session:
+            try:
+                result = await session.execute(
+                    select(Signal).where(
+                        Signal.id == signal_id,
+                        Signal.status == "active",
+                    )
+                )
+                sig = result.scalar_one_or_none()
+                if not sig:
+                    return False
+                await self._close(session, sig, close_price, "manual")
+                await session.commit()
+                return True
+            except Exception as exc:
+                await session.rollback()
+                logger.error("Manuel kapatma hatası: %s", exc, exc_info=True)
+                return False
+
+    async def _get_active(
+        self, session: AsyncSession, symbol: str, interval: str, indicators: str
+    ) -> Optional[Signal]:
+        result = await session.execute(
+            select(Signal).where(
+                Signal.symbol     == symbol,
+                Signal.interval   == interval,
+                Signal.indicators == indicators,
+                Signal.status     == "active",
+            ).with_for_update()
+        )
+        return result.scalar_one_or_none()
+
+    async def _close(
         self,
         session: AsyncSession,
-        symbol: str,
-        interval: str,
-        indicators: Optional[str] = None,
-        signal_type: Optional[str] = None,
-        close_price: Optional[float] = None,
-    ) -> int:
-        """
-        Aynı sembol + interval + indicators için aktif sinyalleri supersede eder
-        (signal_type fark etmez - aynı indikatörün tüm yönleri supersede edilir)
-        
-        Returns:
-            int: Supersede edilen sinyal sayısı
-        """
-        # Aktif sinyalleri bul - aynı indikatör ve sinyal türü kombinasyonu
-        conditions = [
-            Signal.symbol == symbol,
-            Signal.interval == interval,
-            Signal.status == 'active'
-        ]
-        
-        # Eğer indicators belirtilmişse, onu filtrele (signal_type'ı dahil etme)
-        if indicators is not None:
-            conditions.append(Signal.indicators == indicators)
-        # signal_type filtresini kaldırdık - aynı indikatörün tüm yönleri supersede edilecek
-            
-        stmt = select(Signal).where(and_(*conditions))
-        
-        # Debug log
-        self.logger.info(
-            f"Supersede sorgusu: {symbol} {interval} {signal_type} {indicators}"
-        )
-        
-        result = await session.execute(stmt)
-        active_signals = result.scalars().all()
-        
-        if not active_signals:
-            return 0
-        
-        # Aktif sinyalleri supersede et
-        superseded_count = 0
-        current_time = datetime.now()
-        
-        for signal in active_signals:
-            signal.status = 'superseded'  # type: ignore
-            signal.superseded_at = current_time  # type: ignore
-            signal.lifecycle_end_reason = 'supersede'  # type: ignore
+        sig: Signal,
+        close_price: float,
+        reason: str,
+    ) -> None:
+        sig.status       = "closed"
+        sig.closed_at    = datetime.now()
+        sig.close_price  = close_price
+        sig.close_reason = reason
+        sig.realized_pnl = _calc_pnl(sig.signal_type, float(sig.open_price), close_price)
+        session.add(sig)
 
-            if close_price is not None and signal.price:
-                signal.close_price = close_price  # type: ignore
-                entry = float(signal.price)
-                if signal.signal_type == 'Long':
-                    signal.realized_pnl = (close_price - entry) / entry * 100  # type: ignore
-                else:
-                    signal.realized_pnl = (entry - close_price) / entry * 100  # type: ignore
+    async def _update_scores(
+        self, session: AsyncSession, sig: Signal, data: Dict[str, Any]
+    ) -> None:
+        if "vpms_score" in data:
+            sig.vpms_score = data["vpms_score"]
+        if "mtf_score" in data:
+            sig.mtf_score = data["mtf_score"]
+        if "st_confirmed" in data:
+            sig.st_confirmed = data["st_confirmed"]
+        session.add(sig)
+        await session.commit()
 
-            session.add(signal)
-            
-            superseded_count += 1
-            
-            self.logger.info(
-                f"Sinyal supersede edildi: {symbol} {signal.signal_type} "
-                f"({signal.indicators}) -> {signal.timestamp}"
-            )
-        
-        return superseded_count
-    
-    async def get_active_signals(
-        self, 
-        symbol: Optional[str] = None,
-        interval: Optional[str] = None,
-        signal_type: Optional[str] = None
-    ) -> List[Signal]:
-        """
-        Aktif sinyalleri getirir
-        
-        Args:
-            symbol: Sembol filtresi (opsiyonel)
-            interval: Interval filtresi (opsiyonel) 
-            signal_type: Sinyal türü filtresi (opsiyonel)
-            
-        Returns:
-            List[Signal]: Aktif sinyaller listesi
-        """
-        async with get_session() as session:
-            # Base query
-            stmt = select(Signal).where(Signal.status == 'active')
-            
-            # Filtreler
-            if symbol:
-                stmt = stmt.where(Signal.symbol == symbol)
-            if interval:
-                stmt = stmt.where(Signal.interval == interval)
-            if signal_type:
-                stmt = stmt.where(Signal.signal_type == signal_type)
-            
-            # Timestamp'e göre sırala (en yeni önce)
-            stmt = stmt.order_by(Signal.timestamp.desc())
-            
-            result = await session.execute(stmt)
-            return result.scalars().all()
-    
-    async def get_superseded_signals(
-        self, 
-        symbol: Optional[str] = None,
-        hours_back: int = 24
-    ) -> List[Signal]:
-        """
-        Supersede edilmiş sinyalleri getirir
-        
-        Args:
-            symbol: Sembol filtresi (opsiyonel)
-            hours_back: Kaç saat geriye bakılacak
-            
-        Returns:
-            List[Signal]: Supersede edilmiş sinyaller
-        """
-        async with get_session() as session:
-            from datetime import timedelta
-            
-            cutoff_time = datetime.now() - timedelta(hours=hours_back)
-            
-            stmt = select(Signal).where(
-                and_(
-                    Signal.status == 'superseded',
-                    Signal.superseded_at >= cutoff_time
-                )
-            )
-            
-            if symbol:
-                stmt = stmt.where(Signal.symbol == symbol)
-            
-            stmt = stmt.order_by(Signal.superseded_at.desc())
-            
-            result = await session.execute(stmt)
-            return result.scalars().all()
-    
-    async def manual_close_signal(
-        self, 
-        signal_id: int, 
-        reason: str = 'manual'
-    ) -> bool:
-        """
-        Sinyali manuel olarak kapatır
-        
-        Args:
-            signal_id: Sinyal ID'si
-            reason: Kapatma nedeni
-            
-        Returns:
-            bool: İşlem başarılı mı
-        """
-        async with get_session() as session:
-            try:
-                stmt = update(Signal).where(
-                    and_(
-                        Signal.id == signal_id,
-                        Signal.status == 'active'
-                    )
-                ).values(
-                    status='completed',
-                    superseded_at=datetime.now(),
-                    lifecycle_end_reason=reason
-                )
-                
-                result = await session.execute(stmt)
-                await session.commit()
-                
-                if result.rowcount > 0:
-                    self.logger.info(f"Sinyal manuel kapatıldı: ID {signal_id}, neden: {reason}")
-                    return True
-                else:
-                    self.logger.warning(f"Kapatılacak aktif sinyal bulunamadı: ID {signal_id}")
-                    return False
-                    
-            except Exception as e:
-                await session.rollback()
-                self.logger.error(f"Sinyal kapatma hatası: {e}", exc_info=True)
-                return False
-    
-    async def get_signal_statistics(self) -> Dict[str, Any]:
-        """
-        Sinyal istatistiklerini getirir
-        
-        Returns:
-            Dict: İstatistik verileri
-        """
-        async with get_session() as session:
-            from sqlalchemy import func
-            
-            # Aktif sinyal sayısı
-            active_count = await session.scalar(
-                select(func.count(Signal.id)).where(Signal.status == 'active')
-            )
-            
-            # Superseded sinyal sayısı (son 24 saat)
-            from datetime import timedelta
-            cutoff = datetime.now() - timedelta(hours=24)
-            
-            superseded_count = await session.scalar(
-                select(func.count(Signal.id)).where(
-                    and_(
-                        Signal.status == 'superseded',
-                        Signal.superseded_at >= cutoff
-                    )
-                )
-            )
-            
-            # Ortalama performance period (superseded sinyaller için)
-            avg_performance_period = await session.scalar(
-                select(func.avg(Signal.performance_period)).where(
-                    and_(
-                        Signal.status == 'superseded',
-                        Signal.performance_period.isnot(None)
-                    )
-                )
-            )
-            
-            return {
-                'active_signals': active_count or 0,
-                'superseded_24h': superseded_count or 0,
-                'avg_performance_period_minutes': round(avg_performance_period or 0, 2)
-            }
 
-# Global instance
 signal_lifecycle_manager = SignalLifecycleManager()

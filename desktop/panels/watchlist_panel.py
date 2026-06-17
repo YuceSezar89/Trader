@@ -142,26 +142,6 @@ class WatchlistPanel(QWidget):
     def on_price_updated(self, symbol: str, price: float, change_pct: float, volume: float = 0.0) -> None:
         self._model.on_price_updated(symbol, price, change_pct, volume)
 
-    @pyqtSlot(dict)
-    def on_new_signal(self, signal: dict) -> None:
-        symbol = signal.get("symbol", "")
-        self._model.update_signal(
-            symbol=symbol,
-            signal_type=signal.get("signal_type", ""),
-            vpm=signal.get("vpms_score"),
-            interval=signal.get("interval", ""),
-        )
-
-    @pyqtSlot(list)
-    def on_signals_loaded(self, signals: list) -> None:
-        for s in signals:
-            self._model.update_signal(
-                symbol=s.get("symbol", ""),
-                signal_type=s.get("signal_type", ""),
-                vpm=s.get("vpms_score"),
-                interval=s.get("interval", ""),
-            )
-
     # ── Seçim ─────────────────────────────────────────────────────────────
 
     @pyqtSlot()
@@ -185,10 +165,7 @@ class WatchlistPanel(QWidget):
         rows = self._model._rows  # noqa: SLF001
         up   = sum(1 for r in rows if r.change_pct > 0)
         down = sum(1 for r in rows if r.change_pct < 0)
-        sig  = sum(1 for r in rows if r.signal_type)
-        self._stats_label.setText(
-            f"↑ {up}  ↓ {down}  ● {sig} sinyal"
-        )
+        self._stats_label.setText(f"↑ {up}  ↓ {down}")
 
     # ── Public API ────────────────────────────────────────────────────────
 

@@ -207,34 +207,28 @@ async def process_and_enrich_signals(
                     f"(higher TFs: {_MTF_HIGHER.get(interval, [])})"
                 )
 
-                # 6. Sinyali zenginleştir ve kaydet
-                signal_data_clean = {k: v for k, v in signal_data.items() if k != "id"}
+                # 6. Sinyali işle
+                current_price = float(df["close"].iloc[-1]) if len(df) >= 1 else None
                 enriched_signal = {
-                    "symbol":                   symbol,
-                    "interval":                 interval,
-                    **signal_data_clean,
-                    "alpha":                    alpha,
-                    "beta":                     beta,
-                    "sharpe_ratio":             latest_metrics.get("sharpe_ratio"),
-                    "sortino_ratio":            latest_metrics.get("sortino_ratio"),
-                    "calmar_ratio":             latest_metrics.get("calmar_ratio"),
-                    "omega_ratio":              latest_metrics.get("omega_ratio"),
-                    "treynor_ratio":            latest_metrics.get("treynor_ratio"),
-                    "information_ratio":        latest_metrics.get("information_ratio"),
-                    "scaled_avg_normalized":    latest_metrics.get("scaled_avg_normalized"),
-                    "normalized_composite":     latest_metrics.get("normalized_composite"),
-                    "normalized_price_change":  latest_metrics.get("normalized_price_diff"),
-                    "zscore_ratio_percent":     latest_metrics.get("zscore_ratio_percent"),
-                    "vpms_score":               float(vpms_score) if vpms_score is not None else None,
-                    "vpm_confirmed":            True,
-                    "st_confirmed":             st_confirmed,
-                    "vpms_mtf_score":           mtf_score,
+                    "symbol":       symbol,
+                    "interval":     interval,
+                    "indicators":   signal_data.get("indicators"),
+                    "signal_type":  sig_type,
+                    "opened_at":    signal_data.get("timestamp"),
+                    "open_price":   signal_data.get("price"),
+                    "vpms_score":   float(vpms_score) if vpms_score is not None else None,
+                    "mtf_score":    mtf_score,
+                    "st_confirmed": st_confirmed,
+                    "rsi":          signal_data.get("rsi"),
+                    "strength":     signal_data.get("strength"),
+                    "atr":          signal_data.get("atr"),
+                    "alpha":        alpha,
+                    "beta":         beta,
+                    "sharpe_ratio": latest_metrics.get("sharpe_ratio"),
                 }
-
-                current_close = float(df["close"].iloc[-2]) if len(df) >= 2 else None
-                logger.info(f"[{symbol}] Sinyal kaydediliyor: {signal_name} - {sig_type}")
-                signal_id = await signal_lifecycle_manager.add_new_signal(enriched_signal, close_price=current_close)
-                logger.info(f"[{symbol}] Sinyal kaydedildi: ID {signal_id}")
+                logger.info(f"[{symbol}] Sinyal işleniyor: {signal_name} - {sig_type}")
+                signal_id = await signal_lifecycle_manager.process(enriched_signal, current_price=current_price)
+                logger.info(f"[{symbol}] Sinyal işlendi: ID {signal_id}")
 
             except Exception as e:
                 logger.error(f"[{symbol}] Sinyal kayıt hatası: {e}", exc_info=True)

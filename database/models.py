@@ -50,57 +50,30 @@ class PriceData(Base):
 class Signal(Base):
     __tablename__ = "signals"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)  # Auto-increment primary key
-    symbol = Column(String)  # Artık primary key değil
-    timestamp = Column(DateTime)  # Artık primary key değil
-    signal_type = Column(String)
-    interval = Column(String)
-    price = Column(Float, nullable=True)
-    pullback_level = Column(Float, nullable=True)
-    strength = Column(Integer, nullable=True)
-    indicators = Column(String, nullable=True)
-    rsi = Column(Float, nullable=True)
-    macd = Column(Float, nullable=True)
-    momentum = Column(Float, nullable=True)
-    atr = Column(Float, nullable=True)
-    adx = Column(Float, nullable=True)
-    plus_di = Column(Float, nullable=True)
-    minus_di = Column(Float, nullable=True)
-    alpha = Column(Float, nullable=True)
-    beta = Column(Float, nullable=True)
-    sharpe_ratio = Column(Float, nullable=True)
-    sortino_ratio = Column(Float, nullable=True)
-    calmar_ratio = Column(Float, nullable=True)
-    omega_ratio = Column(Float, nullable=True)
-    treynor_ratio = Column(Float, nullable=True)
-    information_ratio = Column(Float, nullable=True)
-    scaled_avg_normalized = Column(Float, nullable=True)
-    normalized_composite = Column(Float, nullable=True)
-    normalized_price_change = Column(Float, nullable=True)
-    zscore_ratio_percent = Column(Float, nullable=True)
+    id           = Column(Integer, primary_key=True, autoincrement=True)
+    symbol       = Column(String, nullable=False)
+    interval     = Column(String, nullable=False)
+    indicators   = Column(String, nullable=False)
+    signal_type  = Column(String, nullable=False)
 
-    # V-P-M onay ve skor
-    vpms_score = Column(Float, nullable=True)
-    vpm_confirmed = Column(Boolean, nullable=True)
+    opened_at    = Column(DateTime, nullable=False, default=datetime.now)
+    open_price   = Column(Float, nullable=False)
 
-    # SuperTrend trend onayı
+    vpms_score   = Column(Float, nullable=True)
+    mtf_score    = Column(Float, nullable=True)
     st_confirmed = Column(Boolean, nullable=True)
+    rsi          = Column(Float, nullable=True)
+    strength     = Column(Integer, nullable=True)
+    atr          = Column(Float, nullable=True)
+    alpha        = Column(Float, nullable=True)
+    beta         = Column(Float, nullable=True)
+    sharpe_ratio = Column(Float, nullable=True)
 
-    # MTF bonus ve birleşik skor
-    mtf_score = Column(Float, nullable=True)
-    vpms_mtf_score = Column(Float, nullable=True)
+    status       = Column(String(20), nullable=False, default='active')
+    closed_at    = Column(DateTime, nullable=True)
+    close_price  = Column(Float, nullable=True)
+    close_reason = Column(String(20), nullable=True)
+    closed_by    = Column(Integer, nullable=True)
 
-    # Gerçekleşmiş P&L (supersede anında yazılır)
-    close_price = Column(Float, nullable=True)
-    realized_pnl = Column(Float, nullable=True)
-
-    # Lifecycle yönetimi kolonları
-    status = Column(String(20), nullable=True, default='active')
-    superseded_by = Column(Integer, nullable=True)
-    superseded_at = Column(DateTime, nullable=True)
-    performance_period = Column(Integer, nullable=True)
-    lifecycle_end_reason = Column(String(50), nullable=True)
-
-    __table_args__ = (
-        UniqueConstraint("symbol", "timestamp", "signal_type", "interval"),
-    )
+    realized_pnl     = Column(Float, nullable=True)
+    duration_minutes = Column(Integer, nullable=True)

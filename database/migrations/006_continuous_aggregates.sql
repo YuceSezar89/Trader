@@ -78,7 +78,7 @@ SELECT add_continuous_aggregate_policy('cagg_1h',
 CREATE MATERIALIZED VIEW cagg_4h
 WITH (timescaledb.continuous, timescaledb.materialized_only = false) AS
 SELECT
-    time_bucket('4 hours', timestamp) AS bucket,
+    time_bucket('4 hours', timestamp, origin => '2000-01-01 03:00:00'::timestamp) AS bucket,
     symbol,
     first(open,   timestamp)          AS open,
     max(high)                         AS high,

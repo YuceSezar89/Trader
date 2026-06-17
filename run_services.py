@@ -13,6 +13,7 @@ from database.crud import initialize_database
 # Çalıştırılacak servislerin ana fonksiyonlarını import et
 from live_data_manager import main as live_data_main
 from signals.signal_performance_analyzer import SignalPerformanceAnalyzer
+from signals.signal_lifecycle_manager import signal_lifecycle_manager
 
 logger = get_logger("ServiceRunner")
 
@@ -329,7 +330,21 @@ async def run_all_services():
         periodic_gap_scan_task(), name="gap_scanner"
     )
 
-    tasks = {live_task, perf_task, gap_task}
+    # 6. Sinyal timeout sweeper (her 5 dakikada bir)
+    async def _sweep_loop():
+        sweep_logger = get_logger("SignalSweeper")
+        while True:
+            await asyncio.sleep(300)
+            try:
+                closed = await signal_lifecycle_manager.sweep_timeouts()
+                if closed:
+                    sweep_logger.info(f"Sweep tamamlandı: {closed} sinyal kapatıldı")
+            except Exception as exc:
+                sweep_logger.error(f"Sweep hatası: {exc}", exc_info=True)
+
+    sweep_task = asyncio.create_task(_sweep_loop(), name="signal_sweeper")
+
+    tasks = {live_task, perf_task, gap_task, sweep_task}
 
     # Sinyal yakalayıcı: görevleri iptal et ve shutdown akışını başlat
     def _signal_handler(sig_name: str):

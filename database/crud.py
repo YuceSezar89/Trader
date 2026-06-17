@@ -1,13 +1,11 @@
 from typing import List, Dict, Any, Optional
 import pandas as pd
-from sqlalchemy import func, select, update, insert, delete, text
+from sqlalchemy import func, select, delete, text
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
-from sqlalchemy.exc import OperationalError
-import asyncio
 
 from .engine import get_session, init_db
 from .models import PriceData, Signal
-from datetime import datetime, timedelta
+from datetime import datetime
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -72,6 +70,21 @@ async def get_last_timestamp(symbol: str, interval: Optional[str] = None) -> Opt
                 # Zaten datetime nesnesi ise direkt dönüştür
                 return int(last_timestamp_str.timestamp() * 1000)
             
+        return None
+
+async def get_oldest_timestamp(symbol: str, interval: Optional[str] = None) -> Optional[int]:
+    """Bir sembol için veritabanındaki en eski timestamp'i milisaniye cinsinden döndürür."""
+    async with get_session() as session:
+        stmt = select(func.min(PriceData.timestamp)).where(PriceData.symbol == symbol)
+        if interval:
+            stmt = stmt.where(PriceData.interval == interval)
+        result = await session.execute(stmt)
+        oldest = result.scalar_one_or_none()
+        if oldest:
+            if isinstance(oldest, str):
+                dt_obj = datetime.strptime(oldest, '%Y-%m-%d %H:%M:%S')
+                return int(dt_obj.timestamp() * 1000)
+            return int(oldest.timestamp() * 1000)
         return None
 
 async def get_recent_klines(symbol: str, interval: str, limit: int) -> pd.DataFrame:
@@ -209,79 +222,6 @@ async def save_price_data_batch(data_map: Dict[str, pd.DataFrame], interval: Opt
         await session.commit()
         logger.info(f"Toplu kaydetme tamamlandı. {total_inserted} adet kayıt işlendi.")
 
-async def create_signal(signal_data: Dict[str, Any]):
-    """Tek bir sinyal kaydeder. Var olan kaydı günceller."""
-    async with get_session() as session:
-        from sqlalchemy.dialects.postgresql import insert as postgresql_insert
-        
-        stmt = postgresql_insert(Signal).values(signal_data)
-        # Sadece signal_data içinde gönderilen ve primary key olmayan alanları güncelle
-        update_dict = {
-            key: getattr(stmt.excluded, key)
-            for key in signal_data.keys()
-            if key in Signal.__table__.columns and not Signal.__table__.columns[key].primary_key
-        }
-        stmt = stmt.on_conflict_do_update(
-            index_elements=['symbol', 'timestamp', 'signal_type', 'interval'],
-            set_=update_dict
-        )
-
-        # Exponential backoff ile kilit hatalarına karşı tekrar dene
-        max_attempts = 5
-        delay = 0.2
-        for attempt in range(1, max_attempts + 1):
-            try:
-                await session.execute(stmt)
-                logger.info(f"Sinyal kaydedildi/güncellendi: {signal_data.get('symbol')} - {signal_data.get('signal_type')}")
-                break
-            except OperationalError as e:
-                if 'database is locked' in str(e).lower() and attempt < max_attempts:
-                    logger.warning(f"DB kilitli, tekrar denenecek ({attempt}/{max_attempts})...")
-                    await asyncio.sleep(delay)
-                    delay *= 2
-                    continue
-                raise
-
-async def get_recent_signals(hours: int = 24) -> List[Dict[str, Any]]:
-    """Son 'hours' saat içindeki sinyalleri veritabanından çeker."""
-    async with get_session() as session:
-        time_threshold = datetime.now() - timedelta(hours=hours)
-
-        stmt = (
-            select(Signal)
-            .where(Signal.timestamp >= time_threshold)
-            .order_by(Signal.timestamp.desc())
-        )
-        result = await session.execute(stmt)
-        signals = result.scalars().all()
-        return [s.to_dict() for s in signals if hasattr(s, 'to_dict')]
-
-async def get_signal_stats() -> Dict[str, Any]:
-    """Veritabanındaki sinyal istatistiklerini hesaplar."""
-    async with get_session() as session:
-        total_signals_stmt = select(func.count()).select_from(Signal)
-        long_signals_stmt = select(func.count()).where(Signal.signal_type == 'Long')
-        short_signals_stmt = select(func.count()).where(Signal.signal_type == 'Short')
-        top_symbols_stmt = (
-            select(Signal.symbol, func.count(Signal.symbol).label('count'))
-            .group_by(Signal.symbol)
-            .order_by(func.count(Signal.symbol).desc())
-            .limit(5)
-        )
-
-        total_signals = (await session.execute(total_signals_stmt)).scalar_one() or 0
-        long_signals = (await session.execute(long_signals_stmt)).scalar_one() or 0
-        short_signals = (await session.execute(short_signals_stmt)).scalar_one() or 0
-        top_symbols_result = (await session.execute(top_symbols_stmt)).all()
-        top_symbols = [{'symbol': row.symbol, 'count': row.count} for row in top_symbols_result]
-
-        return {
-            'total_signals': total_signals,
-            'long_signals': long_signals,
-            'short_signals': short_signals,
-            'top_symbols': top_symbols
-        }
-
 async def delete_symbol_data(symbol: str):
     """Bir sembole ait tüm verileri (fiyat ve sinyal) veritabanından siler."""
     async with get_session() as session:
@@ -320,15 +260,3 @@ async def get_all_price_data_with_indicators() -> List[Dict[str, Any]]:
         price_data_list = result.scalars().all()
         return [p.to_dict() for p in price_data_list if hasattr(p, 'to_dict')]
 
-# async def clear_all_signals() -> int:
-#     """Signals tablosundaki TÜM kayıtları siler. Geriye silinen satır sayısını döndürür.
-#     DİKKAT: Bu işlem geri alınamaz; sadece 'signals' tablosunu etkiler, 'price_data' korunur.
-#     Bu fonksiyon olası kazara kullanım riskine karşı geçici olarak devre dışı bırakılmıştır.
-#     """
-#     async with get_session() as session:
-#         stmt = delete(Signal)
-#         result = await session.execute(stmt)
-#         # SQLAlchemy 2.0'da result.rowcount bazı sürücülerde -1 dönebilir; yine de geriye int döndürmeye çalışalım
-#         deleted = getattr(result, "rowcount", -1) or -1
-#         logger.info(f"Signals tablosu temizlendi. Silinen kayıt sayısı: {deleted}")
-#         return int(deleted) if isinstance(deleted, int) else -1
