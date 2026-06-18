@@ -2,6 +2,7 @@
 SignalWorker — Veritabanından aktif sinyalleri ve yeni sinyal gelişlerini izler.
 """
 
+import threading
 from typing import Any
 
 import psycopg2
@@ -30,6 +31,7 @@ class SignalWorker(QThread):
         self._interval_ms = interval_ms
         self._running = False
         self._last_signal_id: int = 0
+        self._wake = threading.Event()
 
     def run(self) -> None:
         self._running = True
@@ -43,7 +45,10 @@ class SignalWorker(QThread):
 
         self._load_all()
         while self._running:
-            self.msleep(self._interval_ms)
+            self._wake.wait(timeout=self._interval_ms / 1000)
+            self._wake.clear()
+            if not self._running:
+                break
             self._check_new()
 
     def _connect(self) -> psycopg2.extensions.connection:
@@ -95,4 +100,5 @@ class SignalWorker(QThread):
 
     def stop(self) -> None:
         self._running = False
+        self._wake.set()
         self.wait()

@@ -34,6 +34,7 @@ class MarketWorker(QThread):  # pylint: disable=too-many-instance-attributes
         self._running = False
         self._redis: Optional[redis.Redis] = None
         self._lock = threading.Lock()
+        self._wake = threading.Event()
         self._watched_symbols: list[str] = []
         self._chart_symbol: str = ""
         self._chart_tf: str = ""
@@ -70,7 +71,8 @@ class MarketWorker(QThread):  # pylint: disable=too-many-instance-attributes
 
         while self._running:
             self._poll()
-            self.msleep(self._interval_ms)
+            self._wake.wait(timeout=self._interval_ms / 1000)
+            self._wake.clear()
 
     # ── Redis kline pub/sub ───────────────────────────────────────────────
 
@@ -97,7 +99,7 @@ class MarketWorker(QThread):  # pylint: disable=too-many-instance-attributes
             except redis.RedisError as exc:
                 logger.warning("Pub/sub kesildi: %s — 5s sonra yeniden bağlanılıyor", exc)
                 if self._running:
-                    time.sleep(5)
+                    self._wake.wait(timeout=5)
             finally:
                 try:
                     if pubsub:
@@ -206,4 +208,5 @@ class MarketWorker(QThread):  # pylint: disable=too-many-instance-attributes
     def stop(self) -> None:
         """Thread'i durdurur ve bitmesini bekler."""
         self._running = False
+        self._wake.set()
         self.wait()

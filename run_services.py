@@ -191,7 +191,7 @@ async def periodic_gap_scan_task():
     _INTERVAL_MS_MAP = {
         "1m": 60_000,
     }
-    _SCAN_INTERVAL_HOURS = 6
+    _SCAN_INTERVAL_HOURS = 1
     _LOOKBACK_DAYS = 7
 
     gap_logger.info("Periyodik gap scanner başlatıldı (her %d saatte bir)", _SCAN_INTERVAL_HOURS)
@@ -210,7 +210,7 @@ async def periodic_gap_scan_task():
             async with get_session() as session:
                 result = await session.execute(
                     text("SELECT DISTINCT symbol FROM price_data WHERE interval = '1m' "
-                         "AND timestamp >= NOW() - INTERVAL '1 day'")
+                         "AND timestamp >= NOW() AT TIME ZONE 'Europe/Istanbul' - INTERVAL '1 day'")
                 )
                 symbols = [r[0] for r in result.fetchall()]
 
@@ -234,7 +234,7 @@ async def periodic_gap_scan_task():
                                                LAG(timestamp) OVER (PARTITION BY symbol ORDER BY timestamp) AS prev_ts
                                         FROM price_data
                                         WHERE symbol = :sym AND interval = :iv
-                                          AND timestamp >= NOW() - (:days * INTERVAL '1 day')
+                                          AND timestamp >= NOW() AT TIME ZONE 'Europe/Istanbul' - (:days * INTERVAL '1 day')
                                     ) t
                                     WHERE prev_ts IS NOT NULL
                                       AND EXTRACT(EPOCH FROM (curr_ts - prev_ts)) * 1000 > :thresh

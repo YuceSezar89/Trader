@@ -151,15 +151,27 @@ async def bulk_insert_price_data(symbol: str, df: pd.DataFrame, interval: Option
         for i in range(0, len(records), batch_size):
             batch = records[i:i + batch_size]
             stmt = postgresql_insert(PriceData).values(batch)
-            # ON CONFLICT...DO UPDATE
             update_dict = {c.name: getattr(stmt.excluded, c.name) for c in PriceData.__table__.columns if not c.primary_key}
             stmt = stmt.on_conflict_do_update(
                 constraint='price_data_symbol_interval_timestamp_key',
                 set_=update_dict
             )
-            await session.execute(stmt)
-            total_inserted += len(batch)
-        
+            try:
+                await session.execute(stmt)
+                total_inserted += len(batch)
+            except Exception:
+                await session.rollback()
+                for record in batch:
+                    try:
+                        s = postgresql_insert(PriceData).values([record])
+                        s = s.on_conflict_do_nothing(index_elements=['symbol', 'timestamp'])
+                        await session.execute(s)
+                        await session.commit()
+                        total_inserted += 1
+                    except Exception as row_exc:
+                        await session.rollback()
+                        logger.debug("[%s] Satır atlandı: %s", symbol, row_exc)
+
         await session.commit()
         logger.info(f"[{symbol}] {total_inserted} adet fiyat verisi kaydedildi.")
 

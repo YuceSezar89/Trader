@@ -68,7 +68,7 @@ def find_gaps(symbol: str, interval: str, days: int) -> list[tuple[int, int]]:
             FROM price_data
             WHERE symbol   = %s
               AND interval  = %s
-              AND timestamp >= NOW() - (%s * INTERVAL '1 day')
+              AND timestamp >= NOW() AT TIME ZONE 'Europe/Istanbul' - (%s * INTERVAL '1 day')
         ) t
         WHERE prev_ts IS NOT NULL
           AND EXTRACT(EPOCH FROM (curr_ts - prev_ts)) * 1000 > %s
@@ -197,7 +197,7 @@ async def main(
             """
             SELECT DISTINCT symbol FROM price_data
             WHERE interval = %s
-              AND timestamp >= NOW() - (%s * INTERVAL '1 day')
+              AND timestamp >= NOW() AT TIME ZONE 'Europe/Istanbul' - (%s * INTERVAL '1 day')
             ORDER BY symbol
             """,
             (interval, days),

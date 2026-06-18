@@ -140,6 +140,27 @@ class SignalLifecycleManager:
 
         return closed
 
+    async def close_stale(self, signal_id: int, close_price: float, reason: str = "reconciliation") -> bool:
+        """Startup reconciliation veya harici tetikleyiciler için sinyal kapatır."""
+        async with get_session() as session:
+            try:
+                result = await session.execute(
+                    select(Signal).where(
+                        Signal.id == signal_id,
+                        Signal.status == "active",
+                    )
+                )
+                sig = result.scalar_one_or_none()
+                if not sig:
+                    return False
+                await self._close(session, sig, close_price, reason)
+                await session.commit()
+                return True
+            except Exception as exc:
+                await session.rollback()
+                logger.error("Stale kapatma hatası (id=%s): %s", signal_id, exc, exc_info=True)
+                return False
+
     async def manual_close(self, signal_id: int, close_price: float) -> bool:
         async with get_session() as session:
             try:

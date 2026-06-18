@@ -545,22 +545,6 @@ class LiveDataManager:
             if interval == '1m':
                 await self._add_to_batch_buffer(symbol, new_row)
 
-            # 4h ve 1d kapanışlarını DB'ye yaz (Redis düşse bile veri kaybolmasın)
-            if interval in ('4h', '1d'):
-                try:
-                    df_bar = pd.DataFrame([{
-                        'open_time': new_row['open_time'],
-                        'open':   new_row['open'],
-                        'high':   new_row['high'],
-                        'low':    new_row['low'],
-                        'close':  new_row['close'],
-                        'volume': new_row['volume'],
-                    }])
-                    async with self.db_lock:
-                        await bulk_insert_price_data(symbol, df_bar, interval=interval)
-                    logger.debug(f"[{symbol}] {interval} kapanışı DB'ye kaydedildi")
-                except Exception as db_err:
-                    logger.warning(f"[{symbol}] {interval} DB yazma hatası: {db_err}")
 
             # Sinyal üretimi (her timeframe için)
             if self.mtf_enabled:
@@ -1302,7 +1286,7 @@ class LiveDataManager:
                                    LAG(timestamp) OVER (PARTITION BY symbol ORDER BY timestamp) AS prev_ts
                             FROM price_data
                             WHERE symbol = ANY(:syms) AND interval = '1m'
-                              AND timestamp >= NOW() - INTERVAL '1 hour'
+                              AND timestamp >= NOW() AT TIME ZONE 'Europe/Istanbul' - INTERVAL '1 hour'
                         ) t
                         WHERE prev_ts IS NOT NULL
                           AND EXTRACT(EPOCH FROM (curr_ts - prev_ts)) * 1000 > 90000
@@ -1416,7 +1400,7 @@ class LiveDataManager:
                                    LAG(timestamp) OVER (PARTITION BY symbol ORDER BY timestamp) AS prev_ts
                             FROM price_data
                             WHERE symbol = ANY(:syms) AND interval = '1m'
-                              AND timestamp >= NOW() - (:days * INTERVAL '1 day')
+                              AND timestamp >= NOW() AT TIME ZONE 'Europe/Istanbul' - (:days * INTERVAL '1 day')
                         ) t
                         WHERE prev_ts IS NOT NULL
                           AND EXTRACT(EPOCH FROM (curr_ts - prev_ts)) * 1000 > :thresh
@@ -1469,12 +1453,17 @@ class LiveDataManager:
                     fetch_start = gap_start_ms + _INTERVAL_MS
                     while fetch_start < gap_end_ms:
                         await asyncio.sleep(0.5)
-                        try:
-                            df = await BinanceClientManager.fetch_klines(
-                                symbol=sym, interval="1m", limit=1000, startTime=fetch_start,
-                            )
-                        except Exception:
-                            break
+                        df = None
+                        for attempt in range(3):
+                            try:
+                                df = await BinanceClientManager.fetch_klines(
+                                    symbol=sym, interval="1m", limit=1000, startTime=fetch_start,
+                                )
+                                break
+                            except Exception as exc:
+                                logger.warning("[Startup] %s API hatası (deneme %d/3): %s", sym, attempt + 1, exc)
+                                if attempt < 2:
+                                    await asyncio.sleep(30)
                         if df is None or df.empty:
                             break
                         df = df[df["open_time"] < gap_end_ms]
@@ -1497,14 +1486,20 @@ class LiveDataManager:
         return set(all_gaps.keys())
 
     async def _continuous_gap_heal_loop(self) -> None:
-        """Her 5 dakikada bir son 1 saatin 1m gap'lerini tarar ve doldurur."""
+        """Her 5 dakikada bir son 1 saatin 1m gap'lerini ve kuyruk gap'lerini tarar ve doldurur."""
+        import time as _t
+
         _INTERVAL_MS = 60_000
         _THRESHOLD_MS = _INTERVAL_MS * 2
+        _TAIL_THRESHOLD_MS = _INTERVAL_MS * 3  # son bar 3dk'dan eskiyse tail gap
 
         while True:
             await asyncio.sleep(300)
             try:
+                now_ms = int(_t.time() * 1000)
                 symbols_list = list(self.symbols)
+
+                # İç gap tespiti (LAG)
                 async with get_session() as session:
                     result = await session.execute(
                         text("""
@@ -1515,7 +1510,7 @@ class LiveDataManager:
                                        LAG(timestamp) OVER (PARTITION BY symbol ORDER BY timestamp) AS prev_ts
                                 FROM price_data
                                 WHERE symbol = ANY(:syms) AND interval = '1m'
-                                  AND timestamp >= NOW() - INTERVAL '1 hour'
+                                  AND timestamp >= NOW() AT TIME ZONE 'Europe/Istanbul' - INTERVAL '1 hour'
                             ) t
                             WHERE prev_ts IS NOT NULL
                               AND EXTRACT(EPOCH FROM (curr_ts - prev_ts)) * 1000 > :thresh
@@ -1525,15 +1520,37 @@ class LiveDataManager:
                     )
                     rows = result.fetchall()
 
-                if not rows:
-                    logger.debug("[GapHeal] Gap yok.")
-                    continue
-
                 gaps: dict[str, list[tuple[int, int]]] = {}
                 for sym, prev_dt, curr_dt in rows:
                     g_start = int(prev_dt.timestamp() * 1000)
                     g_end = int(curr_dt.timestamp() * 1000)
                     gaps.setdefault(sym, []).append((g_start, g_end))
+
+                # Kuyruk gap tespiti: son bar'dan şu ana kadar boşluk var mı?
+                async with get_session() as session:
+                    tail_result = await session.execute(
+                        text("""
+                            SELECT symbol, MAX(timestamp)
+                            FROM price_data
+                            WHERE symbol = ANY(:syms) AND interval = '1m'
+                            GROUP BY symbol
+                        """),
+                        {"syms": symbols_list},
+                    )
+                    tail_rows = tail_result.fetchall()
+
+                for sym, last_dt in tail_rows:
+                    if last_dt is None:
+                        continue
+                    tail_ms = int(last_dt.timestamp() * 1000)
+                    if (now_ms - tail_ms) > _TAIL_THRESHOLD_MS:
+                        existing = gaps.get(sym, [])
+                        if not any(gs >= tail_ms for gs, _ in existing):
+                            gaps.setdefault(sym, []).append((tail_ms, now_ms - _INTERVAL_MS))
+
+                if not gaps:
+                    logger.debug("[GapHeal] Gap yok.")
+                    continue
 
                 logger.warning("[GapHeal] %d sembolde gap bulundu, dolduruluyor...", len(gaps))
                 total_filled = 0
@@ -1632,7 +1649,7 @@ class LiveDataManager:
                                    LAG(timestamp) OVER (PARTITION BY symbol ORDER BY timestamp) AS prev_ts
                             FROM price_data
                             WHERE symbol = ANY(:syms) AND interval = '1m'
-                              AND timestamp >= NOW() - INTERVAL '2 hours'
+                              AND timestamp >= NOW() AT TIME ZONE 'Europe/Istanbul' - INTERVAL '2 hours'
                         ) t
                         WHERE prev_ts IS NOT NULL
                           AND EXTRACT(EPOCH FROM (curr_ts - prev_ts)) * 1000 > 90000
@@ -1744,6 +1761,74 @@ class LiveDataManager:
             else:
                 logger.debug("[Health] Tüm semboller güncel")
 
+    async def _startup_signal_reconciliation(self) -> None:
+        """MTF buffer'lar hazır olduktan sonra aktif sinyalleri kontrol eder.
+
+        PC kapalıyken oluşmuş ters sinyalleri tespit edip ilgili aktif sinyali kapatır.
+        """
+        from sqlalchemy import select as sa_select
+
+        from backtest.mtf_backfill import MTFBackfillEngine
+        from database.engine import get_session
+        from database.models import Signal
+        from signals.signal_lifecycle_manager import signal_lifecycle_manager
+
+        recon_log = get_logger("SignalRecon")
+
+        try:
+            async with get_session() as session:
+                result = await session.execute(
+                    sa_select(Signal).where(Signal.status == "active")
+                )
+                active_signals = result.scalars().all()
+        except Exception as exc:
+            recon_log.error("Aktif sinyal sorgusu başarısız: %s", exc)
+            return
+
+        if not active_signals:
+            recon_log.info("Aktif sinyal yok, reconciliation atlandı.")
+            return
+
+        recon_log.info("%d aktif sinyal reconciliation başlıyor...", len(active_signals))
+        engine = MTFBackfillEngine()
+        closed = 0
+
+        for sig in active_signals:
+            symbol = sig.symbol
+            interval = sig.interval
+
+            buf = self.mtf_buffers.get(symbol, {}).get(interval)
+            if buf is None or buf.empty:
+                recon_log.debug("[%s] %s buffer yok, atlandı", symbol, interval)
+                continue
+
+            opened_at_ms = int(sig.opened_at.timestamp() * 1000)
+            after_open = buf[buf["open_time"] > opened_at_ms]
+            if after_open.empty:
+                recon_log.debug("[%s] %s açılıştan sonra bar yok, atlandı", symbol, interval)
+                continue
+
+            last_direction = sig.signal_type
+            rows = after_open.reset_index(drop=True)
+            for i in range(len(rows)):
+                row = rows.iloc[i]
+                prev_row = rows.iloc[i - 1] if i > 0 else None
+                signal_data = engine._check_signal_conditions(row, symbol, interval, prev_row)
+                if signal_data:
+                    last_direction = signal_data["signal_type"]
+
+            if last_direction != sig.signal_type:
+                close_price = float(rows.iloc[-1]["close"])
+                ok = await signal_lifecycle_manager.close_stale(sig.id, close_price)
+                if ok:
+                    recon_log.info(
+                        "[%s] %s kapatıldı — offline reversal: %s → %s",
+                        symbol, interval, sig.signal_type, last_direction,
+                    )
+                    closed += 1
+
+        recon_log.info("Reconciliation tamamlandı: %d sinyal kapatıldı.", closed)
+
     async def _background_startup(self) -> None:
         """WebSocket başladıktan sonra gap fill → MTF init → post_init sırayla çalışır.
 
@@ -1755,6 +1840,7 @@ class LiveDataManager:
         if self.mtf_enabled:
             await self._initialize_mtf_dataframes(reload_symbols=filled_symbols)
         await self._post_init_catchup()
+        await self._startup_signal_reconciliation()
         logger.info("[BackgroundStartup] Tamamlandı.")
 
     async def run(self):

@@ -2,6 +2,7 @@
 HealthWorker — Redis, DB ve WebSocket servis sağlığını izler.
 """
 
+import threading
 from typing import Any
 
 import psycopg2
@@ -32,12 +33,14 @@ class HealthWorker(QThread):
         self._db_config = db_config
         self._interval_ms = interval_ms
         self._running = False
+        self._wake = threading.Event()
 
     def run(self) -> None:
         self._running = True
         while self._running:
             self.health_updated.emit(self._check())
-            self.msleep(self._interval_ms)
+            self._wake.wait(timeout=self._interval_ms / 1000)
+            self._wake.clear()
 
     def _check(self) -> dict:
         result = {
@@ -69,4 +72,5 @@ class HealthWorker(QThread):
 
     def stop(self) -> None:
         self._running = False
+        self._wake.set()
         self.wait()
