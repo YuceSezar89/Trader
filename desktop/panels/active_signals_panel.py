@@ -99,6 +99,15 @@ class ActiveSignalsPanel(QWidget):
         self._btn_st_filter.clicked.connect(self._on_st_filter_toggled)
         filter_row.addWidget(self._btn_st_filter)
 
+        self._btn_oi_filter = QPushButton("OI Filtre: Açık")
+        self._btn_oi_filter.setCheckable(True)
+        self._btn_oi_filter.setChecked(Config.OI_FILTER_ENABLED)
+        self._btn_oi_filter.setFixedHeight(24)
+        self._btn_oi_filter.setFixedWidth(110)
+        self._btn_oi_filter.setStyleSheet(self._st_filter_style(Config.OI_FILTER_ENABLED))
+        self._btn_oi_filter.clicked.connect(self._on_oi_filter_toggled)
+        filter_row.addWidget(self._btn_oi_filter)
+
         self._search = QLineEdit()
         self._search.setPlaceholderText("Sembol ara…")
         self._search.setClearButtonEnabled(True)
@@ -191,6 +200,12 @@ class ActiveSignalsPanel(QWidget):
         self._proxy.set_st_filter(enabled)
         self._btn_st_filter.setText("ST Filtre: Açık" if enabled else "ST Filtre: Kapalı")
         self._btn_st_filter.setStyleSheet(self._st_filter_style(enabled))
+
+    def _on_oi_filter_toggled(self) -> None:
+        enabled = self._btn_oi_filter.isChecked()
+        Config.OI_FILTER_ENABLED = enabled
+        self._btn_oi_filter.setText("OI Filtre: Açık" if enabled else "OI Filtre: Kapalı")
+        self._btn_oi_filter.setStyleSheet(self._st_filter_style(enabled))
 
     def _on_tf_changed(self, text: str) -> None:
         self._proxy.set_tf_filter("" if text.startswith("TF:") else text)

@@ -95,7 +95,8 @@ async def process_and_enrich_signals(
     symbol: str,
     df: pd.DataFrame,
     ref_df: pd.DataFrame,
-    interval: str
+    interval: str,
+    oi_data: Optional[str] = None,
 ) -> None:
     """
     Bir sembol için teknik sinyalleri hesaplar, finansal metriklerle zenginleştirir
@@ -225,6 +226,7 @@ async def process_and_enrich_signals(
                     "alpha":        alpha,
                     "beta":         beta,
                     "sharpe_ratio": latest_metrics.get("sharpe_ratio"),
+                    "oi_data":      oi_data,
                 }
                 logger.info(f"[{symbol}] Sinyal işleniyor: {signal_name} - {sig_type}")
                 signal_id = await signal_lifecycle_manager.process(enriched_signal, current_price=current_price)

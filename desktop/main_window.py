@@ -354,6 +354,7 @@ class MainWindow(QMainWindow):
         symbols = [r.symbol for r in self._watchlist_panel.model()._rows]  # noqa: SLF001
         if symbols:
             self._market_worker.set_symbols(symbols)
+        self._watchlist_panel.symbols_changed.connect(self._market_worker.set_symbols)
 
         # Signal worker — watchlist + aktif sinyaller paneline bağlı
         self._signal_worker = SignalWorker(db_cfg, parent=self)

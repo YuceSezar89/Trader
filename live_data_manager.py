@@ -8,6 +8,8 @@ from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from typing import Any, Dict, List, Optional
 
+import redis.asyncio as aioredis
+
 import pandas as pd
 
 from binance.websocket.um_futures.websocket_client import UMFuturesWebsocketClient
@@ -112,6 +114,7 @@ class LiveDataManager:
         self.db_lock = asyncio.Lock()  # Veritabanı yazma işlemleri için kilit
         self._startup_lookback_days: float = 1.0
         self._startup_fill_end_ms: int = 0
+        self._oi_cache: Dict[str, dict] = {}  # OI in-memory cache
 
         # Multi-WebSocket configuration
         self.max_streams_per_connection = 200  # Binance limit
@@ -1038,6 +1041,21 @@ class LiveDataManager:
             signal_data = await self._check_mtf_signal_conditions(last_row, symbol, timeframe)
             
             if signal_data:
+                # OI filtresi — OI azalıyorsa sinyali atla
+                oi_data_json: Optional[str] = None
+                sig_type_check = signal_data.get("signal_type", "")
+                oi_info = self._oi_cache.get(symbol)
+                if oi_info:
+                    oi_data_json = json.dumps(oi_info)
+                    if Config.OI_FILTER_ENABLED and sig_type_check:
+                        oi_change = oi_info.get("change_pct", 0.0)
+                        if oi_change < -Config.OI_MIN_CHANGE_PCT:
+                            logger.info(
+                                "[%s] %s OI filtresi: OI değişim=%.1f%% < -%.1f%% → sinyal atlandı",
+                                symbol, sig_type_check, oi_change, Config.OI_MIN_CHANGE_PCT
+                            )
+                            return
+
                 # Mevcut pipeline: process_and_enrich_signals kullan
                 # Referans sembolün aynı timeframe MTF verisi (varsa)
                 ref_df = pd.DataFrame()
@@ -1058,6 +1076,7 @@ class LiveDataManager:
                         df=df_mtf.copy(),
                         ref_df=ref_df.copy(),
                         interval=timeframe,
+                        oi_data=oi_data_json,
                     )
                     logger.info(f"🎯 [{symbol}] {timeframe} MTF sinyali üretimi tamamlandı (process_and_enrich_signals)")
             else:
@@ -1733,6 +1752,7 @@ class LiveDataManager:
         _INTERVAL = 60
         _TTL = 90
         ticker_logger = logging.getLogger("TickerRefresh")
+        redis_conn = aioredis.from_url(Config.REDIS_URL, decode_responses=True)
 
         while True:
             try:
@@ -1741,8 +1761,7 @@ class LiveDataManager:
                     BinanceClientManager.get_funding_rates(),
                 )
                 funding_map = {f["symbol"]: float(f.get("lastFundingRate", 0)) for f in funding_stats}
-                client = RedisClient.get_client()
-                pipe = client.pipeline()
+                pipe = redis_conn.pipeline()
                 for t in stats:
                     sym = t.get("symbol", "")
                     if not sym.endswith("USDT"):
@@ -1764,6 +1783,49 @@ class LiveDataManager:
                 ticker_logger.info("Ticker güncellendi: %d sembol", len(stats))
             except Exception as exc:
                 ticker_logger.warning("Ticker güncelleme hatası: %s", exc)
+            await asyncio.sleep(_INTERVAL)
+
+    async def _oi_refresh_loop(self) -> None:
+        """Her 5 dakikada bir takip edilen sembollerin Open Interest verisini çeker.
+        Redis: oi:{symbol} → {oi, prev_oi, change_pct, ts}  TTL=7 dakika."""
+        _INTERVAL = 300
+        _TTL = 420
+        oi_logger = logging.getLogger("OIRefresh")
+        redis_conn = aioredis.from_url(Config.REDIS_URL, decode_responses=True)
+
+        while True:
+            try:
+                symbols = list(self.symbols)
+                if not symbols:
+                    await asyncio.sleep(_INTERVAL)
+                    continue
+
+                new_oi = await BinanceClientManager.get_open_interest_batch(symbols)
+                now_ts = int(time.time())
+                pipe = redis_conn.pipeline()
+
+                for sym, oi_val in new_oi.items():
+                    key = f"oi:{sym}"
+                    prev_raw = await redis_conn.get(key)
+                    prev_oi = 0.0
+                    if prev_raw:
+                        try:
+                            prev_oi = json.loads(prev_raw).get("oi", 0.0)
+                        except Exception:  # pylint: disable=broad-exception-caught
+                            pass
+
+                    change_pct = 0.0
+                    if prev_oi and prev_oi != 0:
+                        change_pct = round((oi_val - prev_oi) / prev_oi * 100, 2)
+
+                    entry = {"oi": oi_val, "prev_oi": prev_oi, "change_pct": change_pct, "ts": now_ts}
+                    self._oi_cache[sym] = entry
+                    pipe.set(key, json.dumps(entry), ex=_TTL)
+
+                await pipe.execute()
+                oi_logger.info("OI güncellendi: %d sembol", len(new_oi))
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                oi_logger.warning("OI güncelleme hatası: %s", exc)
             await asyncio.sleep(_INTERVAL)
 
     async def _health_loop(self):
@@ -1875,13 +1937,16 @@ class LiveDataManager:
         Sıralı çalışma zorunlu: MTF init gap fill bitmeden DB'den okursa kirli buffer yüklenir.
         WS zaten ayakta olduğu için sıralama chart'a herhangi bir gap yaratmaz.
         """
-        logger.info("[BackgroundStartup] Başladı (WebSocket zaten aktif).")
-        filled_symbols = await self._startup_gap_fill()
-        if self.mtf_enabled:
-            await self._initialize_mtf_dataframes(reload_symbols=filled_symbols)
-        await self._post_init_catchup()
-        await self._startup_signal_reconciliation()
-        logger.info("[BackgroundStartup] Tamamlandı.")
+        try:
+            logger.info("[BackgroundStartup] Başladı (WebSocket zaten aktif).")
+            filled_symbols = await self._startup_gap_fill()
+            if self.mtf_enabled:
+                await self._initialize_mtf_dataframes(reload_symbols=filled_symbols)
+            await self._post_init_catchup()
+            await self._startup_signal_reconciliation()
+            logger.info("[BackgroundStartup] Tamamlandı.")
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.error("[BackgroundStartup] Hata: %s", exc, exc_info=True)
 
     async def run(self):
         """Ana çalıştırma döngüsü."""
@@ -1900,6 +1965,8 @@ class LiveDataManager:
             asyncio.create_task(self._continuous_gap_heal_loop())
             # 7. Tüm USDT sembolleri için 24h ticker yenileme (display katmanı)
             asyncio.create_task(self._ticker_refresh_loop())
+            # 8. Takip edilen sembollerin Open Interest verisini yenile
+            asyncio.create_task(self._oi_refresh_loop())
 
             logger.info(
                 "Canlı veri yöneticisi çalışıyor. Bağlantı izleniyor... Çıkmak için CTRL+C."

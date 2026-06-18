@@ -94,6 +94,7 @@ class SignalLifecycleManager:
                     alpha        = signal_data.get("alpha"),
                     beta         = signal_data.get("beta"),
                     sharpe_ratio = signal_data.get("sharpe_ratio"),
+                    oi_data      = signal_data.get("oi_data"),
                 )
                 session.add(new_sig)
                 await session.flush()

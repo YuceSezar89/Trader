@@ -179,6 +179,29 @@ class BinanceClientManager:
             return []
 
     @classmethod
+    async def get_open_interest_batch(
+        cls, symbols: List[str], concurrency: int = 20
+    ) -> Dict[str, float]:
+        """Her sembol için /fapi/v1/openInterest çeker; {symbol: oi_usdt} döner."""
+        url = "https://fapi.binance.com/fapi/v1/openInterest"
+        sem = asyncio.Semaphore(concurrency)
+        result: Dict[str, float] = {}
+
+        async def _fetch_one(sym: str) -> None:
+            async with sem:
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(url, params={"symbol": sym}, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                            if resp.status == 200:
+                                data = await resp.json()
+                                result[sym] = float(data.get("openInterest", 0))
+                except Exception:  # pylint: disable=broad-exception-caught
+                    pass
+
+        await asyncio.gather(*[_fetch_one(s) for s in symbols])
+        return result
+
+    @classmethod
     async def get_top_volume_symbols_async(cls, limit: int = 200) -> List[str]:
         """Fetches top symbols by 24-hour volume from Binance Futures."""
         logger.info(f"Fetching top {limit} symbols by 24hr volume...")

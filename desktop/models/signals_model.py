@@ -6,6 +6,7 @@ Sütunlar: Sembol | Tip | TF | VPM | MTF | α | β | Z-Score% | P&L% | Süre
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -103,6 +104,7 @@ class SignalRow:
     current_price: float = 0.0
     st_confirmed: Optional[bool] = None
     sharpe: Optional[float] = None
+    oi_data: Optional[str] = None
     pnl_pct: Optional[float] = field(default=None, init=False)
 
     def update_price(self, price: float) -> None:
@@ -173,6 +175,26 @@ class SignalsModel(QAbstractTableModel):
             case _ if col == COL_AGE:       return _fmt_age(row.timestamp, row.interval)
         return ""
 
+    @staticmethod
+    def _oi_line(row: SignalRow) -> str:
+        if not row.oi_data:
+            return "  OI: —"
+        try:
+            oi = json.loads(row.oi_data)
+            change = oi.get("change_pct", 0.0)
+            sign = "+" if change >= 0 else ""
+            if change >= 3:
+                yorum = "▲ güçlü trend"
+            elif change >= 0:
+                yorum = "→ nötr"
+            elif change >= -3:
+                yorum = "↓ zayıflıyor"
+            else:
+                yorum = "▼ belirgin çıkış"
+            return f"  OI: {sign}{change:.1f}%  {yorum}"
+        except Exception:  # pylint: disable=broad-exception-caught
+            return "  OI: —"
+
     def _tooltip(self, row: SignalRow) -> str:
         def _r(v, fmt=".2f"): return f"{v:{fmt}}" if v is not None else "—"
         st = ("✓ Onaylı" if row.st_confirmed else "✗ Onaysız") if row.st_confirmed is not None else "—"
@@ -183,7 +205,8 @@ class SignalsModel(QAbstractTableModel):
             f"  Alpha    {_r(row.alpha, '+.4f'):>10}    Beta     {_r(row.beta):>8}\n"
             f"  Sharpe   {_r(row.sharpe):>10}\n"
             f"{'─'*52}\n"
-            f"  VPMV: {_r(row.vpm, '.1f')}   MTF: {mtf}   ST: {st}"
+            f"  VPMV: {_r(row.vpm, '.1f')}   MTF: {mtf}   ST: {st}\n"
+            f"{self._oi_line(row)}"
         )
 
     def _foreground(self, row: SignalRow, col: int) -> Optional[QColor]:
@@ -265,6 +288,7 @@ class SignalsModel(QAbstractTableModel):
             status=s.get("status", "active"),
             st_confirmed=s.get("st_confirmed"),
             sharpe=s.get("sharpe_ratio"),
+            oi_data=s.get("oi_data"),
         )
         idx = len(self._rows)
         self._rows.append(row)
@@ -352,8 +376,12 @@ class SignalsProxyModel(QSortFilterProxyModel):
             case _ if col == COL_ZSCORE:    return _cmp(l_row.zscore, r_row.zscore)
             case _ if col == COL_PNL:       return _cmp(l_row.pnl_pct, r_row.pnl_pct)
             case _ if col == COL_AGE:
-                lt = l_row.timestamp or datetime.min.replace(tzinfo=timezone.utc)
-                rt = r_row.timestamp or datetime.min.replace(tzinfo=timezone.utc)
-                return lt < rt
+                def _ts(t):
+                    if t is None:
+                        return datetime.max.replace(tzinfo=timezone.utc)
+                    if t.tzinfo is None:
+                        return t.replace(tzinfo=timezone.utc)
+                    return t
+                return _ts(l_row.timestamp) > _ts(r_row.timestamp)
             case _:
                 return super().lessThan(left, right)

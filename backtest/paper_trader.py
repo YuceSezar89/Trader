@@ -10,7 +10,6 @@ import logging
 import json
 
 from database.engine import get_session
-from database.crud import get_recent_signals
 from .models import PaperTrade, PaperTradingSession
 from .risk_manager import RiskManager
 from .analyzer import PerformanceAnalyzer
@@ -139,7 +138,7 @@ class PaperTrader:
     async def _check_new_signals(self):
         """Yeni sinyalleri kontrol et ve işle"""
         try:
-            # Son kontrol zamanından sonraki sinyalleri al
+            from database.crud import get_recent_signals
             async with get_session() as session:
                 signals = await get_recent_signals(hours=1)  # Son 1 saatteki sinyaller
                 

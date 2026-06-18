@@ -35,6 +35,7 @@ class WatchlistPanel(QWidget):
     """
 
     symbol_selected = pyqtSignal(str)
+    symbols_changed = pyqtSignal(list)   # yeni sembol listesi yüklendiğinde
 
     def __init__(self, redis_url: str, parent=None):
         super().__init__(parent)
@@ -131,6 +132,7 @@ class WatchlistPanel(QWidget):
         self._model.load_symbols(symbols)
         self._count_label.setText(f"{len(symbols)} sembol")
         self._update_stats()
+        self.symbols_changed.emit(symbols)
         hdr = self._table.horizontalHeader()
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         hdr.setStretchLastSection(True)

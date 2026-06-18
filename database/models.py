@@ -77,3 +77,4 @@ class Signal(Base):
 
     realized_pnl     = Column(Float, nullable=True)
     duration_minutes = Column(Integer, nullable=True)
+    oi_data          = Column(String, nullable=True)

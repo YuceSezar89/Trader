@@ -198,8 +198,6 @@ async def periodic_gap_scan_task():
 
     while True:
         try:
-            await asyncio.sleep(_SCAN_INTERVAL_HOURS * 3600)
-
             gap_logger.info("Gap taraması başlıyor (son %d gün)...", _LOOKBACK_DAYS)
 
             from database.engine import get_session
@@ -299,7 +297,8 @@ async def periodic_gap_scan_task():
             break
         except Exception as exc:  # pylint: disable=broad-exception-caught
             gap_logger.error("Gap scanner hatası: %s", exc, exc_info=True)
-            await asyncio.sleep(300)
+
+        await asyncio.sleep(_SCAN_INTERVAL_HOURS * 3600)
 
 
 async def run_all_services():

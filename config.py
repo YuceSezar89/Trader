@@ -189,6 +189,10 @@ class Config:
 
     # SuperTrend Filtresi — diğer indikatörler ST yönüyle uyumlu değilse atlanır
     ST_FILTER_ENABLED: bool = True
+
+    # Open Interest Filtresi — OI azalıyorsa sinyal üretilmez
+    OI_FILTER_ENABLED: bool = True
+    OI_MIN_CHANGE_PCT: float = 3.0  # OI'nin bu kadar düştüğünde sinyal atlanır (%)
     
     # RSI Log Change Ayarları
     RSI_LOG_WINDOW = 14

@@ -1,0 +1,1 @@
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS oi_data TEXT;
