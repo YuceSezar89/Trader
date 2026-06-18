@@ -1726,6 +1726,46 @@ class LiveDataManager:
 
         logger.info("[PostInit] Tamamlandı: %d bar eklendi", total)
 
+    async def _ticker_refresh_loop(self) -> None:
+        """Her 60 saniyede bir Binance 24h ticker REST API'sini çağırır.
+        Tüm USDT sembollerinin fiyat/change%/volume verisini Redis'e yazar (TTL=90s).
+        Backend durduğunda keyler otomatik expire olur, stale veri kalmaz."""
+        _INTERVAL = 60
+        _TTL = 90
+        ticker_logger = logging.getLogger("TickerRefresh")
+
+        while True:
+            try:
+                stats, funding_stats = await asyncio.gather(
+                    BinanceClientManager.get_24hr_ticker_stats(),
+                    BinanceClientManager.get_funding_rates(),
+                )
+                funding_map = {f["symbol"]: float(f.get("lastFundingRate", 0)) for f in funding_stats}
+                client = RedisClient.get_client()
+                pipe = client.pipeline()
+                for t in stats:
+                    sym = t.get("symbol", "")
+                    if not sym.endswith("USDT"):
+                        continue
+                    change_pct = round(float(t.get("priceChangePercent", 0)), 2)
+                    pipe.set(
+                        f"ticker:{sym}",
+                        json.dumps({
+                            "price": float(t.get("lastPrice", 0)),
+                            "change_pct": change_pct,
+                            "volume": float(t.get("quoteVolume", 0)),
+                            "high": float(t.get("highPrice", 0)),
+                            "low": float(t.get("lowPrice", 0)),
+                            "funding_rate": funding_map.get(sym, 0.0),
+                        }),
+                        ex=_TTL,
+                    )
+                await pipe.execute()
+                ticker_logger.info("Ticker güncellendi: %d sembol", len(stats))
+            except Exception as exc:
+                ticker_logger.warning("Ticker güncelleme hatası: %s", exc)
+            await asyncio.sleep(_INTERVAL)
+
     async def _health_loop(self):
         """Her 15 dakikada price_data tazeliğini kontrol eder; gap tespit ederse doldurur."""
         _CHECK_INTERVAL = 15 * 60
@@ -1858,6 +1898,8 @@ class LiveDataManager:
             asyncio.create_task(self._health_loop())
             # 6. Her 5 dakikada bir gap heal loop
             asyncio.create_task(self._continuous_gap_heal_loop())
+            # 7. Tüm USDT sembolleri için 24h ticker yenileme (display katmanı)
+            asyncio.create_task(self._ticker_refresh_loop())
 
             logger.info(
                 "Canlı veri yöneticisi çalışıyor. Bağlantı izleniyor... Çıkmak için CTRL+C."

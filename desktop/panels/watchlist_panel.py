@@ -115,16 +115,17 @@ class WatchlistPanel(QWidget):
     # ── Sembol Yükleme ────────────────────────────────────────────────────
 
     def _load_symbols(self) -> None:
-        """Redis'ten mevcut 1m key'leri okuyarak sembol listesini oluşturur."""
+        """Redis'ten ticker:* key'lerini okuyarak sembol listesini oluşturur.
+        Backend'in all-market ticker stream'i tüm USDT sembollerini yazar (TTL=10s).
+        """
         try:
             r = redis.Redis.from_url(self._redis_url, decode_responses=True, socket_connect_timeout=2)
-            keys = r.keys("live_kline_data:*:1m")
-            symbols = sorted(k.split(":")[1] for k in keys if k.count(":") == 2)
+            keys = r.keys("ticker:*")
+            symbols = sorted(k.split(":", 1)[1] for k in keys if ":" in k)
         except Exception:
             symbols = []
 
         if not symbols:
-            # Redis boşsa örnek liste
             symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"]
 
         self._model.load_symbols(symbols)
@@ -138,9 +139,9 @@ class WatchlistPanel(QWidget):
 
     # ── Worker Sinyalleri ─────────────────────────────────────────────────
 
-    @pyqtSlot(str, float, float, float)
-    def on_price_updated(self, symbol: str, price: float, change_pct: float, volume: float = 0.0) -> None:
-        self._model.on_price_updated(symbol, price, change_pct, volume)
+    @pyqtSlot(str, float, float, float, float)
+    def on_price_updated(self, symbol: str, price: float, change_pct: float, volume: float = 0.0, funding_rate: float = 0.0) -> None:
+        self._model.on_price_updated(symbol, price, change_pct, volume, funding_rate)
 
     # ── Seçim ─────────────────────────────────────────────────────────────
 

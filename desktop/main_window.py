@@ -460,8 +460,8 @@ class MainWindow(QMainWindow):
     def _on_toolbar_tf_changed(self, tf: str) -> None:
         self._chart_panel.set_tf(tf)
 
-    @pyqtSlot(str, float, float)
-    def _on_price_updated(self, symbol: str, price: float, change_pct: float, _volume: float = 0.0) -> None:
+    @pyqtSlot(str, float, float, float, float)
+    def _on_price_updated(self, symbol: str, price: float, change_pct: float, _volume: float = 0.0, _funding: float = 0.0) -> None:
         # Toolbar sembol arama kutusundaki sembol seçiliyse başlık güncelle
         if self._symbol_search.text().upper() == symbol:
             sign = "+" if change_pct > 0 else ""

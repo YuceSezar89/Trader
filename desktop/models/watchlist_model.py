@@ -19,11 +19,12 @@ from PyQt6.QtGui import QColor
 
 from desktop.theme import COLORS
 
-COLUMNS = ["Sembol", "Fiyat", "Değişim %", "Hacim"]
-COL_SYMBOL = 0
-COL_PRICE  = 1
-COL_CHANGE = 2
-COL_VOLUME = 3
+COLUMNS = ["Sembol", "Fiyat", "Değişim %", "Hacim", "Funding"]
+COL_SYMBOL  = 0
+COL_PRICE   = 1
+COL_CHANGE  = 2
+COL_VOLUME  = 3
+COL_FUNDING = 4
 
 
 @dataclass
@@ -33,13 +34,15 @@ class SymbolRow:
     change_pct: float = 0.0
     volume: float = 0.0
     prev_price: float = 0.0
+    funding_rate: float = 0.0
 
-    def update_price(self, price: float, change_pct: float, volume: float = 0.0) -> None:
+    def update_price(self, price: float, change_pct: float, volume: float = 0.0, funding_rate: float = 0.0) -> None:
         self.prev_price = self.price
         self.price = price
         self.change_pct = change_pct
         if volume:
             self.volume = volume
+        self.funding_rate = funding_rate
 
 
 def _format_price(price: float) -> str:
@@ -122,7 +125,13 @@ class WatchlistModel(QAbstractTableModel):
                     return "—"
                 sign = "+" if row.change_pct > 0 else ""
                 return f"{sign}{row.change_pct:.2f}%"
-            case _ if col == COL_VOLUME: return _format_volume(row.volume) if row.volume else "—"
+            case _ if col == COL_VOLUME:  return _format_volume(row.volume) if row.volume else "—"
+            case _ if col == COL_FUNDING:
+                if row.funding_rate == 0:
+                    return "—"
+                pct = row.funding_rate * 100
+                sign = "+" if pct > 0 else ""
+                return f"{sign}{pct:.4f}%"
         return ""
 
     def _foreground(self, row: SymbolRow, col: int) -> Optional[QColor]:
@@ -132,6 +141,15 @@ class WatchlistModel(QAbstractTableModel):
             if row.change_pct < 0:
                 return QColor(COLORS["red"])
             return QColor(COLORS["text_muted"])
+        if col == COL_FUNDING:
+            if row.funding_rate > 0.0003:      # >0.03% — yüksek long baskısı
+                return QColor(COLORS["red"])
+            if row.funding_rate > 0:
+                return QColor(COLORS["text_muted"])
+            if row.funding_rate < -0.0003:     # <-0.03% — yüksek short baskısı
+                return QColor(COLORS["green"])
+            if row.funding_rate < 0:
+                return QColor(COLORS["text_muted"])
         return None
 
     # ── Veri yükleme / güncelleme ─────────────────────────────────────────
@@ -143,14 +161,14 @@ class WatchlistModel(QAbstractTableModel):
         self._symbol_index = {r.symbol: i for i, r in enumerate(self._rows)}
         self.endResetModel()
 
-    @pyqtSlot(str, float, float, float)
-    def on_price_updated(self, symbol: str, price: float, change_pct: float, volume: float = 0.0) -> None:
+    @pyqtSlot(str, float, float, float, float)
+    def on_price_updated(self, symbol: str, price: float, change_pct: float, volume: float = 0.0, funding_rate: float = 0.0) -> None:
         idx = self._symbol_index.get(symbol)
         if idx is None:
             return
-        self._rows[idx].update_price(price, change_pct, volume)
+        self._rows[idx].update_price(price, change_pct, volume, funding_rate)
         top_left = self.index(idx, COL_PRICE)
-        bottom_right = self.index(idx, COL_VOLUME)
+        bottom_right = self.index(idx, COL_FUNDING)
         self.dataChanged.emit(top_left, bottom_right, [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ForegroundRole])
 
     def symbol_at(self, row: int) -> Optional[str]:
@@ -181,5 +199,7 @@ class WatchlistProxyModel(QSortFilterProxyModel):
                 return l_row.change_pct < r_row.change_pct
             case _ if col == COL_VOLUME:
                 return l_row.volume < r_row.volume
+            case _ if col == COL_FUNDING:
+                return l_row.funding_rate < r_row.funding_rate
             case _:
                 return super().lessThan(left, right)

@@ -161,6 +161,24 @@ class BinanceClientManager:
             raise BinanceAPIError(f"An unexpected error occurred: {e}", endpoint=url) from e
 
     @classmethod
+    async def get_funding_rates(cls) -> List[Dict[str, Any]]:
+        """Tüm sembollerin güncel funding rate verisini çeker (/fapi/v1/premiumIndex)."""
+        url = "https://fapi.binance.com/fapi/v1/premiumIndex"
+        try:
+            async def request():
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(url) as response:
+                        response.raise_for_status()
+                        return await response.json()
+            data = await asyncio.wait_for(request(), timeout=Config.API_TIMEOUT)
+            if not isinstance(data, list):
+                return []
+            return data
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.warning("Funding rate çekme hatası: %s", e)
+            return []
+
+    @classmethod
     async def get_top_volume_symbols_async(cls, limit: int = 200) -> List[str]:
         """Fetches top symbols by 24-hour volume from Binance Futures."""
         logger.info(f"Fetching top {limit} symbols by 24hr volume...")
