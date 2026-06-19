@@ -560,13 +560,15 @@ class LiveDataManager:
                 min_bars = {'1m': 200, '5m': 100, '15m': 67, '1h': 24, '4h': 12, '1d': 7}.get(interval, 100)
 
                 if not ref_df.empty and len(self.mtf_buffers[symbol][interval]) >= min_bars:
-                    # Create async task for signal processing
+                    oi_info = self._oi_cache.get(symbol)
+                    oi_data_json = json.dumps(oi_info) if oi_info else None
                     task = asyncio.create_task(
                         process_and_enrich_signals(
                             symbol=symbol,
                             df=self.mtf_buffers[symbol][interval].copy(),
                             ref_df=ref_df,
                             interval=interval,
+                            oi_data=oi_data_json,
                         )
                     )
                     self.processing_tasks.add(task)
@@ -671,11 +673,14 @@ class LiveDataManager:
             # Kilit mekanizmasını `process_and_enrich_signals` fonksiyonuna devretmek yerine burada yönetebiliriz.
             # Ancak `create_signal` zaten kendi içinde atomik olmalı. Şimdilik kilitsiz devam edelim.
             # async with self.db_lock:
+            oi_info = self._oi_cache.get(symbol)
+            oi_data_json = json.dumps(oi_info) if oi_info else None
             await process_and_enrich_signals(
                 symbol=symbol,
                 df=df.copy(),
                 ref_df=ref_df.copy(),
                 interval=self.interval,
+                oi_data=oi_data_json,
             )
         except Exception as e:
             logger.error(f"Sinyal işleme ana hatası - {symbol}: {e}", exc_info=True)
