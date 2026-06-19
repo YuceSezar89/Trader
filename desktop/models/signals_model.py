@@ -61,29 +61,17 @@ _INTERVAL_MINUTES: dict[str, int] = {
 def _fmt_age(ts: Optional[datetime], interval: str = "") -> str:
     if ts is None:
         return "—"
+    time_str = ts.strftime("%H:%M")
     now = datetime.now() if ts.tzinfo is None else datetime.now(tz=timezone.utc)
     secs = int((now - ts).total_seconds())
     if secs < 0:
-        return "—"
+        return time_str
     mins = secs // 60
-    if secs < 60:
-        elapsed = f"{secs}s"
-    elif mins < 60:
-        elapsed = f"{mins}dk"
-    elif mins < 1440:
-        hours = mins // 60
-        rem = mins % 60
-        elapsed = f"{hours}sa {rem}dk" if rem else f"{hours}sa"
-    else:
-        days = mins // 1440
-        rem_h = (mins % 1440) // 60
-        elapsed = f"{days}g {rem_h}sa" if rem_h else f"{days}g"
-
     iv_min = _INTERVAL_MINUTES.get(interval)
     if iv_min and mins > 0:
         candles = mins // iv_min
-        return f"{elapsed} • {candles}m"
-    return elapsed
+        return f"{time_str} • {candles}m"
+    return time_str
 
 
 @dataclass
