@@ -75,6 +75,17 @@ def _compute_vpmv_scores(df: pd.DataFrame, signal_type: str) -> tuple[float, flo
     # Volume: log + rolling min-max
     vol_score = float(normalize_volume_0_100(df["volume"]).iloc[-1])
 
+    # Volume yönlü (A/B karşılaştırma — sadece log)
+    hl_range = (df["high"] - df["low"]).clip(lower=1e-8)
+    buy_vol  = df["volume"] * (df["close"] - df["low"])  / hl_range
+    sell_vol = df["volume"] * (df["high"]  - df["close"]) / hl_range
+    vol_delta = (buy_vol - sell_vol) * side
+    vol_dir_score = float(normalize_momentum_0_100(vol_delta).iloc[-1])
+    logger.info(
+        "VOL_AB | %s | %s | yonsuz=%.1f yonlu=%.1f fark=%.1f",
+        signal_type, df["close"].iloc[-1], vol_score, vol_dir_score, vol_dir_score - vol_score,
+    )
+
     # Momentum: yönlü RSI delta + z-score sigmoid
     rsi_series = calculate_rsi(df, period=14)
     rsi_delta_series = rsi_series.diff().fillna(0.0) * side
