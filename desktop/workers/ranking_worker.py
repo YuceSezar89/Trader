@@ -15,6 +15,7 @@ import time
 from io import StringIO
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 import redis
 from PyQt6.QtCore import QThread, pyqtSignal  # pylint: disable=no-name-in-module
@@ -41,6 +42,7 @@ _TF_WEIGHTS: dict[str, float] = {
     "1h":  0.15,
 }
 _Z_LOOKBACK = 100
+_R_PERIOD   = 14
 
 
 class RankingWorker(QThread):
@@ -131,6 +133,9 @@ class RankingWorker(QThread):
             n_bear  = len(dirs) - n_bull
             aligned = max(n_bull, n_bear) == len(dirs)
 
+            df_1h = self._fetch_klines(sym, "1h")
+            r_score = self._r_score(df_1h) if df_1h is not None and len(df_1h) >= _R_PERIOD else None
+
             scores[sym] = {
                 "symbol":          sym,
                 "score_5m":        tf_scores.get("5m"),
@@ -138,6 +143,7 @@ class RankingWorker(QThread):
                 "score_1h":        tf_scores.get("1h"),
                 "combined":        round(combined, 1),
                 "z_confluence":    z_confluence,
+                "r_score":         r_score,
                 "aligned":         aligned,
                 "alignment_count": max(n_bull, n_bear),
                 "tf_count":        len(dirs),
@@ -189,6 +195,35 @@ class RankingWorker(QThread):
                 import pyarrow as pa  # pylint: disable=import-outside-toplevel
                 return pa.ipc.open_stream(raw[4:]).read_pandas()
             return pd.read_json(StringIO(raw.decode()), orient="split")
+        except Exception:  # pylint: disable=broad-exception-caught
+            return None
+
+    def _r_score(self, df: pd.DataFrame) -> Optional[float]:
+        try:
+            closes  = df["close"].astype(float).values
+            returns = np.diff(np.log(closes + 1e-12))[-_R_PERIOD:]
+            if len(returns) < _R_PERIOD // 2:
+                return None
+
+            avg = returns.mean()
+            std = returns.std() + 1e-12
+
+            sharpe  = avg / std
+
+            neg = returns[returns < 0]
+            neg_std = neg.std() + 1e-12 if len(neg) > 1 else 1e-12
+            sortino = avg / neg_std
+
+            price_window = closes[-_R_PERIOD - 1:]
+            max_dd = (price_window.max() - price_window.min()) / (price_window.max() + 1e-12)
+            calmar  = avg / (max_dd + 1e-12)
+
+            gains  = returns[returns >= 0].sum()
+            losses = abs(returns[returns < 0].sum()) + 1e-12
+            omega   = gains / losses
+
+            r = sortino * 0.40 + omega * 0.30 + calmar * 0.20 + sharpe * 0.10
+            return round(float(r), 3)
         except Exception:  # pylint: disable=broad-exception-caught
             return None
 

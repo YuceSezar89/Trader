@@ -73,6 +73,8 @@ class DivergencePanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._last_result: Optional[dict] = None
+        self._prev_pos_ranks: dict[str, int] = {}
+        self._prev_neg_ranks: dict[str, int] = {}
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -159,8 +161,14 @@ class DivergencePanel(QWidget):
             key=lambda x: x[1],
         )
 
-        self._fill_table(self._pos_table, pos_rows, diverge_since, positive=True)
-        self._fill_table(self._neg_table, neg_rows, diverge_since, positive=False)
+        pos_deltas = {sym: self._prev_pos_ranks[sym] - i for i, (sym, _) in enumerate(pos_rows) if sym in self._prev_pos_ranks}
+        neg_deltas = {sym: self._prev_neg_ranks[sym] - i for i, (sym, _) in enumerate(neg_rows) if sym in self._prev_neg_ranks}
+
+        self._prev_pos_ranks = {sym: i for i, (sym, _) in enumerate(pos_rows)}
+        self._prev_neg_ranks = {sym: i for i, (sym, _) in enumerate(neg_rows)}
+
+        self._fill_table(self._pos_table, pos_rows, diverge_since, positive=True, rank_deltas=pos_deltas)
+        self._fill_table(self._neg_table, neg_rows, diverge_since, positive=False, rank_deltas=neg_deltas)
 
     def _fill_table(
         self,
@@ -168,6 +176,7 @@ class DivergencePanel(QWidget):
         rows: list,
         diverge_since: dict,
         positive: bool,
+        rank_deltas: Optional[dict] = None,
     ) -> None:
         table.setRowCount(len(rows))
 
@@ -175,12 +184,24 @@ class DivergencePanel(QWidget):
         bold = QFont("Monospace", 11, QFont.Weight.Bold)
         now = datetime.now()
         z_color = _C_GREEN if positive else _C_RED
+        if rank_deltas is None:
+            rank_deltas = {}
 
         for row_idx, (symbol, z) in enumerate(rows):
-            # Sembol
-            sym_item = QTableWidgetItem(symbol)
+            # Sembol + sıra değişimi
+            delta = rank_deltas.get(symbol, 0)
+            if delta > 0:
+                sym_text = f"{symbol} ↑{delta}"
+                sym_color = _C_GREEN
+            elif delta < 0:
+                sym_text = f"{symbol} ↓{abs(delta)}"
+                sym_color = _C_RED
+            else:
+                sym_text = symbol
+                sym_color = z_color
+            sym_item = QTableWidgetItem(sym_text)
             sym_item.setFont(bold)
-            sym_item.setForeground(z_color)
+            sym_item.setForeground(sym_color)
             table.setItem(row_idx, _COL_SYMBOL, sym_item)
 
             # Z-score + arka plan rengi

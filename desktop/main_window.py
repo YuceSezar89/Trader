@@ -28,6 +28,7 @@ from PyQt6.QtWidgets import (
 from desktop.panels.active_signals_panel import ActiveSignalsPanel
 from desktop.panels.chart_panel import ChartPanel
 from desktop.panels.divergence_panel import DivergencePanel
+from desktop.panels.ranking_panel import RankingPanel
 from desktop.panels.watchlist_panel import WatchlistPanel
 from desktop.theme import COLORS
 from desktop.widgets.log_panel import LogPanel
@@ -270,6 +271,17 @@ class MainWindow(QMainWindow):
         self.tabifyDockWidget(chart_dock, divergence_dock)
         self._add_panel_toggle(divergence_dock)
         self._docks["divergence"] = divergence_dock
+
+        # ── Güç Sıralaması paneli (sağ tabified) ──────────────────────────
+        self._ranking_panel = RankingPanel(redis_url, self)
+        ranking_dock = QDockWidget("Güç Sıralaması", self)
+        ranking_dock.setObjectName("dock_ranking")
+        ranking_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        ranking_dock.setWidget(self._ranking_panel)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, ranking_dock)
+        self.tabifyDockWidget(chart_dock, ranking_dock)
+        self._add_panel_toggle(ranking_dock)
+        self._docks["ranking"] = ranking_dock
 
         # ── Placeholder paneller (sağ tabified + alt) ─────────────────────
         placeholder_panels = [

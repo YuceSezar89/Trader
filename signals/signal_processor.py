@@ -204,6 +204,21 @@ async def process_and_enrich_signals(
                 except Exception as vpm_err:
                     logger.warning(f"[{symbol}] VPMV hesaplama atlandı: {vpm_err}")
 
+                # Pre-signal directional volume log (test)
+                try:
+                    _pre = df.iloc[-6:-1]
+                    _hl  = (_pre["high"] - _pre["low"]).clip(lower=1e-8)
+                    _bv  = (_pre["volume"] * (_pre["close"] - _pre["low"])  / _hl).sum()
+                    _sv  = (_pre["volume"] * (_pre["high"]  - _pre["close"]) / _hl).sum()
+                    _tot = _bv + _sv
+                    _buy_pct = _bv / _tot * 100 if _tot > 0 else 50.0
+                    logger.info(
+                        "PREVOL | %s | %s | %s | buy_pct=%.1f",
+                        symbol, sig_type, interval, _buy_pct,
+                    )
+                except Exception:  # pylint: disable=broad-exception-caught
+                    pass
+
                 # 4. Minimum skor filtresi (B kapısı)
                 if vpms_score is not None and vpms_score < min_vpmv:
                     logger.info(

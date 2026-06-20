@@ -30,9 +30,10 @@ _COL_15M       = 3
 _COL_1H        = 4
 _COL_COMBINED  = 5
 _COL_ZCONF     = 6
-_COL_ALIGN     = 7
-_COL_VSBTC     = 8
-_HEADERS = ["#", "Sembol", "5m", "15m", "1h", "Birleşik", "Z-Conf", "TF Uyum", "VS BTC"]
+_COL_RSCORE    = 7
+_COL_ALIGN     = 8
+_COL_VSBTC     = 9
+_HEADERS = ["#", "Sembol", "5m", "15m", "1h", "Birleşik", "Z-Conf", "R-Score", "TF Uyum", "VS BTC"]
 
 _C_GREEN  = QColor(COLORS["green"])
 _C_RED    = QColor(COLORS["red"])
@@ -44,6 +45,13 @@ _BG_STRONG_BULL = QColor(0, 120, 40, 120)
 _BG_SOFT_BULL   = QColor(0, 80, 20, 60)
 _BG_STRONG_BEAR = QColor(180, 20, 20, 120)
 _BG_SOFT_BEAR   = QColor(120, 10, 10, 60)
+
+_PINE_20 = {
+    "BTCUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT", "XRPUSDT",
+    "LTCUSDT", "DOTUSDT", "SOLUSDT", "AVAXUSDT", "TRXUSDT",
+    "UNIUSDT", "LINKUSDT", "VETUSDT", "XLMUSDT", "NEARUSDT",
+    "WIFUSDT", "ZRXUSDT", "ATOMUSDT", "CAKEUSDT", "KSMUSDT",
+}
 
 
 class _NumericItem(QTableWidgetItem):
@@ -60,6 +68,9 @@ class RankingPanel(QWidget):
     def __init__(self, redis_url: str, parent=None):
         super().__init__(parent)
         self._worker = RankingWorker(redis_url, parent=self)
+        self._pine_filter = False
+        self._last_result: list = []
+        self._prev_ranks: dict[str, int] = {}
         self._setup_ui()
         self._connect_worker()
         self._worker.start()
@@ -79,6 +90,13 @@ class RankingPanel(QWidget):
         self._status = QLabel("Yükleniyor…")
         self._status.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px;")
 
+        self._pine_btn = QPushButton("Pine 20")
+        self._pine_btn.setCheckable(True)
+        self._pine_btn.setFixedHeight(24)
+        self._pine_btn.setFixedWidth(60)
+        self._pine_btn.setStyleSheet(self._filter_btn_style(False))
+        self._pine_btn.clicked.connect(self._on_pine_toggled)
+
         refresh_btn = QPushButton("↻")
         refresh_btn.setFixedWidth(28)
         refresh_btn.setStyleSheet(
@@ -88,6 +106,7 @@ class RankingPanel(QWidget):
 
         top.addWidget(title)
         top.addStretch()
+        top.addWidget(self._pine_btn)
         top.addWidget(self._status)
         top.addWidget(refresh_btn)
         layout.addLayout(top)
@@ -128,6 +147,20 @@ class RankingPanel(QWidget):
 
         layout.addWidget(self._table)
 
+    @staticmethod
+    def _filter_btn_style(active: bool) -> str:
+        if active:
+            return (f"QPushButton {{ background: {COLORS['accent']}; color: #fff; "
+                    f"border: none; border-radius: 3px; font-size: 10px; }}")
+        return (f"QPushButton {{ background: {COLORS['bg_tertiary']}; "
+                f"color: {COLORS['text_muted']}; border: 1px solid {COLORS['border']}; "
+                f"border-radius: 3px; font-size: 10px; }}")
+
+    def _on_pine_toggled(self, checked: bool) -> None:
+        self._pine_filter = checked
+        self._pine_btn.setStyleSheet(self._filter_btn_style(checked))
+        self._render(self._last_result)
+
     def _connect_worker(self) -> None:
         self._worker.ranking_updated.connect(self._on_updated)
         self._worker.status_updated.connect(self._on_status)
@@ -135,6 +168,21 @@ class RankingPanel(QWidget):
     # ------------------------------------------------------------------
     @pyqtSlot(object)
     def _on_updated(self, result: list) -> None:
+        self._last_result = result
+        self._render(result)
+
+    def _render(self, result: list) -> None:
+        if self._pine_filter:
+            result = [r for r in result if r["symbol"] in _PINE_20]
+
+        # Sıra değişimlerini hesapla
+        rank_deltas: dict[str, int] = {}
+        for row_data in result:
+            sym = row_data["symbol"]
+            if sym in self._prev_ranks:
+                rank_deltas[sym] = self._prev_ranks[sym] - row_data["rank"]
+        self._prev_ranks = {r["symbol"]: r["rank"] for r in result}
+
         self._table.setSortingEnabled(False)
         self._table.setRowCount(0)
 
@@ -157,9 +205,20 @@ class RankingPanel(QWidget):
             # Rank
             self._set_num(row, _COL_RANK, row_data["rank"], bg)
 
-            # Sembol
-            sym_item = QTableWidgetItem(row_data["symbol"])
-            sym_item.setForeground(_C_WHITE)
+            # Sembol + sıra değişimi
+            sym = row_data["symbol"]
+            delta = rank_deltas.get(sym, 0)
+            if delta > 0:
+                sym_text = f"{sym} ↑{delta}"
+                sym_color = _C_GREEN
+            elif delta < 0:
+                sym_text = f"{sym} ↓{abs(delta)}"
+                sym_color = _C_RED
+            else:
+                sym_text = sym
+                sym_color = _C_WHITE
+            sym_item = QTableWidgetItem(sym_text)
+            sym_item.setForeground(sym_color)
             if bg:
                 sym_item.setBackground(bg)
             self._table.setItem(row, _COL_SYMBOL, sym_item)
@@ -174,6 +233,9 @@ class RankingPanel(QWidget):
 
             # Z-Conf
             self._set_zconf(row, row_data.get("z_confluence"), bg)
+
+            # R-Score
+            self._set_rscore(row, row_data.get("r_score"), bg)
 
             # TF Uyum
             align_count = row_data.get("alignment_count", 0)
@@ -224,6 +286,20 @@ class RankingPanel(QWidget):
         if bg:
             item.setBackground(bg)
         self._table.setItem(row, col, item)
+
+    def _set_rscore(self, row: int, val: Optional[float], bg) -> None:
+        if val is None:
+            item = QTableWidgetItem("—")
+            item.setForeground(_C_MUTED)
+        else:
+            sign = "+" if val > 0 else ""
+            item = _NumericItem(f"{sign}{val:.3f}")
+            item.setData(Qt.ItemDataRole.UserRole, val)
+            item.setForeground(_C_GREEN if val > 0 else _C_RED)
+        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        if bg:
+            item.setBackground(bg)
+        self._table.setItem(row, _COL_RSCORE, item)
 
     def _set_zconf(self, row: int, val: Optional[float], bg) -> None:
         if val is None:
