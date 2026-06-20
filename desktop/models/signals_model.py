@@ -326,6 +326,25 @@ class SignalsModel(QAbstractTableModel):
         key = (row.symbol, row.interval, row.signal_type)
         self._coincident[key] = self._coincident.get(key, 0) + 1
 
+    def remove_signals(self, signal_ids: list[int]) -> None:
+        indices = sorted(
+            [self._id_index[sid] for sid in signal_ids if sid in self._id_index],
+            reverse=True,
+        )
+        for idx in indices:
+            self.beginRemoveRows(QModelIndex(), idx, idx)
+            self._rows.pop(idx)
+            self.endRemoveRows()
+        if indices:
+            self._id_index.clear()
+            self._sym_rows.clear()
+            self._coincident.clear()
+            for i, row in enumerate(self._rows):
+                self._id_index[row.id] = i
+                self._sym_rows.setdefault(row.symbol, []).append(i)
+                key = (row.symbol, row.interval, row.signal_type)
+                self._coincident[key] = self._coincident.get(key, 0) + 1
+
     @pyqtSlot(str, float, float)
     def on_price_updated(self, symbol: str, price: float, _change_pct: float) -> None:
         indices = self._sym_rows.get(symbol, [])

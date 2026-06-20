@@ -291,6 +291,11 @@ class ActiveSignalsPanel(QWidget):
         self._model.add_or_update(signal)
         self._update_stats()
 
+    @pyqtSlot(list)
+    def on_signals_closed(self, signal_ids: list) -> None:
+        self._model.remove_signals(signal_ids)
+        self._update_stats()
+
     @pyqtSlot(str, float, float, float, float)
     def on_price_updated(self, symbol: str, price: float, change_pct: float, _volume: float = 0.0, _funding: float = 0.0) -> None:
         self._model.on_price_updated(symbol, price, change_pct)

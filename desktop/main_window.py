@@ -373,6 +373,7 @@ class MainWindow(QMainWindow):
         self._signal_worker.connection_changed.connect(self._on_signal_connection)
         self._signal_worker.signals_loaded.connect(self._active_signals_panel.on_signals_loaded)
         self._signal_worker.new_signal.connect(self._active_signals_panel.on_new_signal)
+        self._signal_worker.signals_closed.connect(self._active_signals_panel.on_signals_closed)
         self._market_worker.price_updated.connect(self._active_signals_panel.on_price_updated)
         self._signal_worker.start()
         self._workers.append(self._signal_worker)
