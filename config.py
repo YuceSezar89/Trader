@@ -125,6 +125,10 @@ class Config:
     RISK_SL_MULTIPLIER = 1.5   # Stop loss: ATR × bu çarpan
     RISK_TP_MULTIPLIER = 3.0   # Take profit: ATR × bu çarpan
 
+    # Konfluans Filtresi
+    CONFLUENCE_VPMV_MIN = 68.0  # VPMV eşiği (geçmiş veriden: üst %20)
+    CONFLUENCE_Z_MIN    = 1.5   # |Z-score| eşiği (geçmiş veriden: üst %20)
+
     # =============================================================================
     # SİNYAL İŞLEME AYARLARI
     # =============================================================================

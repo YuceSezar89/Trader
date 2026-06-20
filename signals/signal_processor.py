@@ -234,25 +234,51 @@ async def process_and_enrich_signals(
                     f"(higher TFs: {_MTF_HIGHER.get(interval, [])})"
                 )
 
-                # 6. Sinyali işle
+                # 6. Z-score hesapla (EMA200 ayrışması)
+                z_score_entry = None
+                try:
+                    if len(df) >= 210 and "close" in df.columns:
+                        closes = df["close"].astype(float)
+                        ema200 = closes.ewm(span=200, adjust=False).mean()
+                        std200 = closes.rolling(200).std()
+                        z_score_entry = round(
+                            float((closes.iloc[-1] - ema200.iloc[-1]) / (std200.iloc[-1] + 1e-12)), 3
+                        )
+                except Exception:
+                    pass
+
+                is_confluence = (
+                    vpms_score is not None and vpms_score >= Config.CONFLUENCE_VPMV_MIN and
+                    z_score_entry is not None and abs(z_score_entry) >= Config.CONFLUENCE_Z_MIN
+                )
+
+                if is_confluence:
+                    logger.info(
+                        "[%s] ★ KONFLUANS SİNYALİ %s %s | VPMV=%.1f Z=%+.2f",
+                        symbol, interval, sig_type, vpms_score, z_score_entry,
+                    )
+
+                # 7. Sinyali işle
                 current_price = float(df["close"].iloc[-1]) if len(df) >= 1 else None
                 enriched_signal = {
-                    "symbol":       symbol,
-                    "interval":     interval,
-                    "indicators":   signal_data.get("indicators"),
-                    "signal_type":  sig_type,
-                    "opened_at":    signal_data.get("timestamp"),
-                    "open_price":   signal_data.get("price"),
-                    "vpms_score":   float(vpms_score) if vpms_score is not None else None,
-                    "mtf_score":    mtf_score,
-                    "st_confirmed": st_confirmed,
-                    "rsi":          signal_data.get("rsi"),
-                    "strength":     signal_data.get("strength"),
-                    "atr":          signal_data.get("atr"),
-                    "alpha":        alpha,
-                    "beta":         beta,
-                    "sharpe_ratio": latest_metrics.get("sharpe_ratio"),
-                    "oi_data":      oi_data,
+                    "symbol":         symbol,
+                    "interval":       interval,
+                    "indicators":     signal_data.get("indicators"),
+                    "signal_type":    sig_type,
+                    "opened_at":      signal_data.get("timestamp"),
+                    "open_price":     signal_data.get("price"),
+                    "vpms_score":     float(vpms_score) if vpms_score is not None else None,
+                    "mtf_score":      mtf_score,
+                    "st_confirmed":   st_confirmed,
+                    "rsi":            signal_data.get("rsi"),
+                    "strength":       signal_data.get("strength"),
+                    "atr":            signal_data.get("atr"),
+                    "alpha":          alpha,
+                    "beta":           beta,
+                    "sharpe_ratio":   latest_metrics.get("sharpe_ratio"),
+                    "oi_data":        oi_data,
+                    "z_score_entry":  z_score_entry,
+                    "is_confluence":  is_confluence,
                 }
                 logger.info(f"[{symbol}] Sinyal işleniyor: {signal_name} - {sig_type}")
                 signal_id = await signal_lifecycle_manager.process(enriched_signal, current_price=current_price)

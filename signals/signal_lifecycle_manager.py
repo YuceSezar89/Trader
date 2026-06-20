@@ -117,6 +117,8 @@ class SignalLifecycleManager:
                     take_profit_price = tp_price,
                     sl_multiplier     = sl_mult,
                     tp_multiplier     = tp_mult,
+                    z_score_entry     = signal_data.get("z_score_entry"),
+                    is_confluence     = signal_data.get("is_confluence", False),
                 )
                 session.add(new_sig)
                 await session.flush()

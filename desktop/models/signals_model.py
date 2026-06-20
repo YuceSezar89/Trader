@@ -109,6 +109,8 @@ class SignalRow:
     oi_data: Optional[str] = None
     stop_loss_price: Optional[float] = None
     take_profit_price: Optional[float] = None
+    z_score_entry: Optional[float] = None
+    is_confluence: bool = False
     pnl_pct: Optional[float] = field(default=None, init=False)
 
     def update_price(self, price: float) -> None:
@@ -166,7 +168,7 @@ class SignalsModel(QAbstractTableModel):
 
     def _display(self, row: SignalRow, col: int) -> str:
         match col:
-            case _ if col == COL_SYMBOL:    return row.symbol
+            case _ if col == COL_SYMBOL:    return f"★ {row.symbol}" if row.is_confluence else row.symbol
             case _ if col == COL_TYPE:      return row.signal_type
             case _ if col == COL_TF:        return row.interval
             case _ if col == COL_INDICATOR: return row.indicators or "—"
@@ -205,9 +207,11 @@ class SignalsModel(QAbstractTableModel):
         def _r(v, fmt=".2f"): return f"{v:{fmt}}" if v is not None else "—"
         st = ("✓ Onaylı" if row.st_confirmed else "✗ Onaysız") if row.st_confirmed is not None else "—"
         mtf = f"{int(row.mtf)}" if row.mtf is not None else "—"
+        cf_line = f"  ★ KONFLUANS  Z={_r(row.z_score_entry, '+.2f')}\n" if row.is_confluence else ""
         return (
             f"{row.symbol}  {row.signal_type}  {row.interval}  |  {row.indicators}\n"
             f"{'─'*52}\n"
+            f"{cf_line}"
             f"  Alpha    {_r(row.alpha, '+.4f'):>10}    Beta     {_r(row.beta):>8}\n"
             f"  Sharpe   {_r(row.sharpe):>10}\n"
             f"{'─'*52}\n"
@@ -245,6 +249,8 @@ class SignalsModel(QAbstractTableModel):
             return QColor(COLORS["red"])
         if col == COL_TP:
             return QColor(COLORS["green"])
+        if col == COL_SYMBOL and row.is_confluence:
+            return QColor("#FFD700")
         return None
 
     # ── Veri yükleme / güncelleme ─────────────────────────────────────────────
@@ -301,6 +307,8 @@ class SignalsModel(QAbstractTableModel):
             oi_data=s.get("oi_data"),
             stop_loss_price=s.get("stop_loss_price"),
             take_profit_price=s.get("take_profit_price"),
+            z_score_entry=s.get("z_score_entry"),
+            is_confluence=bool(s.get("is_confluence", False)),
         )
         idx = len(self._rows)
         self._rows.append(row)
@@ -331,6 +339,7 @@ class SignalsProxyModel(QSortFilterProxyModel):
         self._tf_filter = ""
         self._indicator_filter = ""
         self._st_only = False
+        self._cf_only = False
         self.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self.setFilterKeyColumn(COL_SYMBOL)
 
@@ -350,6 +359,10 @@ class SignalsProxyModel(QSortFilterProxyModel):
         self._st_only = only_confirmed
         self.invalidateFilter()
 
+    def set_confluence_filter(self, only_confluence: bool) -> None:
+        self._cf_only = only_confluence
+        self.invalidateFilter()
+
     def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
         src = self.sourceModel()
         if source_row >= len(src._rows):  # noqa: SLF001
@@ -362,6 +375,8 @@ class SignalsProxyModel(QSortFilterProxyModel):
         if self._indicator_filter and not row.indicators.startswith(self._indicator_filter):
             return False
         if self._st_only and row.st_confirmed is False:
+            return False
+        if self._cf_only and not row.is_confluence:
             return False
         return super().filterAcceptsRow(source_row, source_parent)
 

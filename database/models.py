@@ -83,3 +83,6 @@ class Signal(Base):
     take_profit_price = Column(Float, nullable=True)
     sl_multiplier     = Column(Float, nullable=True)
     tp_multiplier     = Column(Float, nullable=True)
+
+    z_score_entry  = Column(Float, nullable=True)
+    is_confluence  = Column(Boolean, nullable=True, default=False)

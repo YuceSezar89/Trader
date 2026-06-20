@@ -108,6 +108,15 @@ class ActiveSignalsPanel(QWidget):
         self._btn_oi_filter.clicked.connect(self._on_oi_filter_toggled)
         filter_row.addWidget(self._btn_oi_filter)
 
+        self._btn_cf_filter = QPushButton("★ Konfluans")
+        self._btn_cf_filter.setCheckable(True)
+        self._btn_cf_filter.setChecked(False)
+        self._btn_cf_filter.setFixedHeight(24)
+        self._btn_cf_filter.setFixedWidth(100)
+        self._btn_cf_filter.setStyleSheet(self._confluence_btn_style(False))
+        self._btn_cf_filter.clicked.connect(self._on_cf_filter_toggled)
+        filter_row.addWidget(self._btn_cf_filter)
+
         self._search = QLineEdit()
         self._search.setPlaceholderText("Sembol ara…")
         self._search.setClearButtonEnabled(True)
@@ -206,6 +215,27 @@ class ActiveSignalsPanel(QWidget):
         Config.OI_FILTER_ENABLED = enabled
         self._btn_oi_filter.setText("OI Filtre: Açık" if enabled else "OI Filtre: Kapalı")
         self._btn_oi_filter.setStyleSheet(self._st_filter_style(enabled))
+
+    def _on_cf_filter_toggled(self) -> None:
+        enabled = self._btn_cf_filter.isChecked()
+        self._proxy.set_confluence_filter(enabled)
+        self._btn_cf_filter.setStyleSheet(self._confluence_btn_style(enabled))
+        self._update_stats()
+
+    @staticmethod
+    def _confluence_btn_style(active: bool) -> str:
+        if active:
+            return (
+                "QPushButton { background-color: #B8860B; color: #FFD700; "
+                "border: 1px solid #FFD700; border-radius: 3px; font-size: 10px; "
+                "padding: 0 6px; font-weight: bold; }"
+            )
+        return (
+            f"QPushButton {{ background-color: {COLORS['bg_tertiary']}; "
+            f"color: {COLORS['text_muted']}; border: 1px solid {COLORS['border']}; "
+            f"border-radius: 3px; font-size: 10px; padding: 0 6px; }}"
+            f"QPushButton:hover {{ color: #FFD700; }}"
+        )
 
     def _on_tf_changed(self, text: str) -> None:
         self._proxy.set_tf_filter("" if text.startswith("TF:") else text)
