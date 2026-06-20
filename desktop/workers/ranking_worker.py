@@ -2,9 +2,9 @@
 RankingWorker — tüm takip edilen coinleri VPMV skoruna göre sıralar.
 
 Her 3 dakikada bir:
-  1. Redis'ten 5m / 15m / 1h kline verisi okunur
+  1. Redis'ten 5m / 15m / 1h / 4h kline verisi okunur
   2. Her TF için VPMV hesaplanır
-  3. Ağırlıklı birleşik skor: 5m×0.50 + 15m×0.35 + 1h×0.15
+  3. Ağırlıklı birleşik skor: 5m×0.35 + 15m×0.30 + 1h×0.20 + 4h×0.15
   4. 200 coin içinde percentile rank uygulanır (cross-normalize)
   5. VS BTC farkı ayrı kolon olarak eklenir
 """
@@ -37,9 +37,10 @@ _UPDATE_SEC  = 180  # 3 dakika
 _REF_SYMBOL  = "BTCUSDT"
 
 _TF_WEIGHTS: dict[str, float] = {
-    "5m":  0.50,
-    "15m": 0.35,
-    "1h":  0.15,
+    "5m":  0.35,
+    "15m": 0.30,
+    "1h":  0.20,
+    "4h":  0.15,
 }
 _Z_LOOKBACK = 100
 _R_PERIOD   = 14
