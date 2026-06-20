@@ -22,7 +22,7 @@ from PyQt6.QtGui import QColor
 
 from desktop.theme import COLORS
 
-COLUMNS = ["Sembol", "Tip", "TF", "İndikatör", "VPMV", "MTF", "α", "β", "Z-Score%", "P&L%", "Süre"]
+COLUMNS = ["Sembol", "Tip", "TF", "İndikatör", "VPMV", "MTF", "α", "β", "Z-Score%", "P&L%", "SL", "TP", "Süre"]
 
 COL_SYMBOL    = 0
 COL_TYPE      = 1
@@ -34,7 +34,9 @@ COL_ALPHA     = 6
 COL_BETA      = 7
 COL_ZSCORE    = 8
 COL_PNL       = 9
-COL_AGE       = 10
+COL_SL        = 10
+COL_TP        = 11
+COL_AGE       = 12
 
 
 def _fmt_score(v: Optional[float]) -> str:
@@ -50,6 +52,18 @@ def _fmt_pnl(v: Optional[float]) -> str:
         return "—"
     sign = "+" if v > 0 else ""
     return f"{sign}{v:.2f}%"
+
+
+def _fmt_price(v: Optional[float]) -> str:
+    if v is None:
+        return "—"
+    if v >= 1000:
+        return f"{v:.2f}"
+    if v >= 1:
+        return f"{v:.4f}"
+    if v >= 0.01:
+        return f"{v:.6f}"
+    return f"{v:.8f}"
 
 
 _INTERVAL_MINUTES: dict[str, int] = {
@@ -93,6 +107,8 @@ class SignalRow:
     st_confirmed: Optional[bool] = None
     sharpe: Optional[float] = None
     oi_data: Optional[str] = None
+    stop_loss_price: Optional[float] = None
+    take_profit_price: Optional[float] = None
     pnl_pct: Optional[float] = field(default=None, init=False)
 
     def update_price(self, price: float) -> None:
@@ -160,6 +176,8 @@ class SignalsModel(QAbstractTableModel):
             case _ if col == COL_BETA:      return _fmt_ratio(row.beta)
             case _ if col == COL_ZSCORE:    return _fmt_score(row.zscore)
             case _ if col == COL_PNL:       return _fmt_pnl(row.pnl_pct)
+            case _ if col == COL_SL:        return _fmt_price(row.stop_loss_price)
+            case _ if col == COL_TP:        return _fmt_price(row.take_profit_price)
             case _ if col == COL_AGE:       return _fmt_age(row.timestamp, row.interval)
         return ""
 
@@ -223,6 +241,10 @@ class SignalsModel(QAbstractTableModel):
             return QColor(COLORS["text_muted"])
         if col == COL_ALPHA and row.alpha is not None:
             return QColor(COLORS["green"] if row.alpha > 0 else COLORS["red"])
+        if col == COL_SL:
+            return QColor(COLORS["red"])
+        if col == COL_TP:
+            return QColor(COLORS["green"])
         return None
 
     # ── Veri yükleme / güncelleme ─────────────────────────────────────────────
@@ -277,6 +299,8 @@ class SignalsModel(QAbstractTableModel):
             st_confirmed=s.get("st_confirmed"),
             sharpe=s.get("sharpe_ratio"),
             oi_data=s.get("oi_data"),
+            stop_loss_price=s.get("stop_loss_price"),
+            take_profit_price=s.get("take_profit_price"),
         )
         idx = len(self._rows)
         self._rows.append(row)

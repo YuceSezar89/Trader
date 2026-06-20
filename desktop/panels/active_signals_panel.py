@@ -226,8 +226,8 @@ class ActiveSignalsPanel(QWidget):
     def _refresh_age_column(self) -> None:
         if self._model.rowCount() == 0:
             return
-        tl = self._model.index(0, 10)
-        br = self._model.index(self._model.rowCount() - 1, 10)
+        tl = self._model.index(0, 12)
+        br = self._model.index(self._model.rowCount() - 1, 12)
         self._model.dataChanged.emit(tl, br, [0])  # DisplayRole = 0
 
     # ── Filtre ────────────────────────────────────────────────────────────────
