@@ -1,15 +1,17 @@
 from sqlalchemy import (
     Column,
     Integer,
+    SmallInteger,
     String,
     Float,
     Boolean,
     DateTime,
     PrimaryKeyConstraint,
     UniqueConstraint,
-    ForeignKeyConstraint
+    ForeignKey,
+    ForeignKeyConstraint,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, relationship
+from sqlalchemy.orm import DeclarativeBase, relationship
 from datetime import datetime
 
 
@@ -87,3 +89,64 @@ class Signal(Base):
     z_score_entry      = Column(Float, nullable=True)
     is_confluence      = Column(Boolean, nullable=True, default=False)
     trailing_stop_price = Column(Float, nullable=True)
+
+    paper_trades = relationship("PaperTrade", back_populates="signal", lazy="noload")
+
+
+class PaperTrade(Base):
+    __tablename__ = "paper_trades"
+
+    id              = Column(Integer, primary_key=True, autoincrement=True)
+    signal_id       = Column(Integer, ForeignKey("signals.id", ondelete="SET NULL"), nullable=True)
+    strategy        = Column(String(50), nullable=False, default="conf_100")
+
+    symbol          = Column(String(30), nullable=False)
+    signal_type     = Column(String(10), nullable=False)
+    interval        = Column(String(10), nullable=False)
+    position_usd    = Column(Float, nullable=False, default=100.0)
+    entry_price     = Column(Float, nullable=False)
+    exit_price      = Column(Float, nullable=True)
+    stop_loss_price = Column(Float, nullable=True)
+    take_profit_price = Column(Float, nullable=True)
+    trailing_stop_price = Column(Float, nullable=True)
+
+    fee_usd         = Column(Float, nullable=True)
+    pnl_usd         = Column(Float, nullable=True)
+    pnl_pct         = Column(Float, nullable=True)
+    balance_after   = Column(Float, nullable=True)
+
+    status          = Column(String(20), nullable=False, default="open")
+    close_reason    = Column(String(50), nullable=True)
+    opened_at       = Column(DateTime, nullable=False, default=datetime.now)
+    closed_at       = Column(DateTime, nullable=True)
+
+    # ML snapshot
+    btc_z_score     = Column(Float, nullable=True)
+    btc_trend       = Column(String(20), nullable=True)
+    hour_utc        = Column(SmallInteger, nullable=True)
+    day_of_week     = Column(SmallInteger, nullable=True)
+    funding_rate    = Column(Float, nullable=True)
+    recent_win_rate = Column(Float, nullable=True)
+
+    # Denormalized signal features
+    vpms_score      = Column(Float, nullable=True)
+    z_score_entry   = Column(Float, nullable=True)
+    mtf_score       = Column(Float, nullable=True)
+    atr             = Column(Float, nullable=True)
+
+    signal = relationship("Signal", back_populates="paper_trades", lazy="noload")
+
+
+class PaperPortfolio(Base):
+    __tablename__ = "paper_portfolio"
+
+    id               = Column(Integer, primary_key=True, autoincrement=True)
+    strategy         = Column(String(50), nullable=False, unique=True, default="conf_100")
+    balance          = Column(Float, nullable=False, default=10000.0)
+    initial_balance  = Column(Float, nullable=False, default=10000.0)
+    peak_balance     = Column(Float, nullable=False, default=10000.0)
+    max_drawdown_pct = Column(Float, nullable=False, default=0.0)
+    total_trades     = Column(Integer, nullable=False, default=0)
+    winning_trades   = Column(Integer, nullable=False, default=0)
+    total_pnl_usd    = Column(Float, nullable=False, default=0.0)
+    updated_at       = Column(DateTime, nullable=False, default=datetime.now)

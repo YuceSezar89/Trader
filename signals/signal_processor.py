@@ -15,6 +15,7 @@ from utils.preprocessing import (
     normalize_price_0_100,
 )
 from utils.redis_client import RedisClient
+from signals.paper_trade_manager import paper_trade_manager
 
 logger = get_logger(__name__)
 
@@ -307,6 +308,41 @@ async def process_and_enrich_signals(
                 logger.info(f"[{symbol}] Sinyal işleniyor: {signal_name} - {sig_type}")
                 signal_id = await signal_lifecycle_manager.process(enriched_signal, current_price=current_price)
                 logger.info(f"[{symbol}] Sinyal işlendi: ID {signal_id}")
+
+                if is_confluence and signal_id and current_price:
+                    btc_z: Optional[float] = None
+                    btc_trend_str: Optional[str] = None
+                    try:
+                        btc_df = await RedisClient.get_mtf_klines("BTCUSDT", interval)
+                        if btc_df is not None and len(btc_df) >= 210:
+                            btc_closes = btc_df["close"].astype(float)
+                            btc_ema = btc_closes.ewm(span=200, adjust=False).mean()
+                            btc_std = btc_closes.rolling(200).std()
+                            btc_z = round(float(
+                                (btc_closes.iloc[-1] - btc_ema.iloc[-1]) / (btc_std.iloc[-1] + 1e-12)
+                            ), 3)
+                            btc_trend_str = "bullish" if btc_z > 0.5 else "bearish" if btc_z < -0.5 else "neutral"
+                    except Exception:
+                        pass
+
+                    funding: Optional[float] = None
+                    try:
+                        import json as _json
+                        ticker_raw = await RedisClient.get_client().get(f"ticker:{symbol}")
+                        if ticker_raw:
+                            ticker_d = _json.loads(ticker_raw)
+                            funding = ticker_d.get("funding_rate")
+                    except Exception:
+                        pass
+
+                    await paper_trade_manager.on_new_signal(
+                        signal_data=enriched_signal,
+                        signal_id=signal_id,
+                        current_price=current_price,
+                        btc_z_score=btc_z,
+                        btc_trend=btc_trend_str,
+                        funding_rate=funding,
+                    )
 
             except Exception as e:
                 logger.error(f"[{symbol}] Sinyal kayıt hatası: {e}", exc_info=True)
