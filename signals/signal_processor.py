@@ -18,6 +18,15 @@ from utils.redis_client import RedisClient
 
 logger = get_logger(__name__)
 
+_MIN_BARS: dict[str, int] = {
+    "1m":  300,
+    "5m":  100,
+    "15m": 50,
+    "1h":  50,
+    "4h":  50,
+    "1d":  50,
+}
+
 _MTF_HIGHER: dict[str, list[str]] = {
     "1m":  ["5m",  "15m"],
     "5m":  ["15m", "1h"],
@@ -117,6 +126,14 @@ async def process_and_enrich_signals(
 
     if df.empty or ref_df.empty:
         logger.warning(f"[{symbol}] Veri çerçevelerinden biri boş, atlanıyor.")
+        return
+
+    min_bars = _MIN_BARS.get(interval, 50)
+    if len(df) < min_bars:
+        logger.warning(
+            "[%s] %s: yetersiz bar (%d/%d), sinyal üretilmiyor",
+            symbol, interval, len(df), min_bars,
+        )
         return
 
     # 1. Finansal Metrikleri Hesapla
