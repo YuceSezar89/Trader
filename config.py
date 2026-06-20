@@ -123,7 +123,13 @@ class Config:
     
     # Risk Yönetimi
     RISK_SL_MULTIPLIER = 1.5   # Stop loss: ATR × bu çarpan
-    RISK_TP_MULTIPLIER = 3.0   # Take profit: ATR × bu çarpan
+    RISK_TP_MULTIPLIER = 3.0   # Take profit: ATR × bu çarpan (baz)
+
+    # Dinamik R:R — her faktör TP çarpanına +0.5 ekler (max toplam: 4.5)
+    DYNAMIC_RR_VPMV_THRESHOLD = 80.0   # VPMV ≥ bu değer → +0.5 TP bonus
+    DYNAMIC_RR_MTF_FULL       = 100.0  # MTF = 100% → +0.5 TP bonus
+    DYNAMIC_RR_BONUS_INTERVALS = ("15m",)  # Bu TF'lerde → +0.5 TP bonus
+    DYNAMIC_RR_TP_MAX         = 4.5    # Maksimum TP çarpanı
 
     # Konfluans Filtresi
     CONFLUENCE_VPMV_MIN = 68.0  # VPMV eşiği (geçmiş veriden: üst %20)
