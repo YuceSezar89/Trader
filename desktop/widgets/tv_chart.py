@@ -191,6 +191,17 @@ function loadData(candlesJson, emaJson, volJson, rsiJson, attempt) {{
   }}
 }}
 
+function setPriceFormat(precision, minMove) {{
+  if (!candleSeries) return;
+  candleSeries.applyOptions({{ priceFormat: {{ type: 'price', precision: precision, minMove: minMove }} }});
+  emaSeries.applyOptions({{ priceFormat: {{ type: 'price', precision: precision, minMove: minMove }} }});
+}}
+
+function setLogScale(enabled) {{
+  if (!chart) return;
+  chart.priceScale('right').applyOptions({{ mode: enabled ? 1 : 0 }});
+}}
+
 function updateLastBar(candleJson, emaJson, volJson, rsiJson) {{
   if (!window._chartReady || !candleSeries) return;
   try {{
@@ -319,9 +330,12 @@ class TVChart(QWebEngineView):
         )
         self.page().runJavaScript(js)
 
+    def set_log_scale(self, enabled: bool) -> None:
+        self.page().runJavaScript(f"setLogScale({'true' if enabled else 'false'})")
+
     def _send_data(self, df: pd.DataFrame, symbol: str, tf: str) -> None:
         candles, ema_data, vol_data, rsi_data = self._prepare(df)
-        self._bar_state = self._compute_state(df)  # tam hesaplamadan state sakla
+        self._bar_state = self._compute_state(df)
         js = (
             f"loadData("
             f"{json.dumps(json.dumps(candles))},"
@@ -330,6 +344,21 @@ class TVChart(QWebEngineView):
             f"{json.dumps(json.dumps(rsi_data))})"
         )
         self.page().runJavaScript(js)
+
+        last_price = float(df["close"].iloc[-1])
+        precision, min_move = self._price_format(last_price)
+        self.page().runJavaScript(f"setPriceFormat({precision}, {min_move})")
+
+    @staticmethod
+    def _price_format(price: float) -> tuple[int, float]:
+        if price >= 1000:  return 2,  0.01
+        if price >= 10:    return 3,  0.001
+        if price >= 1:     return 4,  0.0001
+        if price >= 0.1:   return 5,  0.00001
+        if price >= 0.01:  return 6,  0.000001
+        if price >= 0.001: return 7,  0.0000001
+        if price >= 0.0001:return 8,  0.00000001
+        return 10, 0.0000000001
 
     @staticmethod
     def _compute_state(df: pd.DataFrame, _ts_hint=None) -> dict:

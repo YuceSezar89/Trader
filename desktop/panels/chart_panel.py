@@ -84,6 +84,15 @@ class ChartPanel(QWidget):  # pylint: disable=too-many-instance-attributes
             header.addWidget(btn)
             self._tf_buttons[tf] = btn
 
+        self._log_btn = QPushButton("Log")
+        self._log_btn.setFixedHeight(24)
+        self._log_btn.setFixedWidth(36)
+        self._log_btn.setCheckable(True)
+        self._log_btn.setChecked(False)
+        self._log_btn.setStyleSheet(self._tf_btn_style(False))
+        self._log_btn.clicked.connect(self._on_log_toggled)
+        header.addWidget(self._log_btn)
+
         root.addLayout(header)
 
         # Grafik
@@ -213,6 +222,10 @@ class ChartPanel(QWidget):  # pylint: disable=too-many-instance-attributes
         self._update_tf_buttons(tf)
         self._load_and_draw(symbol, tf, auto_range=True)
         self.symbol_changed.emit(symbol, tf)
+
+    def _on_log_toggled(self, enabled: bool) -> None:
+        self._log_btn.setStyleSheet(self._tf_btn_style(enabled))
+        self._chart.set_log_scale(enabled)
 
     def _on_tf_clicked(self, tf: str) -> None:
         """TF butonuna tıklanınca grafiği günceller."""
