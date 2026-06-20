@@ -29,6 +29,7 @@ from database.crud import (
 from database.engine import get_session
 from sqlalchemy import text
 from signals.signal_processor import process_and_enrich_signals
+from signals.risk_manager import risk_manager
 from utils.exceptions import BinanceAPIError, DatabaseError
 from config import Config
 from utils.redis_client import RedisClient
@@ -476,6 +477,11 @@ class LiveDataManager:
             await RedisClient.set_mtf_klines(symbol, interval, merged)
             await RedisClient.publish_kline_update(symbol, interval)
             logger.debug("[%s] %s tick Redis'e yazıldı", symbol, interval)
+
+            if interval == "1m":
+                current_price = float(kline_data["c"])
+                asyncio.create_task(risk_manager.check_price(symbol, current_price))
+
         except Exception as e:  # pylint: disable=broad-exception-caught
             logger.debug("[%s] %s tick hatası: %s", symbol, interval, e)
 

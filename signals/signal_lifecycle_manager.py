@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.engine import get_session
 from database.models import Signal
+from signals.risk_policy import default_policy
 
 logger = logging.getLogger(__name__)
 
@@ -77,24 +78,45 @@ class SignalLifecycleManager:
                         symbol, interval, active.signal_type, sig_type,
                     )
 
+                atr_val = signal_data.get("atr") or 0.0
+                if atr_val > 0:
+                    features = {
+                        "vpms_score":  signal_data.get("vpms_score"),
+                        "mtf_score":   signal_data.get("mtf_score"),
+                        "interval":    interval,
+                    }
+                    levels = default_policy.calculate_levels(
+                        sig_type, open_price, float(atr_val), features
+                    )
+                    sl_price   = levels.sl_price
+                    tp_price   = levels.tp_price
+                    sl_mult    = levels.sl_multiplier
+                    tp_mult    = levels.tp_multiplier
+                else:
+                    sl_price = tp_price = sl_mult = tp_mult = None
+
                 new_sig = Signal(
-                    symbol       = symbol,
-                    interval     = interval,
-                    indicators   = indicators,
-                    signal_type  = sig_type,
-                    opened_at    = signal_data.get("opened_at", datetime.now()),
-                    open_price   = open_price,
-                    status       = "active",
-                    vpms_score   = signal_data.get("vpms_score"),
-                    mtf_score    = signal_data.get("mtf_score"),
-                    st_confirmed = signal_data.get("st_confirmed"),
-                    rsi          = signal_data.get("rsi"),
-                    strength     = signal_data.get("strength"),
-                    atr          = signal_data.get("atr"),
-                    alpha        = signal_data.get("alpha"),
-                    beta         = signal_data.get("beta"),
-                    sharpe_ratio = signal_data.get("sharpe_ratio"),
-                    oi_data      = signal_data.get("oi_data"),
+                    symbol            = symbol,
+                    interval          = interval,
+                    indicators        = indicators,
+                    signal_type       = sig_type,
+                    opened_at         = signal_data.get("opened_at", datetime.now()),
+                    open_price        = open_price,
+                    status            = "active",
+                    vpms_score        = signal_data.get("vpms_score"),
+                    mtf_score         = signal_data.get("mtf_score"),
+                    st_confirmed      = signal_data.get("st_confirmed"),
+                    rsi               = signal_data.get("rsi"),
+                    strength          = signal_data.get("strength"),
+                    atr               = signal_data.get("atr"),
+                    alpha             = signal_data.get("alpha"),
+                    beta              = signal_data.get("beta"),
+                    sharpe_ratio      = signal_data.get("sharpe_ratio"),
+                    oi_data           = signal_data.get("oi_data"),
+                    stop_loss_price   = sl_price,
+                    take_profit_price = tp_price,
+                    sl_multiplier     = sl_mult,
+                    tp_multiplier     = tp_mult,
                 )
                 session.add(new_sig)
                 await session.flush()

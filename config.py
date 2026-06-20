@@ -121,6 +121,10 @@ class Config:
     WILLIAMS_R_PERIOD = 14
     EMA_ROC_PERIOD = 50
     
+    # Risk Yönetimi
+    RISK_SL_MULTIPLIER = 1.5   # Stop loss: ATR × bu çarpan
+    RISK_TP_MULTIPLIER = 3.0   # Take profit: ATR × bu çarpan
+
     # =============================================================================
     # SİNYAL İŞLEME AYARLARI
     # =============================================================================

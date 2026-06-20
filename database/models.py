@@ -78,3 +78,8 @@ class Signal(Base):
     realized_pnl     = Column(Float, nullable=True)
     duration_minutes = Column(Integer, nullable=True)
     oi_data          = Column(String, nullable=True)
+
+    stop_loss_price   = Column(Float, nullable=True)
+    take_profit_price = Column(Float, nullable=True)
+    sl_multiplier     = Column(Float, nullable=True)
+    tp_multiplier     = Column(Float, nullable=True)
