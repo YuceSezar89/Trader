@@ -111,6 +111,7 @@ class SignalRow:
     take_profit_price: Optional[float] = None
     z_score_entry: Optional[float] = None
     is_confluence: bool = False
+    trailing_stop_price: Optional[float] = None
     pnl_pct: Optional[float] = field(default=None, init=False)
 
     def update_price(self, price: float) -> None:
@@ -208,6 +209,12 @@ class SignalsModel(QAbstractTableModel):
         st = ("✓ Onaylı" if row.st_confirmed else "✗ Onaysız") if row.st_confirmed is not None else "—"
         mtf = f"{int(row.mtf)}" if row.mtf is not None else "—"
         cf_line = f"  ★ KONFLUANS  Z={_r(row.z_score_entry, '+.2f')}\n" if row.is_confluence else ""
+        sl_label = "Trail" if row.trailing_stop_price is not None else "SL"
+        sl_val   = row.trailing_stop_price if row.trailing_stop_price is not None else row.stop_loss_price
+        tp_val   = None if row.trailing_stop_price is not None else row.take_profit_price
+        risk_line = f"  {sl_label}: {_r(sl_val, '.4f')}"
+        if tp_val is not None:
+            risk_line += f"   TP: {_r(tp_val, '.4f')}"
         return (
             f"{row.symbol}  {row.signal_type}  {row.interval}  |  {row.indicators}\n"
             f"{'─'*52}\n"
@@ -216,6 +223,7 @@ class SignalsModel(QAbstractTableModel):
             f"  Sharpe   {_r(row.sharpe):>10}\n"
             f"{'─'*52}\n"
             f"  VPMV: {_r(row.vpm, '.1f')}   MTF: {mtf}   ST: {st}\n"
+            f"{risk_line}\n"
             f"{self._oi_line(row)}"
         )
 
@@ -309,6 +317,7 @@ class SignalsModel(QAbstractTableModel):
             take_profit_price=s.get("take_profit_price"),
             z_score_entry=s.get("z_score_entry"),
             is_confluence=bool(s.get("is_confluence", False)),
+            trailing_stop_price=s.get("trailing_stop_price"),
         )
         idx = len(self._rows)
         self._rows.append(row)

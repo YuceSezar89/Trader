@@ -84,5 +84,6 @@ class Signal(Base):
     sl_multiplier     = Column(Float, nullable=True)
     tp_multiplier     = Column(Float, nullable=True)
 
-    z_score_entry  = Column(Float, nullable=True)
-    is_confluence  = Column(Boolean, nullable=True, default=False)
+    z_score_entry      = Column(Float, nullable=True)
+    is_confluence      = Column(Boolean, nullable=True, default=False)
+    trailing_stop_price = Column(Float, nullable=True)

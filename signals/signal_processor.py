@@ -247,9 +247,16 @@ async def process_and_enrich_signals(
                 except Exception:
                     pass
 
+                z_momentum_ok = (
+                    z_score_entry is not None and (
+                        (sig_type == "Long"  and z_score_entry > 0) or
+                        (sig_type == "Short" and z_score_entry < 0)
+                    )
+                )
                 is_confluence = (
                     vpms_score is not None and vpms_score >= Config.CONFLUENCE_VPMV_MIN and
-                    z_score_entry is not None and abs(z_score_entry) >= Config.CONFLUENCE_Z_MIN
+                    abs(z_score_entry) >= Config.CONFLUENCE_Z_MIN and
+                    z_momentum_ok
                 )
 
                 if is_confluence:

@@ -64,7 +64,7 @@ class SignalWorker(QThread):
                            alpha, beta, status, indicators,
                            st_confirmed, sharpe_ratio, oi_data,
                            stop_loss_price, take_profit_price,
-                           z_score_entry, is_confluence
+                           z_score_entry, is_confluence, trailing_stop_price
                     FROM signals
                     WHERE status = 'active'
                     ORDER BY opened_at DESC
@@ -88,7 +88,7 @@ class SignalWorker(QThread):
                            alpha, beta, status, indicators,
                            st_confirmed, sharpe_ratio, oi_data,
                            stop_loss_price, take_profit_price,
-                           z_score_entry, is_confluence
+                           z_score_entry, is_confluence, trailing_stop_price
                     FROM signals
                     WHERE id > %s
                     ORDER BY id ASC

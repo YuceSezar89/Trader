@@ -4,20 +4,18 @@ Sinyal öncesi 5 barın buy_vol oranını DB'deki PnL ile karşılaştırır.
 
 Kullanım:
     python scripts/analyze_prevol.py [log_dosyası]
-
-Varsayılan log: /tmp/trader_service.log
 """
 
 import re
 import sys
 import statistics
-import asyncio
 from datetime import datetime, timedelta
 
-import asyncpg
+import psycopg2
+import psycopg2.extras
 
-DB_DSN = "postgresql://yusuf@localhost/trader_panel"
-log_file = sys.argv[1] if len(sys.argv) > 1 else "/tmp/trader_service.log"
+DB_DSN = "dbname=trader_panel user=yusuf host=localhost port=5432"
+log_file = sys.argv[1] if len(sys.argv) > 1 else "logs/services.log"
 
 pattern = re.compile(
     r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}).*PREVOL \| (\w+) \| (\w+) \| (\w+) \| buy_pct=([\d.]+)"
@@ -42,64 +40,73 @@ print(f"Log'da {len(entries)} PREVOL girişi bulundu.")
 if not entries:
     sys.exit(0)
 
+# Tek sorguda tüm sinyalleri çek, sonra Python'da eşleştir
+conn = psycopg2.connect(DB_DSN)
+cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+cur.execute("""
+    SELECT symbol, signal_type, interval, opened_at, realized_pnl
+    FROM signals
+    WHERE status = 'closed'
+      AND realized_pnl IS NOT NULL
+    ORDER BY opened_at
+""")
+signals = cur.fetchall()
+cur.close()
+conn.close()
 
-async def fetch_pnl(entries):
-    conn = await asyncpg.connect(DB_DSN)
-    results = []
-    for e in entries:
-        row = await conn.fetchrow("""
-            SELECT pnl_pct, closed_at
-            FROM signals
-            WHERE symbol      = $1
-              AND signal_type = $2
-              AND interval    = $3
-              AND opened_at BETWEEN $4 AND $5
-              AND status = 'closed'
-              AND pnl_pct IS NOT NULL
-            ORDER BY opened_at DESC
-            LIMIT 1
-        """, e["symbol"], e["sig_type"], e["interval"],
-            e["ts"] - timedelta(minutes=2),
-            e["ts"] + timedelta(minutes=2))
-        if row:
-            results.append({**e, "pnl_pct": row["pnl_pct"]})
-    await conn.close()
-    return results
+# Python'da eşleştir
+sig_index = {}
+for s in signals:
+    key = (s["symbol"], s["signal_type"], s["interval"])
+    sig_index.setdefault(key, []).append(s)
 
+matched = []
+for e in entries:
+    key = (e["symbol"], e["sig_type"], e["interval"])
+    candidates = sig_index.get(key, [])
+    lo = e["ts"] - timedelta(minutes=2)
+    hi = e["ts"] + timedelta(minutes=2)
+    for s in candidates:
+        if lo <= s["opened_at"] <= hi:
+            matched.append({**e, "pnl_pct": float(s["realized_pnl"])})
+            break
 
-matched = asyncio.run(fetch_pnl(entries))
 print(f"DB ile eşleşen: {len(matched)} sinyal\n")
 
 if len(matched) < 10:
-    print("Yeterli veri yok, daha fazla sinyal birikmesi lazım.")
+    print("Yeterli veri yok.")
     sys.exit(0)
 
-# buy_pct > 60 → alıcı baskın, < 40 → satıcı baskın
+
 def rapor(rows, baslik):
     if not rows:
         print(f"{baslik}: veri yok")
         return
     pnls = [r["pnl_pct"] for r in rows]
     pos  = sum(1 for p in pnls if p > 0)
-    print(f"\n{'='*40}")
+    print(f"\n{'='*45}")
     print(f"{baslik}  ({len(rows)} sinyal)")
-    print(f"{'='*40}")
-    print(f"PnL  ort={statistics.mean(pnls):.2f}%  medyan={statistics.median(pnls):.2f}%")
-    print(f"Pozitif: {pos}/{len(rows)} ({pos/len(rows)*100:.0f}%)")
+    print(f"{'='*45}")
+    print(f"Win rate : {pos}/{len(rows)} ({pos/len(rows)*100:.0f}%)")
+    print(f"Ort PnL  : {statistics.mean(pnls):+.3f}%")
+    print(f"Medyan   : {statistics.median(pnls):+.3f}%")
 
-long_signals  = [r for r in matched if r["sig_type"] == "Long"]
-short_signals = [r for r in matched if r["sig_type"] == "Short"]
 
-for label, signals, good_threshold, bad_threshold in [
-    ("LONG",  long_signals,  60, 40),
-    ("SHORT", short_signals, 40, 60),
+for label, sig_type, good_thr, bad_thr in [
+    ("LONG",  "Long",  60, 40),
+    ("SHORT", "Short", 40, 60),
 ]:
-    good = [r for r in signals if r["buy_pct"] >= good_threshold]
-    bad  = [r for r in signals if r["buy_pct"] <= bad_threshold]
-    neut = [r for r in signals if bad_threshold < r["buy_pct"] < good_threshold]
+    sigs = [r for r in matched if r["sig_type"] == sig_type]
+    if not sigs:
+        continue
+    good = [r for r in sigs if (sig_type == "Long"  and r["buy_pct"] >= good_thr) or
+                                (sig_type == "Short" and r["buy_pct"] <= good_thr)]
+    bad  = [r for r in sigs if (sig_type == "Long"  and r["buy_pct"] <= bad_thr) or
+                                (sig_type == "Short" and r["buy_pct"] >= bad_thr)]
+    neut = [r for r in sigs if r not in good and r not in bad]
 
-    rapor(good, f"{label} — Sinyal yönünde hacim (buy_pct {'≥' if good_threshold==60 else '≤'}{good_threshold})")
-    rapor(bad,  f"{label} — Ters yönde hacim     (buy_pct {'≤' if bad_threshold==40 else '≥'}{bad_threshold})")
+    rapor(good, f"{label} — Yön uyumlu hacim")
+    rapor(bad,  f"{label} — Ters yönde hacim")
     rapor(neut, f"{label} — Nötr hacim")
 
 print(f"\nToplam eşleşen: {len(matched)}")

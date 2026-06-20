@@ -5,8 +5,10 @@ MarketWorker'dan gelen Qt sinyalleriyle her saniye güncellenir.
 Sembol seçiminde `symbol_selected` sinyali yayınlanır.
 """
 
+import json
+
 import redis
-from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import QHeaderView
 from PyQt6.QtWidgets import (
     QHBoxLayout,
@@ -47,6 +49,11 @@ class WatchlistPanel(QWidget):
 
         self._setup_ui()
         self._load_symbols()
+
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setInterval(60_000)
+        self._refresh_timer.timeout.connect(self._auto_refresh)
+        self._refresh_timer.start()
 
     # ── UI ────────────────────────────────────────────────────────────────
 
@@ -116,20 +123,47 @@ class WatchlistPanel(QWidget):
     # ── Sembol Yükleme ────────────────────────────────────────────────────
 
     def _load_symbols(self) -> None:
-        """Redis'ten ticker:* key'lerini okuyarak sembol listesini oluşturur.
-        Backend'in all-market ticker stream'i tüm USDT sembollerini yazar (TTL=10s).
-        """
+        """Redis'ten sembol listesini ve mevcut ticker verisini yükler."""
+        ticker_data: dict[str, dict] = {}
+        symbols: list[str] = []
         try:
             r = redis.Redis.from_url(self._redis_url, decode_responses=True, socket_connect_timeout=2)
             keys = r.keys("ticker:*")
-            symbols = sorted(k.split(":", 1)[1] for k in keys if ":" in k)
-        except Exception:
-            symbols = []
+            if keys:
+                pipe = r.pipeline()
+                for k in keys:
+                    pipe.get(k)
+                values = pipe.execute()
+                for k, v in zip(keys, values):
+                    sym = k.split(":", 1)[1]
+                    if v:
+                        try:
+                            ticker_data[sym] = json.loads(v)
+                        except Exception:  # pylint: disable=broad-exception-caught
+                            pass
+                symbols = sorted(ticker_data.keys())
+            if not symbols:
+                kline_keys = r.keys("live_kline_data:*:1m")
+                symbols = sorted(
+                    k.split(":")[1] for k in kline_keys if k.count(":") == 2
+                )
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
 
         if not symbols:
             symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"]
 
         self._model.load_symbols(symbols)
+
+        for sym, d in ticker_data.items():
+            self._model.on_price_updated(
+                sym,
+                float(d.get("price", 0)),
+                float(d.get("change_pct", 0)),
+                float(d.get("volume", 0)),
+                float(d.get("funding_rate", 0)),
+            )
+
         self._count_label.setText(f"{len(symbols)} sembol")
         self._update_stats()
         self.symbols_changed.emit(symbols)
@@ -138,6 +172,10 @@ class WatchlistPanel(QWidget):
         hdr.setStretchLastSection(True)
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         hdr.setStretchLastSection(True)
+
+    def _auto_refresh(self) -> None:
+        """Her 60s'de bir sembol listesini ve fiyatları yeniler."""
+        self._load_symbols()
 
     # ── Worker Sinyalleri ─────────────────────────────────────────────────
 
