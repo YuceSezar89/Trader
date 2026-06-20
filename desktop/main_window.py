@@ -28,6 +28,7 @@ from PyQt6.QtWidgets import (
 from desktop.panels.active_signals_panel import ActiveSignalsPanel
 from desktop.panels.chart_panel import ChartPanel
 from desktop.panels.divergence_panel import DivergencePanel
+from desktop.panels.paper_trade_panel import PaperTradePanel
 from desktop.panels.ranking_panel import RankingPanel
 from desktop.panels.watchlist_panel import WatchlistPanel
 from desktop.theme import COLORS
@@ -283,10 +284,20 @@ class MainWindow(QMainWindow):
         self._add_panel_toggle(ranking_dock)
         self._docks["ranking"] = ranking_dock
 
+        # ── Paper Trade paneli (alt, tabified) ────────────────────────────
+        self._paper_trade_panel = PaperTradePanel(db_cfg, self)
+        paper_dock = QDockWidget("★ Paper Trade", self)
+        paper_dock.setObjectName("dock_paper_trade")
+        paper_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        paper_dock.setWidget(self._paper_trade_panel)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, paper_dock)
+        self.tabifyDockWidget(active_sig_dock, paper_dock)
+        self._add_panel_toggle(paper_dock)
+        self._docks["paper_trade"] = paper_dock
+
         # ── Placeholder paneller (sağ tabified + alt) ─────────────────────
         placeholder_panels = [
             ("signal_feed", "Sinyal Feed",      Qt.DockWidgetArea.RightDockWidgetArea),
-            ("performance", "Performans",       Qt.DockWidgetArea.BottomDockWidgetArea),
             ("backtest",    "Backtest Stüdyo",  Qt.DockWidgetArea.BottomDockWidgetArea),
         ]
 
@@ -354,6 +365,7 @@ class MainWindow(QMainWindow):
         self._market_worker.connection_changed.connect(self._on_market_connection)
         self._market_worker.price_updated.connect(self._watchlist_panel.on_price_updated)
         self._market_worker.price_updated.connect(self._on_price_updated)
+        self._market_worker.price_updated.connect(self._paper_trade_panel.on_price_updated)
         self._market_worker.klines_updated.connect(self._chart_panel.on_klines_updated)
         self._chart_panel.symbol_changed.connect(self._market_worker.set_chart_watch)
         self._market_worker.set_chart_watch(
