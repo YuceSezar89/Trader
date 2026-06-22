@@ -27,7 +27,10 @@ async_engine = create_async_engine(
     pool_timeout=30,
     pool_recycle=1800,
     connect_args={
-        "server_settings": {"application_name": "trader_panel"},
+        "server_settings": {
+            "application_name": "trader_panel",
+            "timezone": "UTC",
+        },
         "command_timeout": 30,
     },
     pool_reset_on_return="rollback",
@@ -85,6 +88,7 @@ async def get_session():
     """Async database session context manager."""
     async with async_session_maker() as session:
         try:
+            await session.execute(text("SET timezone = 'UTC'"))
             yield session
             await session.commit()
         except Exception:

@@ -24,7 +24,80 @@ logger = logging.getLogger(__name__)
 
 class RiskManager:
 
+    def __init__(self) -> None:
+        self._active_symbols: set[str] = set()
+
+    async def load_active_symbols(self) -> None:
+        """Startup'ta aktif sinyallerin sembollerini bellekte önbelleğe al."""
+        async with get_session() as session:
+            result = await session.execute(
+                select(Signal.symbol).where(
+                    Signal.status == "active",
+                    Signal.stop_loss_price.isnot(None),
+                )
+            )
+            self._active_symbols = {row[0] for row in result.all()}
+        logger.info("[RiskManager] %d aktif sembol yüklendi", len(self._active_symbols))
+
+    def register(self, symbol: str) -> None:
+        """Yeni sinyal açıldığında sembolü set'e ekle."""
+        self._active_symbols.add(symbol)
+
+    async def check_all_prices(self, prices: dict[str, float]) -> None:
+        """Tüm aktif sinyalleri tek DB sorgusunda kontrol et."""
+        if not self._active_symbols:
+            return
+        symbols_to_check = [s for s in self._active_symbols if s in prices]
+        if not symbols_to_check:
+            return
+        async with get_session() as session:
+            try:
+                result = await session.execute(
+                    select(Signal).where(
+                        Signal.status == "active",
+                        Signal.stop_loss_price.isnot(None),
+                        Signal.symbol.in_(symbols_to_check),
+                    )
+                )
+                actives = result.scalars().all()
+                if not actives:
+                    return
+
+                changed = False
+                closed_symbols: set[str] = set()
+                for sig in actives:
+                    price = prices.get(sig.symbol)
+                    if price is None:
+                        continue
+                    old_trail = sig.trailing_stop_price
+                    reason = self._update_trailing(sig, price)
+                    if reason:
+                        await self._close(session, sig, price, reason)
+                        closed_symbols.add(sig.symbol)
+                        logger.info(
+                            "[%s] %s id=%d %s @ %.6f",
+                            sig.symbol, sig.signal_type, sig.id, reason, price,
+                        )
+                        changed = True
+                    elif sig.trailing_stop_price != old_trail:
+                        changed = True
+
+                if changed:
+                    await session.commit()
+
+                active_syms = {s.symbol for s in actives if s.status == "active"}
+                for sym in closed_symbols:
+                    if sym not in active_syms:
+                        self._active_symbols.discard(sym)
+
+            except Exception as exc:
+                await session.rollback()
+                logger.error("RiskManager batch hatası: %s", exc, exc_info=True)
+
     async def check_price(self, symbol: str, current_price: float) -> list[int]:
+        if symbol not in self._active_symbols:
+            return []
+
         triggered = []
         async with get_session() as session:
             try:
@@ -36,6 +109,10 @@ class RiskManager:
                     )
                 )
                 actives = result.scalars().all()
+
+                if not actives:
+                    self._active_symbols.discard(symbol)
+                    return []
 
                 changed = False
                 for sig in actives:
@@ -51,10 +128,14 @@ class RiskManager:
                         )
                         changed = True
                     elif sig.trailing_stop_price is not None:
-                        changed = True  # trailing_stop_price güncellendi
+                        changed = True
 
                 if changed:
                     await session.commit()
+
+                remaining = [s for s in actives if s.status == "active"]
+                if not remaining:
+                    self._active_symbols.discard(symbol)
 
             except Exception as exc:
                 await session.rollback()
@@ -78,20 +159,16 @@ class RiskManager:
         dist  = RiskManager._trail_distance(sig)
 
         if sig.signal_type == "Long":
-            # SL kontrolü (trailing aktif değilken)
             if trail is None:
                 if sl is not None and price <= float(sl):
                     return "stop_loss"
                 if tp is not None and price >= float(tp):
-                    # TP'ye ulaştı → trailing başlat
                     sig.trailing_stop_price = price - dist
                     return None
             else:
-                # Trailing aktif: fiyat yükselince trail'i yukarı çek
                 new_trail = price - dist
                 if new_trail > float(trail):
                     sig.trailing_stop_price = new_trail
-                # Trailing tetiklendi mi?
                 if price <= float(sig.trailing_stop_price):
                     return "trailing_stop"
 

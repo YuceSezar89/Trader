@@ -30,14 +30,14 @@ from database.engine import get_session
 from sqlalchemy import text
 from signals.signal_processor import process_and_enrich_signals
 from signals.risk_manager import risk_manager
-from signals.paper_trade_manager import paper_trade_manager
+from signals.paper_trade_manager import paper_trade_manager, ha_cross_manager, rsi_15m_manager
 from utils.exceptions import BinanceAPIError, DatabaseError
 from config import Config
 from utils.redis_client import RedisClient
-from utils.timeframe_aggregator import TimeframeAggregator
 
 # MTF init/refresh için ayrı thread pool — default executor'ı (WS sinyalleri) bloklamaz
-_MTF_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="mtf_init")
+_MTF_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=12, thread_name_prefix="mtf_init")
+_TICK_TF_WHITELIST = {'1m', '5m', '15m', '30m'}
 
 
 def setup_logging():
@@ -142,6 +142,7 @@ class LiveDataManager:
             logger.info(f"MTF buffers initialized for {len(symbols)} symbols, {len(self.supported_timeframes)} timeframes")
         
         self.processing_tasks: set[asyncio.Task] = set()
+        self._last_prices: Dict[str, float] = {}
         self._tick_last_sent: Dict[str, float] = {}
 
         # Batch insert için buffer sistemi
@@ -433,6 +434,8 @@ class LiveDataManager:
                             self._update_and_process_symbol_mtf(symbol, interval, kline), self.loop
                         )
                     else:
+                        if interval not in _TICK_TF_WHITELIST:
+                            return
                         tick_key = f"{symbol}:{interval}"
                         now = time.time()
                         if now - self._tick_last_sent.get(tick_key, 0) >= 2.0:
@@ -480,9 +483,7 @@ class LiveDataManager:
             logger.debug("[%s] %s tick Redis'e yazıldı", symbol, interval)
 
             if interval == "1m":
-                current_price = float(kline_data["c"])
-                asyncio.create_task(risk_manager.check_price(symbol, current_price))
-                asyncio.create_task(paper_trade_manager.check_price(symbol, current_price))
+                self._last_prices[symbol] = float(kline_data["c"])
 
         except Exception as e:  # pylint: disable=broad-exception-caught
             logger.debug("[%s] %s tick hatası: %s", symbol, interval, e)
@@ -756,27 +757,10 @@ class LiveDataManager:
             if df_1m.empty:
                 return
 
-            # Yalnızca 1m buffer'dan güvenilir şekilde üretilebilen TF'ler
-            # 1h/4h → CA view'larından periyodik olarak yenilenir (_refresh_mtf_redis)
-            aggregation_targets = ['5m', '15m']
-
-            for target_tf in aggregation_targets:
-                if not TimeframeAggregator.can_aggregate('1m', target_tf):
-                    continue
-
-                aggregated_df = TimeframeAggregator.aggregate_ohlcv(df_1m, '1m', target_tf)
-
-                if not aggregated_df.empty:
-                    limit = self.mtf_buffer_limits.get(target_tf, 100)
-                    result = await asyncio.to_thread(add_all_indicators, aggregated_df.tail(limit))
-                    self.mtf_buffers[symbol][target_tf] = result
-                    logger.debug(f"[{symbol}] {target_tf}: {len(aggregated_df)} bar aggregated")
-
-            # Sadece aggregate edilen TF'leri Redis'e yaz (4h/1d'yi ezme)
-            for tf in ['1m'] + aggregation_targets:
-                df = self.mtf_buffers[symbol].get(tf)
-                if df is not None and not df.empty:
-                    await RedisClient.set_mtf_klines(symbol, tf, df)
+            # Tüm TF'lerin kendi WebSocket stream'leri var — sadece 1m'i yaz
+            df_1m_cur = self.mtf_buffers[symbol].get('1m')
+            if df_1m_cur is not None and not df_1m_cur.empty:
+                await RedisClient.set_mtf_klines(symbol, '1m', df_1m_cur)
 
         except Exception as e:
             logger.error(f"[{symbol}] MTF aggregation error: {e}", exc_info=True)
@@ -901,6 +885,7 @@ class LiveDataManager:
 
             loaded_count = 0
             binance_call_made = False
+            loop = asyncio.get_event_loop()
 
             # ── 1m: DB'den yükle ──────────────────────────────────────────────
             limit_1m = max(1500, int(self._startup_lookback_days * 24 * 60))
@@ -910,24 +895,27 @@ class LiveDataManager:
                 df_1m = await BinanceClientManager.fetch_klines(symbol=symbol, interval="1m", limit=1500)
 
             if not df_1m.empty:
-                loop = asyncio.get_event_loop()
                 df_1m_ind = await loop.run_in_executor(_MTF_EXECUTOR, add_all_indicators, df_1m)
                 self.mtf_buffers[symbol]['1m'] = df_1m_ind.tail(self.mtf_buffer_limits.get('1m', 250))
                 await RedisClient.set_mtf_klines(symbol, '1m', self.mtf_buffers[symbol]['1m'])
                 loaded_count += 1
 
-                # ── 5m / 15m: 1m buffer'dan aggregate et (Binance isteği yok) ──
-                for agg_tf in ['5m', '15m']:
-                    if not TimeframeAggregator.can_aggregate('1m', agg_tf):
-                        continue
-                    agg_df = TimeframeAggregator.aggregate_ohlcv(df_1m, '1m', agg_tf)
-                    if not agg_df.empty:
-                        limit = self.mtf_buffer_limits.get(agg_tf, 250)
-                        agg_ind = await loop.run_in_executor(_MTF_EXECUTOR, add_all_indicators, agg_df.tail(limit))
-                        self.mtf_buffers[symbol][agg_tf] = agg_ind
-                        await RedisClient.set_mtf_klines(symbol, agg_tf, agg_ind)
+            # ── 5m/15m/30m/6h/8h/12h: Redis-first (REST sadece ilk kurulumda) ──
+            for ws_tf in ['5m', '15m', '30m', '6h', '8h', '12h']:
+                limit = self.mtf_buffer_limits.get(ws_tf, 250)
+                cached = await RedisClient.get_mtf_klines(symbol, ws_tf, limit=limit)
+                if cached is not None and len(cached) >= limit // 2:
+                    df_ind = await loop.run_in_executor(_MTF_EXECUTOR, add_all_indicators, cached)
+                    self.mtf_buffers[symbol][ws_tf] = df_ind.tail(limit)
+                    loaded_count += 1
+                else:
+                    binance_call_made = True
+                    df_ws = await BinanceClientManager.fetch_klines(symbol=symbol, interval=ws_tf, limit=limit)
+                    if not df_ws.empty:
+                        df_ind = await loop.run_in_executor(_MTF_EXECUTOR, add_all_indicators, df_ws)
+                        self.mtf_buffers[symbol][ws_tf] = df_ind.tail(limit)
+                        await RedisClient.set_mtf_klines(symbol, ws_tf, self.mtf_buffers[symbol][ws_tf])
                         loaded_count += 1
-                        logger.debug(f"[{symbol}] {agg_tf}: {len(agg_df)} bar aggregated from 1m")
 
             # ── 1h / 4h: CA view'larından (boşluksuz, 1m'den otomatik türetilmiş) ──
             for tf in ['1h', '4h']:
@@ -961,7 +949,8 @@ class LiveDataManager:
                 else:
                     logger.warning(f"[{symbol}] 1d: Veri boş")
 
-            logger.info(f"✅ [{symbol}] {loaded_count} TF yüklendi (1m+5m+15m=aggregated, 1h/4h=CA, 1d=cache→Binance)")
+            src = "REST" if binance_call_made else "Redis"
+            logger.info(f"✅ [{symbol}] {loaded_count} TF yüklendi (1m=DB, 5m-12h={src}, 1h/4h=CA, 1d=cache)")
             return not binance_call_made
 
         except Exception as e:
@@ -1622,28 +1611,25 @@ class LiveDataManager:
                 logger.error("[GapHeal] Hata: %s", exc)
 
     async def _refresh_mtf_redis(self, symbol: str) -> None:
-        """1m DB verisinden 5m/15m aggregate, 1h/4h CA'dan yenileyerek Redis'i günceller."""
+        """Tüm TF'leri Binance REST / CA'dan yenileyerek Redis ve buffer'ı günceller."""
         if not self.mtf_enabled or symbol not in self.mtf_buffers:
             return
         try:
             loop = asyncio.get_event_loop()
             limit_1m = max(1500, int(self._startup_lookback_days * 24 * 60))
             df_1m = await get_recent_klines(symbol, "1m", limit_1m)
-            if df_1m.empty:
-                return
-            df_1m_ind = await loop.run_in_executor(_MTF_EXECUTOR, add_all_indicators, df_1m)
-            self.mtf_buffers[symbol]["1m"] = df_1m_ind.tail(self.mtf_buffer_limits.get("1m", 1000))
-            await RedisClient.set_mtf_klines(symbol, "1m", self.mtf_buffers[symbol]["1m"])
-            for agg_tf in ["5m", "15m"]:
-                if not TimeframeAggregator.can_aggregate("1m", agg_tf):
+            if not df_1m.empty:
+                df_1m_ind = await loop.run_in_executor(_MTF_EXECUTOR, add_all_indicators, df_1m)
+                self.mtf_buffers[symbol]["1m"] = df_1m_ind.tail(self.mtf_buffer_limits.get("1m", 1000))
+                await RedisClient.set_mtf_klines(symbol, "1m", self.mtf_buffers[symbol]["1m"])
+            for ws_tf in ["5m", "15m", "30m", "6h", "8h", "12h"]:
+                limit = self.mtf_buffer_limits.get(ws_tf, 250)
+                df_ws = await BinanceClientManager.fetch_klines(symbol=symbol, interval=ws_tf, limit=limit)
+                if df_ws.empty:
                     continue
-                agg_df = TimeframeAggregator.aggregate_ohlcv(df_1m, "1m", agg_tf)
-                if agg_df.empty:
-                    continue
-                limit = self.mtf_buffer_limits.get(agg_tf, 250)
-                agg_ind = await loop.run_in_executor(_MTF_EXECUTOR, add_all_indicators, agg_df.tail(limit * 2))
-                self.mtf_buffers[symbol][agg_tf] = agg_ind.tail(limit)
-                await RedisClient.set_mtf_klines(symbol, agg_tf, self.mtf_buffers[symbol][agg_tf])
+                df_ind = await loop.run_in_executor(_MTF_EXECUTOR, add_all_indicators, df_ws)
+                self.mtf_buffers[symbol][ws_tf] = df_ind.tail(limit)
+                await RedisClient.set_mtf_klines(symbol, ws_tf, self.mtf_buffers[symbol][ws_tf])
             for ca_tf in ["1h", "4h"]:
                 limit = self.mtf_buffer_limits.get(ca_tf, 250)
                 ca_df = await get_cagg_klines(symbol, ca_tf, limit)
@@ -1798,6 +1784,71 @@ class LiveDataManager:
                 ticker_logger.warning("Ticker güncelleme hatası: %s", exc)
             await asyncio.sleep(_INTERVAL)
 
+    async def _vpmv_post_loop(self) -> None:
+        """Her 10 dakikada bir post_avg boş sinyalleri günceller.
+        Sinyal barından sonra POST_BARS bar oluşmuşsa post_avg/post_delta yazılır."""
+        _INTERVAL = 600
+        _TF_MINUTES = {"1m": 1, "3m": 3, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440}
+        await asyncio.sleep(120)
+
+        while True:
+            try:
+                from database.engine import get_session as _gs
+                from database.models import Signal as _Sig
+                from sqlalchemy import select as _sel, text as _text
+                from utils.vpmv import compute_post, PRE_BARS, POST_BARS
+
+                async with _gs() as _s:
+                    rows = (await _s.execute(_sel(_Sig).where(
+                        _Sig.vpmv_post_avg.is_(None),
+                        _Sig.vpmv_pre_avg.isnot(None),
+                    ))).scalars().all()
+
+                updated = 0
+                for sig in rows:
+                    tf_min = _TF_MINUTES.get(sig.interval, 5)
+                    needed_min = (PRE_BARS + POST_BARS + 1) * tf_min
+                    if sig.opened_at is None:
+                        continue
+                    age_min = (datetime.utcnow() - sig.opened_at).total_seconds() / 60
+                    if age_min < needed_min:
+                        continue
+
+                    try:
+                        raw = await RedisClient.get_mtf_klines(sig.symbol, sig.interval)
+                        if raw is None or raw.empty or len(raw) < PRE_BARS + POST_BARS + 2:
+                            continue
+
+                        from utils.vpmv import compute_series
+                        scores = compute_series(raw, sig.signal_type)
+                        sig_time = sig.opened_at
+                        if hasattr(raw.index, 'tz'):
+                            raw_times = raw.index
+                        else:
+                            raw_times = pd.to_datetime(raw["open_time"]) if "open_time" in raw.columns else raw.index
+
+                        diffs = (raw_times - pd.Timestamp(sig_time)).abs()
+                        bar_idx = int(diffs.argmin())
+                        post_avg, post_delta = compute_post(raw, sig.signal_type, bar_idx, POST_BARS)
+                        if post_avg is None:
+                            continue
+
+                        async with _gs() as _s2:
+                            _row = (await _s2.execute(_sel(_Sig).where(_Sig.id == sig.id))).scalars().first()
+                            if _row:
+                                _row.vpmv_post_avg   = round(post_avg, 2)
+                                _row.vpmv_post_delta = round(post_delta, 2)
+                                await _s2.commit()
+                                updated += 1
+                    except Exception:  # pylint: disable=broad-exception-caught
+                        pass
+
+                if updated:
+                    logger.info("[VPMVPost] %d sinyal post_avg güncellendi", updated)
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.warning("[VPMVPost] Hata: %s", exc)
+            await asyncio.sleep(_INTERVAL)
+
     async def _oi_refresh_loop(self) -> None:
         """Her 5 dakikada bir takip edilen sembollerin Open Interest verisini çeker.
         Redis: oi:{symbol} → {oi, prev_oi, change_pct, ts}  TTL=7 dakika."""
@@ -1840,6 +1891,18 @@ class LiveDataManager:
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 oi_logger.warning("OI güncelleme hatası: %s", exc)
             await asyncio.sleep(_INTERVAL)
+
+    async def _risk_check_loop(self) -> None:
+        """Her 5 saniyede tüm aktif pozisyonları tek sorguda kontrol eder."""
+        while True:
+            await asyncio.sleep(5)
+            if not self._last_prices:
+                continue
+            prices = dict(self._last_prices)
+            await risk_manager.check_all_prices(prices)
+            await paper_trade_manager.check_all_prices(prices)
+            await ha_cross_manager.check_all_prices(prices)
+            await rsi_15m_manager.check_all_prices(prices)
 
     async def _health_loop(self):
         """Her 15 dakikada price_data tazeliğini kontrol eder; gap tespit ederse doldurur."""
@@ -1972,14 +2035,15 @@ class LiveDataManager:
             asyncio.create_task(self._deferred_sync_historical(delay_seconds=30))
             # 4. 120s sonra iç gap kontrolü (startup penceresi LAG analizi)
             asyncio.create_task(self._deferred_internal_gap_check(delay_seconds=240))
-            # 5. Periyodik sağlık kontrolü
-            asyncio.create_task(self._health_loop())
-            # 6. Her 5 dakikada bir gap heal loop
-            asyncio.create_task(self._continuous_gap_heal_loop())
-            # 7. Tüm USDT sembolleri için 24h ticker yenileme (display katmanı)
-            asyncio.create_task(self._ticker_refresh_loop())
-            # 8. Takip edilen sembollerin Open Interest verisini yenile
-            asyncio.create_task(self._oi_refresh_loop())
+            # Python 3.10+ weak ref fix: periyodik loop task'larını sakla
+            self._bg_tasks: list[asyncio.Task] = [
+                asyncio.create_task(self._health_loop()),
+                asyncio.create_task(self._continuous_gap_heal_loop()),
+                asyncio.create_task(self._ticker_refresh_loop()),
+                asyncio.create_task(self._oi_refresh_loop()),
+                asyncio.create_task(self._risk_check_loop()),
+                asyncio.create_task(self._vpmv_post_loop()),
+            ]
 
             logger.info(
                 "Canlı veri yöneticisi çalışıyor. Bağlantı izleniyor... Çıkmak için CTRL+C."
@@ -2187,6 +2251,12 @@ async def main():
     """Uygulamanın ana giriş noktası."""
     # Veritabanını ve tabloları oluştur
     await initialize_database()
+
+    # Aktif pozisyonları belleğe yükle (QueuePool taşmasını önler)
+    await risk_manager.load_active_symbols()
+    await paper_trade_manager.load_open_symbols()
+    await ha_cross_manager.load_open_symbols()
+    await rsi_15m_manager.load_open_symbols()
 
     logger.info("En yüksek hacimli semboller Binance'ten çekiliyor...")
     symbols_to_track = await BinanceClientManager.get_top_volume_symbols_async(

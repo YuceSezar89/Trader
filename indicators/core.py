@@ -509,6 +509,23 @@ def calculate_stoch_rsi(df, rsi_period=Config.RSI_PERIOD_DEFAULT, stoch_period=C
     return stoch_k, stoch_d
 
 
+def calculate_ha(df: pd.DataFrame) -> pd.DataFrame:
+    """Heiken Ashi OHLC sütunlarını hesaplar ve df'e ekler."""
+    ha_close = (df['open'] + df['high'] + df['low'] + df['close']) / 4
+    hc = ha_close.values
+    ha_open_vals = np.zeros(len(df))
+    ha_open_vals[0] = (df['open'].iloc[0] + df['close'].iloc[0]) / 2
+    for i in range(1, len(df)):
+        ha_open_vals[i] = (ha_open_vals[i - 1] + hc[i - 1]) / 2
+    ha_open = pd.Series(ha_open_vals, index=df.index)
+    result = df.copy()
+    result['ha_open']  = ha_open
+    result['ha_close'] = ha_close
+    result['ha_high']  = pd.concat([df['high'], ha_open, ha_close], axis=1).max(axis=1)
+    result['ha_low']   = pd.concat([df['low'],  ha_open, ha_close], axis=1).min(axis=1)
+    return result
+
+
 def add_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """
     Tüm gerekli teknik göstergeleri hesaplar ve DataFrame'e ekler.
@@ -584,6 +601,17 @@ def add_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
                 df.loc[:, 'momentum'] = calculate_roc(df, period=Config.ROC_PERIOD)
             else:
                 df.loc[:, 'momentum'] = np.nan
+
+            # Heiken Ashi
+            if len(df) >= 2:
+                _ha = calculate_ha(df)
+                df.loc[:, 'ha_open']  = _ha['ha_open'].values
+                df.loc[:, 'ha_close'] = _ha['ha_close'].values
+                df.loc[:, 'ha_high']  = _ha['ha_high'].values
+                df.loc[:, 'ha_low']   = _ha['ha_low'].values
+            else:
+                for _col in ('ha_open', 'ha_close', 'ha_high', 'ha_low'):
+                    df.loc[:, _col] = np.nan
 
             logger.debug("Tüm göstergeler başarıyla DataFrame'e eklendi.")
 

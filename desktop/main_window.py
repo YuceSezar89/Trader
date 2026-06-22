@@ -286,6 +286,7 @@ class MainWindow(QMainWindow):
 
         # ── Paper Trade paneli (alt, tabified) ────────────────────────────
         self._paper_trade_panel = PaperTradePanel(db_cfg, self)
+        self._paper_trade_panel.symbol_selected.connect(self._chart_panel.load_symbol)
         paper_dock = QDockWidget("★ Paper Trade", self)
         paper_dock.setObjectName("dock_paper_trade")
         paper_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
@@ -394,6 +395,9 @@ class MainWindow(QMainWindow):
         self._divergence_worker = DivergenceWorker(redis_url, parent=self)
         self._divergence_worker.divergence_updated.connect(
             self._divergence_panel.on_divergence_updated
+        )
+        self._ranking_panel._worker.ranking_updated.connect(
+            self._divergence_panel.on_ranking_updated
         )
         self._divergence_worker.status_updated.connect(
             self._divergence_panel.on_status_updated

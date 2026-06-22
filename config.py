@@ -62,14 +62,18 @@ class Config:
     # MULTI-TIMEFRAME (MTF) AYARLARI
     # =============================================================================
     MTF_ENABLED = True  # MTF sistemini etkinleştir/devre dışı bırak
-    MTF_TIMEFRAMES = ['1m', '5m', '15m', '1h', '4h', '1d']  # Desteklenen timeframe'ler
+    MTF_TIMEFRAMES = ['1m', '5m', '15m', '30m', '1h', '4h', '6h', '8h', '12h', '1d']
     MTF_BUFFER_LIMITS = {
-        '1m': 1000,   # 16+ hours of 1m data
-        '5m': 300,    # 25 hours of 5m data
-        '15m': 250,   # MA200 warm-up + headroom
-        '1h': 250,    # MA200 warm-up + headroom
-        '4h': 250,    # MA200 warm-up + headroom
-        '1d': 250,    # MA200 warm-up + headroom
+        '1m':  1000,
+        '5m':  300,
+        '15m': 250,
+        '30m': 250,
+        '1h':  250,
+        '4h':  250,
+        '6h':  250,
+        '8h':  250,
+        '12h': 250,
+        '1d':  250,
     }
 
     # WebSocket per-connection stream limit (tunable)
@@ -132,8 +136,11 @@ class Config:
     DYNAMIC_RR_TP_MAX         = 4.5    # Maksimum TP çarpanı
 
     # Konfluans Filtresi
-    CONFLUENCE_VPMV_MIN = 68.0  # VPMV eşiği (geçmiş veriden: üst %20)
-    CONFLUENCE_Z_MIN    = 1.5   # |Z-score| eşiği (geçmiş veriden: üst %20)
+    CONFLUENCE_VPMV_MIN = 75.0
+    CONFLUENCE_Z_MIN    = 2.0
+
+    # HA HTF Konfirmasyon
+    HA_HTF_MIN_COUNT = 3  # [4h,6h,8h,12h,1d] içinden en az kaçı bullish olmalı
 
     # =============================================================================
     # SİNYAL İŞLEME AYARLARI

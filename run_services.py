@@ -384,8 +384,42 @@ async def run_all_services():
         logger.info("Tüm servisler kapatıldı.")
 
 
+_PID_FILE = "run_services.pid"
+
+
+def _acquire_pid_lock() -> bool:
+    """PID dosyası ile tek instance garantisi. Çakışma varsa False döner."""
+    if os.path.exists(_PID_FILE):
+        try:
+            with open(_PID_FILE) as f:
+                old_pid = int(f.read().strip())
+            # Eski process hâlâ çalışıyor mu?
+            os.kill(old_pid, 0)
+            logger.error(
+                "run_services zaten çalışıyor (PID %d). Yeni instance başlatılmıyor.", old_pid
+            )
+            return False
+        except (ValueError, ProcessLookupError, PermissionError):
+            pass  # stale PID — üzerine yaz
+
+    with open(_PID_FILE, "w") as f:
+        f.write(str(os.getpid()))
+    return True
+
+
+def _release_pid_lock() -> None:
+    try:
+        os.remove(_PID_FILE)
+    except OSError:
+        pass
+
+
 if __name__ == "__main__":
+    if not _acquire_pid_lock():
+        raise SystemExit(1)
     try:
         asyncio.run(run_all_services())
     except KeyboardInterrupt:
         logger.info("Kullanıcı tarafından servisler durduruluyor...")
+    finally:
+        _release_pid_lock()

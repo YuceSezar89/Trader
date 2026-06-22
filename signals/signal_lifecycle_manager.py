@@ -10,6 +10,7 @@ Geçiş kuralları:
   - Sweeper               → timeout eşiği geçmişse kapat
 """
 
+import asyncio
 import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
@@ -44,6 +45,15 @@ def _calc_pnl(signal_type: str, open_price: float, close_price: float) -> float:
 
 class SignalLifecycleManager:
 
+    def __init__(self) -> None:
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    def _get_lock(self, symbol: str, interval: str) -> asyncio.Lock:
+        key = f"{symbol}:{interval}"
+        if key not in self._locks:
+            self._locks[key] = asyncio.Lock()
+        return self._locks[key]
+
     async def process(
         self,
         signal_data: Dict[str, Any],
@@ -59,84 +69,88 @@ class SignalLifecycleManager:
         sig_type   = signal_data["signal_type"]
         open_price = float(signal_data["open_price"])
 
-        async with get_session() as session:
-            try:
-                active = await self._get_active(session, symbol, interval, indicators)
+        async with self._get_lock(symbol, interval):
+            async with get_session() as session:
+                try:
+                    active = await self._get_active(session, symbol, interval)
 
-                if active:
-                    if active.signal_type == sig_type:
-                        await self._update_scores(session, active, signal_data)
-                        logger.debug(
-                            "[%s] %s %s skor güncellendi (%s)", symbol, interval, sig_type, indicators
+                    if active:
+                        if active.signal_type == sig_type:
+                            await self._update_scores(session, active, signal_data)
+                            logger.debug(
+                                "[%s] %s %s skor güncellendi (%s)", symbol, interval, sig_type, indicators
+                            )
+                            return None
+
+                        close_px = current_price or open_price
+                        await self._close(session, active, close_px, "reversal")
+                        logger.info(
+                            "[%s] %s %s kapatıldı → %s açılıyor",
+                            symbol, interval, active.signal_type, sig_type,
                         )
-                        return None
 
-                    close_px = current_price or open_price
-                    await self._close(session, active, close_px, "reversal")
+                    atr_val = signal_data.get("atr") or 0.0
+                    if atr_val > 0:
+                        features = {
+                            "vpms_score":  signal_data.get("vpms_score"),
+                            "mtf_score":   signal_data.get("mtf_score"),
+                            "interval":    interval,
+                        }
+                        levels = default_policy.calculate_levels(
+                            sig_type, open_price, float(atr_val), features
+                        )
+                        sl_price   = levels.sl_price
+                        tp_price   = levels.tp_price
+                        sl_mult    = levels.sl_multiplier
+                        tp_mult    = levels.tp_multiplier
+                    else:
+                        sl_price = tp_price = sl_mult = tp_mult = None
+
+                    new_sig = Signal(
+                        symbol            = symbol,
+                        interval          = interval,
+                        indicators        = indicators,
+                        signal_type       = sig_type,
+                        opened_at         = signal_data.get("opened_at", datetime.now()),
+                        open_price        = open_price,
+                        status            = "active",
+                        vpms_score        = signal_data.get("vpms_score"),
+                        mtf_score         = signal_data.get("mtf_score"),
+                        st_confirmed      = signal_data.get("st_confirmed"),
+                        rsi               = signal_data.get("rsi"),
+                        strength          = signal_data.get("strength"),
+                        atr               = signal_data.get("atr"),
+                        alpha             = signal_data.get("alpha"),
+                        beta              = signal_data.get("beta"),
+                        sharpe_ratio      = signal_data.get("sharpe_ratio"),
+                        oi_data           = signal_data.get("oi_data"),
+                        stop_loss_price   = sl_price,
+                        take_profit_price = tp_price,
+                        sl_multiplier     = sl_mult,
+                        tp_multiplier     = tp_mult,
+                        z_score_entry     = signal_data.get("z_score_entry"),
+                        is_confluence     = signal_data.get("is_confluence", False),
+                        vpmv_pre_avg      = signal_data.get("vpmv_pre_avg"),
+                        vpmv_slope        = signal_data.get("vpmv_slope"),
+                        vpmv_ratio        = signal_data.get("vpmv_ratio"),
+                    )
+                    session.add(new_sig)
+                    await session.flush()
+
+                    if active:
+                        active.closed_by = new_sig.id
+
+                    await session.commit()
                     logger.info(
-                        "[%s] %s %s kapatıldı → %s açılıyor",
-                        symbol, interval, active.signal_type, sig_type,
+                        "[%s] %s %s sinyal açıldı (id=%s, %s)",
+                        symbol, interval, sig_type, new_sig.id, indicators,
                     )
+                    return new_sig.id
 
-                atr_val = signal_data.get("atr") or 0.0
-                if atr_val > 0:
-                    features = {
-                        "vpms_score":  signal_data.get("vpms_score"),
-                        "mtf_score":   signal_data.get("mtf_score"),
-                        "interval":    interval,
-                    }
-                    levels = default_policy.calculate_levels(
-                        sig_type, open_price, float(atr_val), features
-                    )
-                    sl_price   = levels.sl_price
-                    tp_price   = levels.tp_price
-                    sl_mult    = levels.sl_multiplier
-                    tp_mult    = levels.tp_multiplier
-                else:
-                    sl_price = tp_price = sl_mult = tp_mult = None
-
-                new_sig = Signal(
-                    symbol            = symbol,
-                    interval          = interval,
-                    indicators        = indicators,
-                    signal_type       = sig_type,
-                    opened_at         = signal_data.get("opened_at", datetime.now()),
-                    open_price        = open_price,
-                    status            = "active",
-                    vpms_score        = signal_data.get("vpms_score"),
-                    mtf_score         = signal_data.get("mtf_score"),
-                    st_confirmed      = signal_data.get("st_confirmed"),
-                    rsi               = signal_data.get("rsi"),
-                    strength          = signal_data.get("strength"),
-                    atr               = signal_data.get("atr"),
-                    alpha             = signal_data.get("alpha"),
-                    beta              = signal_data.get("beta"),
-                    sharpe_ratio      = signal_data.get("sharpe_ratio"),
-                    oi_data           = signal_data.get("oi_data"),
-                    stop_loss_price   = sl_price,
-                    take_profit_price = tp_price,
-                    sl_multiplier     = sl_mult,
-                    tp_multiplier     = tp_mult,
-                    z_score_entry     = signal_data.get("z_score_entry"),
-                    is_confluence     = signal_data.get("is_confluence", False),
-                )
-                session.add(new_sig)
-                await session.flush()
-
-                if active:
-                    active.closed_by = new_sig.id
-
-                await session.commit()
-                logger.info(
-                    "[%s] %s %s sinyal açıldı (id=%s, %s)",
-                    symbol, interval, sig_type, new_sig.id, indicators,
-                )
-                return new_sig.id
-
-            except Exception as exc:
-                await session.rollback()
-                logger.error("[%s] sinyal işleme hatası: %s", symbol, exc, exc_info=True)
-                raise
+                except Exception as exc:
+                    await session.rollback()
+                    logger.error("[%s] sinyal işleme hatası: %s", symbol, exc, exc_info=True)
+                    raise
 
     async def sweep_timeouts(self) -> int:
         """Timeout eşiğini geçmiş aktif sinyalleri kapatır."""
@@ -207,17 +221,26 @@ class SignalLifecycleManager:
                 return False
 
     async def _get_active(
-        self, session: AsyncSession, symbol: str, interval: str, indicators: str
+        self, session: AsyncSession, symbol: str, interval: str
     ) -> Optional[Signal]:
         result = await session.execute(
             select(Signal).where(
-                Signal.symbol     == symbol,
-                Signal.interval   == interval,
-                Signal.indicators == indicators,
-                Signal.status     == "active",
-            ).with_for_update()
+                Signal.symbol   == symbol,
+                Signal.interval == interval,
+                Signal.status   == "active",
+            ).order_by(Signal.id.desc()).with_for_update()
         )
-        return result.scalar_one_or_none()
+        actives = result.scalars().all()
+        if not actives:
+            return None
+        if len(actives) > 1:
+            for stale in actives[1:]:
+                await self._close(session, stale, float(stale.open_price), "reconciliation")
+            logger.warning(
+                "[%s] %s: %d duplikat aktif sinyal temizlendi",
+                symbol, interval, len(actives) - 1,
+            )
+        return actives[0]
 
     async def _close(
         self,

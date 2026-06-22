@@ -11,6 +11,7 @@ from sqlalchemy import (
     ForeignKey,
     ForeignKeyConstraint,
 )
+from sqlalchemy.dialects.postgresql import TIMESTAMP as PG_TIMESTAMP
 from sqlalchemy.orm import DeclarativeBase, relationship
 from datetime import datetime
 
@@ -90,6 +91,12 @@ class Signal(Base):
     is_confluence      = Column(Boolean, nullable=True, default=False)
     trailing_stop_price = Column(Float, nullable=True)
 
+    vpmv_pre_avg    = Column(Float, nullable=True)
+    vpmv_ratio      = Column(Float, nullable=True)
+    vpmv_slope      = Column(Float, nullable=True)
+    vpmv_post_avg   = Column(Float, nullable=True)
+    vpmv_post_delta = Column(Float, nullable=True)
+
     paper_trades = relationship("PaperTrade", back_populates="signal", lazy="noload")
 
 
@@ -117,8 +124,8 @@ class PaperTrade(Base):
 
     status          = Column(String(20), nullable=False, default="open")
     close_reason    = Column(String(50), nullable=True)
-    opened_at       = Column(DateTime, nullable=False, default=datetime.now)
-    closed_at       = Column(DateTime, nullable=True)
+    opened_at       = Column(PG_TIMESTAMP(timezone=True), nullable=False, default=datetime.now)
+    closed_at       = Column(PG_TIMESTAMP(timezone=True), nullable=True)
 
     # ML snapshot
     btc_z_score     = Column(Float, nullable=True)
@@ -133,6 +140,15 @@ class PaperTrade(Base):
     z_score_entry   = Column(Float, nullable=True)
     mtf_score       = Column(Float, nullable=True)
     atr             = Column(Float, nullable=True)
+    rank_at_entry     = Column(Integer, nullable=True)
+    regime_trend      = Column(String(20), nullable=True)
+    volatility_regime = Column(String(20), nullable=True)
+
+    vpmv_pre_avg    = Column(Float, nullable=True)
+    vpmv_ratio      = Column(Float, nullable=True)
+    vpmv_slope      = Column(Float, nullable=True)
+    vpmv_post_avg   = Column(Float, nullable=True)
+    vpmv_post_delta = Column(Float, nullable=True)
 
     signal = relationship("Signal", back_populates="paper_trades", lazy="noload")
 
@@ -149,4 +165,4 @@ class PaperPortfolio(Base):
     total_trades     = Column(Integer, nullable=False, default=0)
     winning_trades   = Column(Integer, nullable=False, default=0)
     total_pnl_usd    = Column(Float, nullable=False, default=0.0)
-    updated_at       = Column(DateTime, nullable=False, default=datetime.now)
+    updated_at       = Column(PG_TIMESTAMP(timezone=True), nullable=False, default=datetime.now)

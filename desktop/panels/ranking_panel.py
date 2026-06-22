@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (  # pylint: disable=no-name-in-module
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -28,12 +29,13 @@ _COL_SYMBOL    = 1
 _COL_5M        = 2
 _COL_15M       = 3
 _COL_1H        = 4
-_COL_COMBINED  = 5
-_COL_ZCONF     = 6
-_COL_RSCORE    = 7
-_COL_ALIGN     = 8
-_COL_VSBTC     = 9
-_HEADERS = ["#", "Sembol", "5m", "15m", "1h", "Birleşik", "Z-Conf", "R-Score", "TF Uyum", "VS BTC"]
+_COL_4H        = 5
+_COL_COMBINED  = 6
+_COL_ZCONF     = 7
+_COL_RSCORE    = 8
+_COL_ALIGN     = 9
+_COL_VSBTC     = 10
+_HEADERS = ["#", "Sembol", "5m", "15m", "1h", "4h", "Birleşik", "Z-Conf", "R-Score", "TF Uyum", "VS BTC"]
 
 _C_GREEN  = QColor(COLORS["green"])
 _C_RED    = QColor(COLORS["red"])
@@ -69,6 +71,7 @@ class RankingPanel(QWidget):
         super().__init__(parent)
         self._worker = RankingWorker(redis_url, parent=self)
         self._pine_filter = False
+        self._search_text = ""
         self._last_result: list = []
         self._prev_ranks: dict[str, int] = {}
         self._setup_ui()
@@ -97,6 +100,16 @@ class RankingPanel(QWidget):
         self._pine_btn.setStyleSheet(self._filter_btn_style(False))
         self._pine_btn.clicked.connect(self._on_pine_toggled)
 
+        self._search_box = QLineEdit()
+        self._search_box.setPlaceholderText("Ara…")
+        self._search_box.setFixedHeight(24)
+        self._search_box.setFixedWidth(110)
+        self._search_box.setStyleSheet(
+            f"background: {COLORS['bg_tertiary']}; color: {COLORS['text_primary']}; "
+            f"border: 1px solid {COLORS['border']}; border-radius: 3px; padding: 0 4px; font-size: 11px;"
+        )
+        self._search_box.textChanged.connect(self._on_search_changed)
+
         refresh_btn = QPushButton("↻")
         refresh_btn.setFixedWidth(28)
         refresh_btn.setStyleSheet(
@@ -106,6 +119,7 @@ class RankingPanel(QWidget):
 
         top.addWidget(title)
         top.addStretch()
+        top.addWidget(self._search_box)
         top.addWidget(self._pine_btn)
         top.addWidget(self._status)
         top.addWidget(refresh_btn)
@@ -160,6 +174,19 @@ class RankingPanel(QWidget):
         self._pine_filter = checked
         self._pine_btn.setStyleSheet(self._filter_btn_style(checked))
         self._render(self._last_result)
+
+    def _on_search_changed(self, text: str) -> None:
+        self._search_text = text.strip().upper()
+        self._apply_search_filter()
+
+    def _apply_search_filter(self) -> None:
+        for row in range(self._table.rowCount()):
+            item = self._table.item(row, _COL_SYMBOL)
+            if item is None:
+                continue
+            symbol = item.text().split()[0]  # "BTCUSDT ↑3" → "BTCUSDT"
+            hidden = bool(self._search_text) and self._search_text not in symbol
+            self._table.setRowHidden(row, hidden)
 
     def _connect_worker(self) -> None:
         self._worker.ranking_updated.connect(self._on_updated)
@@ -224,7 +251,12 @@ class RankingPanel(QWidget):
             self._table.setItem(row, _COL_SYMBOL, sym_item)
 
             # TF skorları
-            for col, key in ((_COL_5M, "score_5m"), (_COL_15M, "score_15m"), (_COL_1H, "score_1h")):
+            for col, key in (
+                (_COL_5M,  "score_5m"),
+                (_COL_15M, "score_15m"),
+                (_COL_1H,  "score_1h"),
+                (_COL_4H,  "score_4h"),
+            ):
                 val = row_data.get(key)
                 self._set_score(row, col, val, bg)
 
@@ -253,6 +285,7 @@ class RankingPanel(QWidget):
             self._set_vs_btc(row, vs_btc, bg)
 
         self._table.setSortingEnabled(True)
+        self._apply_search_filter()
 
     @pyqtSlot(str)
     def _on_status(self, msg: str) -> None:

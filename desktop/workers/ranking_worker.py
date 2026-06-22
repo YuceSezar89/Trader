@@ -77,6 +77,12 @@ class RankingWorker(QThread):
                     self.status_updated.emit(
                         f"{len(result)} sembol  •  {time.strftime('%H:%M:%S')}"
                     )
+                    try:
+                        import json as _json
+                        snapshot = [{"symbol": r["symbol"], "rank": r["rank"]} for r in result]
+                        self._redis.set("ranking:snapshot", _json.dumps(snapshot), ex=600)
+                    except Exception:
+                        pass
                 else:
                     self.status_updated.emit("Veri hesaplanıyor…")
             except Exception as exc:  # pylint: disable=broad-exception-caught
@@ -142,6 +148,7 @@ class RankingWorker(QThread):
                 "score_5m":        tf_scores.get("5m"),
                 "score_15m":       tf_scores.get("15m"),
                 "score_1h":        tf_scores.get("1h"),
+                "score_4h":        tf_scores.get("4h"),
                 "combined":        round(combined, 1),
                 "z_confluence":    z_confluence,
                 "r_score":         r_score,

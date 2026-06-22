@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (  # pylint: disable=no-name-in-module
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -24,10 +25,11 @@ from PyQt6.QtWidgets import (  # pylint: disable=no-name-in-module
 
 from desktop.theme import COLORS
 
-_COLS = ["Sembol", "Z-score", "Zaman"]
+_COLS = ["Sembol", "Z-score", "Rank", "Zaman"]
 _COL_SYMBOL = 0
 _COL_ZSCORE = 1
-_COL_TIME   = 2
+_COL_RANK   = 2
+_COL_TIME   = 3
 
 _C_GREEN      = QColor(COLORS["green"])
 _C_RED        = QColor(COLORS["red"])
@@ -63,8 +65,20 @@ def _make_table() -> QTableWidget:
     hh = t.horizontalHeader()
     hh.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
     hh.setSectionResizeMode(_COL_SYMBOL, QHeaderView.ResizeMode.ResizeToContents)
+    hh.setSectionResizeMode(_COL_RANK,   QHeaderView.ResizeMode.ResizeToContents)
     hh.setSectionResizeMode(_COL_TIME,   QHeaderView.ResizeMode.ResizeToContents)
     return t
+
+
+def _make_search_box(placeholder: str) -> QLineEdit:
+    box = QLineEdit()
+    box.setPlaceholderText(placeholder)
+    box.setFixedHeight(24)
+    box.setStyleSheet(
+        f"background: {COLORS['bg_tertiary']}; color: {COLORS['text_primary']}; "
+        f"border: 1px solid {COLORS['border']}; border-radius: 3px; padding: 0 4px; font-size: 11px;"
+    )
+    return box
 
 
 class DivergencePanel(QWidget):
@@ -75,6 +89,9 @@ class DivergencePanel(QWidget):
         self._last_result: Optional[dict] = None
         self._prev_pos_ranks: dict[str, int] = {}
         self._prev_neg_ranks: dict[str, int] = {}
+        self._ranking: dict[str, int] = {}
+        self._pos_search = ""
+        self._neg_search = ""
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -99,27 +116,46 @@ class DivergencePanel(QWidget):
         ctrl.addWidget(self._status_label)
         layout.addLayout(ctrl)
 
-        # Başlık satırı
-        header_row = QHBoxLayout()
+        # İki sütun yan yana
+        tables_row = QHBoxLayout()
+        tables_row.setSpacing(8)
+
+        # Pozitif sütun
+        pos_col = QVBoxLayout()
+        pos_col.setSpacing(4)
         pos_title = QLabel("▲ POZİTİF AYRIŞMA")
         pos_title.setStyleSheet(
             f"color: {COLORS['green']}; font-size: 11px; font-weight: bold; padding: 0 4px;"
         )
+        self._pos_search_box = _make_search_box("Ara…")
+        self._pos_search_box.textChanged.connect(self._on_pos_search)
+        pos_hdr = QHBoxLayout()
+        pos_hdr.addWidget(pos_title)
+        pos_hdr.addStretch()
+        pos_hdr.addWidget(self._pos_search_box)
+        self._pos_table = _make_table()
+        pos_col.addLayout(pos_hdr)
+        pos_col.addWidget(self._pos_table)
+
+        # Negatif sütun
+        neg_col = QVBoxLayout()
+        neg_col.setSpacing(4)
         neg_title = QLabel("▼ NEGATİF AYRIŞMA")
         neg_title.setStyleSheet(
             f"color: {COLORS['red']}; font-size: 11px; font-weight: bold; padding: 0 4px;"
         )
-        header_row.addWidget(pos_title)
-        header_row.addWidget(neg_title)
-        layout.addLayout(header_row)
-
-        # İki tablo yan yana
-        tables_row = QHBoxLayout()
-        tables_row.setSpacing(6)
-        self._pos_table = _make_table()
+        self._neg_search_box = _make_search_box("Ara…")
+        self._neg_search_box.textChanged.connect(self._on_neg_search)
+        neg_hdr = QHBoxLayout()
+        neg_hdr.addWidget(neg_title)
+        neg_hdr.addStretch()
+        neg_hdr.addWidget(self._neg_search_box)
         self._neg_table = _make_table()
-        tables_row.addWidget(self._pos_table)
-        tables_row.addWidget(self._neg_table)
+        neg_col.addLayout(neg_hdr)
+        neg_col.addWidget(self._neg_table)
+
+        tables_row.addLayout(pos_col)
+        tables_row.addLayout(neg_col)
         layout.addLayout(tables_row)
 
     def _muted_label(self, text: str) -> QLabel:
@@ -131,6 +167,29 @@ class DivergencePanel(QWidget):
         return self._tf_combo
 
     # ── Slot'lar ──────────────────────────────────────────────────────────
+
+    @pyqtSlot(object)
+    def on_ranking_updated(self, result: list) -> None:
+        self._ranking = {r["symbol"]: r["rank"] for r in result}
+        if self._last_result:
+            self._populate(self._last_result)
+
+    def _on_pos_search(self, text: str) -> None:
+        self._pos_search = text.strip().upper()
+        self._apply_filter(self._pos_table, self._pos_search)
+
+    def _on_neg_search(self, text: str) -> None:
+        self._neg_search = text.strip().upper()
+        self._apply_filter(self._neg_table, self._neg_search)
+
+    @staticmethod
+    def _apply_filter(table: QTableWidget, search: str) -> None:
+        for row in range(table.rowCount()):
+            item = table.item(row, _COL_SYMBOL)
+            if item is None:
+                continue
+            symbol = item.text().split()[0]
+            table.setRowHidden(row, bool(search) and search not in symbol)
 
     @pyqtSlot(object)
     def on_divergence_updated(self, result: dict) -> None:
@@ -169,8 +228,10 @@ class DivergencePanel(QWidget):
 
         self._fill_table(self._pos_table, pos_rows, diverge_since, positive=True, rank_deltas=pos_deltas)
         self._fill_table(self._neg_table, neg_rows, diverge_since, positive=False, rank_deltas=neg_deltas)
+        self._apply_filter(self._pos_table, self._pos_search)
+        self._apply_filter(self._neg_table, self._neg_search)
 
-    def _fill_table(
+    def _fill_table(  # pylint: disable=too-many-locals
         self,
         table: QTableWidget,
         rows: list,
@@ -178,6 +239,7 @@ class DivergencePanel(QWidget):
         positive: bool,
         rank_deltas: Optional[dict] = None,
     ) -> None:
+        table.setSortingEnabled(False)
         table.setRowCount(len(rows))
 
         mono = QFont("Monospace", 11)
@@ -219,6 +281,15 @@ class DivergencePanel(QWidget):
                 z_item.setBackground(_C_TRANSPARENT)
             table.setItem(row_idx, _COL_ZSCORE, z_item)
 
+            # Rank
+            rank = self._ranking.get(symbol)
+            rank_item = _NumericItem(str(rank) if rank is not None else "—")
+            rank_item.setData(Qt.ItemDataRole.UserRole, rank if rank is not None else 9999)
+            rank_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            rank_item.setFont(mono)
+            rank_item.setForeground(_C_MUTED)
+            table.setItem(row_idx, _COL_RANK, rank_item)
+
             # Zaman
             ts = diverge_since.get(symbol)
             if ts:
@@ -235,3 +306,5 @@ class DivergencePanel(QWidget):
             t_item.setFont(mono)
             t_item.setForeground(_C_MUTED)
             table.setItem(row_idx, _COL_TIME, t_item)
+
+        table.setSortingEnabled(True)

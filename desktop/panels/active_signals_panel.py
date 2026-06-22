@@ -85,7 +85,7 @@ class ActiveSignalsPanel(QWidget):
         filter_row.addWidget(self._tf_combo)
 
         self._ind_combo = QComboBox()
-        self._ind_combo.addItems(["İnd: Hepsi", "RSI_Cross", "MA200_Cross", "Supertrend"])
+        self._ind_combo.addItems(["İnd: Hepsi", "HA_Cross", "RSI_Cross", "MA200_Cross", "Supertrend"])
         self._ind_combo.setFixedWidth(110)
         self._ind_combo.currentTextChanged.connect(self._on_indicator_changed)
         filter_row.addWidget(self._ind_combo)

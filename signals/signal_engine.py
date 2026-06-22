@@ -358,6 +358,48 @@ class SignalEngine:
             strength=1,
         )
 
+    async def ha_crossover_signal(
+        self, df: pd.DataFrame, symbol: str = "", interval: str = ""
+    ) -> List[Dict[str, Any]]:
+        """Heiken Ashi crossover sinyali — kapanmış son barda flip tespiti."""
+        required = ["open_time", "ha_open", "ha_close", COL_HIGH, COL_LOW]
+        if len(df) < 3:
+            return []
+        df_closed = df.iloc[:-1]
+        if not self._validate_dataframe(df_closed, required, min_len=2):
+            return []
+
+        curr = df_closed.iloc[-1]
+        prev = df_closed.iloc[-2]
+
+        curr_bull = float(curr["ha_close"]) > float(curr["ha_open"])
+        prev_bull = float(prev["ha_close"]) > float(prev["ha_open"])
+
+        signal_type = ""
+        if curr_bull and not prev_bull:
+            signal_type = "Long"
+        elif not curr_bull and prev_bull:
+            signal_type = "Short"
+
+        if not signal_type:
+            return []
+
+        indicator_key = "HA_Cross"
+        high = float(curr[COL_HIGH])
+        low  = float(curr[COL_LOW])
+
+        if symbol and interval and not self._filter.check(
+            signal_type, high, low, symbol, interval, indicator_key
+        ):
+            self.logger.info(
+                f"[{symbol}] {interval} {signal_type} filtreden geçemedi ({indicator_key})"
+            )
+            return []
+
+        return self._create_signal_output(
+            df=df_closed, signal_type=signal_type, indicators=indicator_key, strength=1
+        )
+
     async def calculate_all_signals(
         self,
         df: pd.DataFrame,
@@ -375,6 +417,7 @@ class SignalEngine:
             "rsi_crossover": self.rsi_crossover_signal,
             "ma200_crossover": self.ma200_crossover_signal,
             "supertrend": self.supertrend_signal,
+            "ha_crossover": self.ha_crossover_signal,
         }
 
         active_signals: List[str]
