@@ -135,6 +135,9 @@ class PaperTradeManager:
                     rank_at_entry=rank_at_entry,
                     regime_trend=regime_trend,
                     volatility_regime=volatility_regime,
+                    vpmv_pre_avg=signal_data.get("vpmv_pre_avg"),
+                    vpmv_slope=signal_data.get("vpmv_slope"),
+                    vpmv_ratio=signal_data.get("vpmv_ratio"),
                 )
                 session.add(trade)
                 await session.commit()
@@ -412,3 +415,4 @@ class PaperTradeManager:
 paper_trade_manager = PaperTradeManager("conf_100")
 ha_cross_manager    = PaperTradeManager("ha_cross")
 rsi_15m_manager     = PaperTradeManager("rsi_15m")
+manual_manager      = PaperTradeManager("manual")

@@ -285,7 +285,7 @@ class MainWindow(QMainWindow):
         self._docks["ranking"] = ranking_dock
 
         # ── Paper Trade paneli (alt, tabified) ────────────────────────────
-        self._paper_trade_panel = PaperTradePanel(db_cfg, self)
+        self._paper_trade_panel = PaperTradePanel(db_cfg, redis_url, self)
         self._paper_trade_panel.symbol_selected.connect(self._chart_panel.load_symbol)
         paper_dock = QDockWidget("★ Paper Trade", self)
         paper_dock.setObjectName("dock_paper_trade")

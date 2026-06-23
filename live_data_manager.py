@@ -30,7 +30,7 @@ from database.engine import get_session
 from sqlalchemy import text
 from signals.signal_processor import process_and_enrich_signals
 from signals.risk_manager import risk_manager
-from signals.paper_trade_manager import paper_trade_manager, ha_cross_manager, rsi_15m_manager
+from signals.paper_trade_manager import paper_trade_manager, ha_cross_manager, rsi_15m_manager, manual_manager
 from utils.exceptions import BinanceAPIError, DatabaseError
 from config import Config
 from utils.redis_client import RedisClient
@@ -1810,7 +1810,7 @@ class LiveDataManager:
                     needed_min = (PRE_BARS + POST_BARS + 1) * tf_min
                     if sig.opened_at is None:
                         continue
-                    age_min = (datetime.utcnow() - sig.opened_at).total_seconds() / 60
+                    age_min = (datetime.now() - sig.opened_at).total_seconds() / 60
                     if age_min < needed_min:
                         continue
 
@@ -1825,7 +1825,10 @@ class LiveDataManager:
                         if hasattr(raw.index, 'tz'):
                             raw_times = raw.index
                         else:
-                            raw_times = pd.to_datetime(raw["open_time"]) if "open_time" in raw.columns else raw.index
+                            if "open_time" in raw.columns:
+                                raw_times = pd.to_datetime(raw["open_time"], unit="ms", utc=True).dt.tz_convert("Europe/Istanbul").dt.tz_localize(None)
+                            else:
+                                raw_times = raw.index
 
                         diffs = (raw_times - pd.Timestamp(sig_time)).abs()
                         bar_idx = int(diffs.argmin())
@@ -1903,6 +1906,21 @@ class LiveDataManager:
             await paper_trade_manager.check_all_prices(prices)
             await ha_cross_manager.check_all_prices(prices)
             await rsi_15m_manager.check_all_prices(prices)
+            await manual_manager.check_all_prices(prices)
+
+    async def _manual_refresh_loop(self) -> None:
+        """UI'dan açılan manuel işlemleri algılayıp manual_manager cache'ini yeniler."""
+        redis = RedisClient.get_client()
+        while True:
+            await asyncio.sleep(10)
+            try:
+                val = await redis.get("manual_trade:refresh")
+                if val:
+                    await manual_manager.load_open_symbols()
+                    await redis.delete("manual_trade:refresh")
+                    logger.info("[ManualTrade] Cache yenilendi: %d açık sembol", len(manual_manager._open_symbols))  # noqa: SLF001
+            except Exception:  # pylint: disable=broad-exception-caught
+                pass
 
     async def _health_loop(self):
         """Her 15 dakikada price_data tazeliğini kontrol eder; gap tespit ederse doldurur."""
@@ -2043,6 +2061,7 @@ class LiveDataManager:
                 asyncio.create_task(self._oi_refresh_loop()),
                 asyncio.create_task(self._risk_check_loop()),
                 asyncio.create_task(self._vpmv_post_loop()),
+                asyncio.create_task(self._manual_refresh_loop()),
             ]
 
             logger.info(
@@ -2257,6 +2276,7 @@ async def main():
     await paper_trade_manager.load_open_symbols()
     await ha_cross_manager.load_open_symbols()
     await rsi_15m_manager.load_open_symbols()
+    await manual_manager.load_open_symbols()
 
     logger.info("En yüksek hacimli semboller Binance'ten çekiliyor...")
     symbols_to_track = await BinanceClientManager.get_top_volume_symbols_async(

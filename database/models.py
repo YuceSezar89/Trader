@@ -108,6 +108,7 @@ class PaperTrade(Base):
     id              = Column(Integer, primary_key=True, autoincrement=True)
     signal_id       = Column(Integer, ForeignKey("signals.id", ondelete="SET NULL"), nullable=True)
     strategy        = Column(String(50), nullable=False, default="conf_100")
+    source          = Column(String(20), nullable=False, default="signal")
 
     symbol          = Column(String(30), nullable=False)
     signal_type     = Column(String(10), nullable=False)

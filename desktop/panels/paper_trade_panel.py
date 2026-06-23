@@ -10,12 +10,14 @@ from typing import Any
 
 import psycopg2
 import psycopg2.extras
-from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal  # pylint: disable=no-name-in-module
+from PyQt6.QtCore import Qt, QPoint, QThread, QTimer, pyqtSignal  # pylint: disable=no-name-in-module
 from PyQt6.QtGui import QColor  # pylint: disable=no-name-in-module
 from PyQt6.QtWidgets import (  # pylint: disable=no-name-in-module
     QAbstractItemView,
     QHBoxLayout,
     QLabel,
+    QMenu,
+    QPushButton,
     QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
@@ -24,8 +26,6 @@ from PyQt6.QtWidgets import (  # pylint: disable=no-name-in-module
 )
 
 from desktop.theme import COLORS
-
-STRATEGY = "conf_100"
 
 
 class _FetchWorker(QThread):
@@ -39,28 +39,28 @@ class _FetchWorker(QThread):
         try:
             conn = psycopg2.connect(**self._db_config)
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute("SELECT * FROM paper_portfolio WHERE strategy = %s", (STRATEGY,))
+                cur.execute("SELECT * FROM paper_portfolio WHERE strategy = 'ha_cross'")
                 pf = dict(cur.fetchone()) if cur.rowcount else None
 
                 cur.execute("""
-                    SELECT id, symbol, signal_type, interval,
+                    SELECT id, symbol, signal_type, interval, strategy, source,
                            entry_price, stop_loss_price, take_profit_price,
                            trailing_stop_price, opened_at, vpms_score, z_score_entry
                     FROM paper_trades
-                    WHERE strategy = %s AND status = 'open'
+                    WHERE status = 'open'
                     ORDER BY opened_at DESC
-                """, (STRATEGY,))
+                """)
                 open_rows = [dict(r) for r in cur.fetchall()]
 
                 cur.execute("""
-                    SELECT symbol, signal_type, interval,
+                    SELECT symbol, signal_type, interval, strategy, source,
                            entry_price, exit_price, pnl_usd, pnl_pct,
                            close_reason, closed_at
                     FROM paper_trades
-                    WHERE strategy = %s AND status = 'closed'
+                    WHERE status = 'closed'
                     ORDER BY closed_at DESC
                     LIMIT 200
-                """, (STRATEGY,))
+                """)
                 hist_rows = [dict(r) for r in cur.fetchall()]
 
             conn.close()
@@ -69,8 +69,8 @@ class _FetchWorker(QThread):
             import logging
             logging.getLogger(__name__).error("[PaperTradePanel] fetch hatası: %s", exc, exc_info=True)
 
-OPEN_COLS  = ["Sembol", "Yön", "TF", "Giriş$", "Fiyat$", "P&L$", "P&L%", "SL$", "TP$", "Süre", "Trail"]
-HIST_COLS  = ["Sembol", "Yön", "TF", "Giriş$", "Çıkış$", "P&L$", "P&L%", "Neden", "Kapatma"]
+OPEN_COLS  = ["Sembol", "Yön", "TF", "Strateji", "Giriş$", "Fiyat$", "P&L$", "P&L%", "SL$", "TP$", "Süre", "Trail"]
+HIST_COLS  = ["Sembol", "Yön", "TF", "Strateji", "Giriş$", "Çıkış$", "P&L$", "P&L%", "Neden", "Kapatma"]
 
 
 def _age(dt: datetime | None) -> str:
@@ -103,10 +103,12 @@ class PaperTradePanel(QWidget):
 
     symbol_selected = pyqtSignal(str, str)  # (symbol, interval)
 
-    def __init__(self, db_config: dict[str, Any], parent=None):
+    def __init__(self, db_config: dict[str, Any], redis_url: str = "", parent=None):
         super().__init__(parent)
         self._db_config = db_config
+        self._redis_url = redis_url
         self._open_prices: dict[str, float] = {}
+        self._open_ids: list[int] = []  # sıralı open trade id'leri
 
         self._setup_ui()
 
@@ -115,6 +117,8 @@ class PaperTradePanel(QWidget):
 
         self._open_table.clicked.connect(self._on_table_clicked)
         self._hist_table.clicked.connect(self._on_table_clicked)
+        self._open_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._open_table.customContextMenuRequested.connect(self._on_open_context_menu)
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._trigger_fetch)
@@ -141,10 +145,22 @@ class PaperTradePanel(QWidget):
         summary.addStretch()
         root.addLayout(summary)
 
-        # ── Açık pozisyonlar başlığı ──
+        # ── Açık pozisyonlar başlığı + manuel buton ──
+        open_hdr_row = QHBoxLayout()
         open_hdr = QLabel("Açık Pozisyonlar")
         open_hdr.setObjectName("section_title")
-        root.addWidget(open_hdr)
+        self._btn_manual = QPushButton("+ Manuel İşlem")
+        self._btn_manual.setFixedHeight(24)
+        self._btn_manual.setStyleSheet(
+            f"QPushButton {{ background: {COLORS['bg_tertiary']}; color: {COLORS['green']};"
+            f" border: 1px solid {COLORS['green']}; border-radius: 3px; font-size: 11px; padding: 0 8px; }}"
+            f"QPushButton:hover {{ background: #1a5c2a; }}"
+        )
+        self._btn_manual.clicked.connect(self._on_manual_trade)
+        open_hdr_row.addWidget(open_hdr)
+        open_hdr_row.addStretch()
+        open_hdr_row.addWidget(self._btn_manual)
+        root.addLayout(open_hdr_row)
 
         self._open_table = self._make_table(OPEN_COLS)
         self._open_table.setSizePolicy(
@@ -259,12 +275,15 @@ class PaperTradePanel(QWidget):
     def _fill_open(self, rows: list[dict]) -> float:
         self._open_table.setRowCount(len(rows))
         self._stat_value(self._lbl_open, str(len(rows)))
+        self._open_ids = [r["id"] for r in rows]
 
         total_unrealized = 0.0
         for r_idx, row in enumerate(rows):
             sym    = row["symbol"]
             side   = row["signal_type"]
             tf     = row["interval"]
+            strat  = row.get("strategy", "")
+            src    = row.get("source", "signal")
             entry  = float(row["entry_price"])
             trail  = row["trailing_stop_price"]
 
@@ -273,17 +292,17 @@ class PaperTradePanel(QWidget):
                 pnl_pct = (live - entry) / entry * 100
             else:
                 pnl_pct = (entry - live) / entry * 100
-            pnl_usd = pnl_pct / 100 * 100  # $100 pozisyon
+            pnl_usd = pnl_pct / 100 * 100
             total_unrealized += pnl_usd
 
             sl    = row["stop_loss_price"]
             tp    = row["take_profit_price"]
             sl_str = f"{float(sl):.5g}" if sl else "—"
             tp_str = f"{float(tp):.5g}" if tp else "—"
-            trail_str = f"{float(trail):.5g}" if trail else "—"
+            strat_label = "✋ " + strat if src == "manual" else strat
 
             cells = [
-                sym, side, tf,
+                sym, side, tf, strat_label,
                 f"{entry:.5g}", f"{live:.5g}",
                 f"{pnl_usd:+.2f}$", f"{pnl_pct:+.2f}%",
                 sl_str, tp_str,
@@ -296,11 +315,11 @@ class PaperTradePanel(QWidget):
                     it.setForeground(
                         QColor(COLORS["green"]) if side == "Long" else QColor(COLORS["red"])
                     )
-                if c_idx in (5, 6):
+                if c_idx in (6, 7):
                     it.setForeground(_pnl_color(pnl_usd))
-                if c_idx == 7:  # SL
+                if c_idx == 8:
                     it.setForeground(QColor(COLORS["red"]))
-                if c_idx == 8:  # TP
+                if c_idx == 9:
                     it.setForeground(QColor(COLORS["green"]))
                 self._open_table.setItem(r_idx, c_idx, it)
 
@@ -314,11 +333,15 @@ class PaperTradePanel(QWidget):
             closed  = row["closed_at"]
             if isinstance(closed, datetime) and closed.tzinfo is None:
                 closed = closed.replace(tzinfo=timezone.utc)
+            src = row.get("source", "signal")
+            strat = row.get("strategy", "")
+            strat_label = "✋ " + strat if src == "manual" else strat
 
             cells = [
                 row["symbol"],
                 row["signal_type"],
                 row["interval"],
+                strat_label,
                 f"{float(row['entry_price']):.5g}",
                 f"{float(row['exit_price']):.5g}" if row["exit_price"] else "—",
                 f"{pnl_usd:+.2f}$",
@@ -333,7 +356,7 @@ class PaperTradePanel(QWidget):
                         QColor(COLORS["green"]) if row["signal_type"] == "Long"
                         else QColor(COLORS["red"])
                     )
-                if c_idx in (5, 6):
+                if c_idx in (6, 7):
                     it.setForeground(_pnl_color(pnl_usd))
                 self._hist_table.setItem(r_idx, c_idx, it)
 
@@ -344,3 +367,67 @@ class PaperTradePanel(QWidget):
         tf_item  = table.item(row, 2)
         if sym_item and tf_item:
             self.symbol_selected.emit(sym_item.text(), tf_item.text())
+
+    def _on_open_context_menu(self, pos: QPoint) -> None:
+        row = self._open_table.rowAt(pos.y())
+        if row < 0 or row >= len(self._open_ids):
+            return
+        trade_id = self._open_ids[row]
+        sym_item  = self._open_table.item(row, 0)
+        side_item = self._open_table.item(row, 1)
+        sym  = sym_item.text() if sym_item else "?"
+        side = side_item.text() if side_item else "?"
+
+        menu = QMenu(self)
+        act_close = menu.addAction(f"Manuel Kapat — {sym} {side}")
+        action = menu.exec(self._open_table.viewport().mapToGlobal(pos))
+        if action == act_close:
+            self._manual_close(trade_id, sym)
+
+    def _manual_close(self, trade_id: int, symbol: str) -> None:
+        price = self._open_prices.get(symbol, 0.0)
+        if price == 0.0:
+            try:
+                import redis as _redis, json
+                r = _redis.Redis.from_url(self._redis_url, socket_connect_timeout=2, decode_responses=True)
+                raw = r.get(f"ticker:{symbol}")
+                if raw:
+                    d = json.loads(raw)
+                    price = float(d.get("price") or d.get("last_price") or 0)
+            except Exception:
+                pass
+
+        try:
+            conn = psycopg2.connect(**self._db_config)
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("SELECT signal_type, entry_price FROM paper_trades WHERE id = %s", (trade_id,))
+                rec = cur.fetchone()
+                if not rec:
+                    conn.close()
+                    return
+                side  = rec["signal_type"]
+                entry = float(rec["entry_price"])
+                if price == 0.0:
+                    price = entry
+                pnl_pct = (price - entry) / entry * 100 if side == "Long" else (entry - price) / entry * 100
+                fee_usd = 100.0 * 0.0005 * 2
+                pnl_usd = pnl_pct / 100 * 100 - fee_usd
+                cur.execute("""
+                    UPDATE paper_trades SET
+                        status = 'closed', closed_at = NOW(),
+                        exit_price = %s, close_reason = 'manual',
+                        pnl_pct = %s, fee_usd = %s, pnl_usd = %s
+                    WHERE id = %s
+                """, (price, round(pnl_pct, 4), fee_usd, round(pnl_usd, 4), trade_id))
+            conn.commit()
+            conn.close()
+            self._trigger_fetch()
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).error("[PaperTrade] manuel kapat hatası: %s", exc)
+
+    def _on_manual_trade(self) -> None:
+        from desktop.dialogs.manual_trade_dialog import ManualTradeDialog
+        dlg = ManualTradeDialog(self._db_config, self._redis_url, parent=self)
+        if dlg.exec():
+            self._trigger_fetch()
