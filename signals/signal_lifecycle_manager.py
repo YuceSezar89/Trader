@@ -123,6 +123,8 @@ class SignalLifecycleManager:
                         alpha             = signal_data.get("alpha"),
                         beta              = signal_data.get("beta"),
                         sharpe_ratio      = signal_data.get("sharpe_ratio"),
+                        sortino_ratio     = signal_data.get("sortino_ratio"),
+                        calmar_ratio      = signal_data.get("calmar_ratio"),
                         oi_data           = signal_data.get("oi_data"),
                         stop_loss_price   = sl_price,
                         take_profit_price = tp_price,

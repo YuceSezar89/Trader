@@ -112,6 +112,11 @@ class SignalRow:
     z_score_entry: Optional[float] = None
     is_confluence: bool = False
     trailing_stop_price: Optional[float] = None
+    sortino: Optional[float] = None
+    calmar: Optional[float] = None
+    vpmv_pre_avg: Optional[float] = None
+    vpmv_slope: Optional[float] = None
+    vpmv_ratio: Optional[float] = None
     pnl_pct: Optional[float] = field(default=None, init=False)
 
     def update_price(self, price: float) -> None:
@@ -215,14 +220,19 @@ class SignalsModel(QAbstractTableModel):
         risk_line = f"  {sl_label}: {_r(sl_val, '.4f')}"
         if tp_val is not None:
             risk_line += f"   TP: {_r(tp_val, '.4f')}"
+        pre  = _r(row.vpmv_pre_avg, '.1f')
+        slop = _r(row.vpmv_slope,   '+.1f')
+        rat  = _r(row.vpmv_ratio,   '.3f')
         return (
             f"{row.symbol}  {row.signal_type}  {row.interval}  |  {row.indicators}\n"
             f"{'─'*52}\n"
             f"{cf_line}"
             f"  Alpha    {_r(row.alpha, '+.4f'):>10}    Beta     {_r(row.beta):>8}\n"
-            f"  Sharpe   {_r(row.sharpe):>10}\n"
+            f"  Sharpe   {_r(row.sharpe):>10}    Sortino  {_r(row.sortino):>8}\n"
+            f"  Calmar   {_r(row.calmar):>10}\n"
             f"{'─'*52}\n"
             f"  VPMV: {_r(row.vpm, '.1f')}   MTF: {mtf}   ST: {st}\n"
+            f"  pre: {pre}   slope: {slop}   ratio: {rat}\n"
             f"{risk_line}\n"
             f"{self._oi_line(row)}"
         )
@@ -312,12 +322,17 @@ class SignalsModel(QAbstractTableModel):
             status=s.get("status", "active"),
             st_confirmed=s.get("st_confirmed"),
             sharpe=s.get("sharpe_ratio"),
+            sortino=s.get("sortino_ratio"),
+            calmar=s.get("calmar_ratio"),
             oi_data=s.get("oi_data"),
             stop_loss_price=s.get("stop_loss_price"),
             take_profit_price=s.get("take_profit_price"),
             z_score_entry=s.get("z_score_entry"),
             is_confluence=bool(s.get("is_confluence", False)),
             trailing_stop_price=s.get("trailing_stop_price"),
+            vpmv_pre_avg=s.get("vpmv_pre_avg"),
+            vpmv_slope=s.get("vpmv_slope"),
+            vpmv_ratio=s.get("vpmv_ratio"),
         )
         idx = len(self._rows)
         self._rows.append(row)

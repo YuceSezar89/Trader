@@ -395,6 +395,8 @@ async def process_and_enrich_signals(
                     "alpha":          alpha,
                     "beta":           beta,
                     "sharpe_ratio":   latest_metrics.get("sharpe_ratio"),
+                    "sortino_ratio":  latest_metrics.get("sortino_ratio"),
+                    "calmar_ratio":   latest_metrics.get("calmar_ratio"),
                     "oi_data":        oi_data,
                     "z_score_entry":  z_score_entry,
                     "is_confluence":  is_confluence,
