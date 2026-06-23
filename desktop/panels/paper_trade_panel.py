@@ -39,7 +39,7 @@ class _FetchWorker(QThread):
         try:
             conn = psycopg2.connect(**self._db_config)
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute("SELECT * FROM paper_portfolio WHERE strategy = 'ha_cross'")
+                cur.execute("SELECT * FROM paper_portfolio WHERE strategy = 'conf_100'")
                 pf = dict(cur.fetchone()) if cur.rowcount else None
 
                 cur.execute("""
