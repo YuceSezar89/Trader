@@ -416,7 +416,7 @@ def _release_pid_lock() -> None:
 
 if __name__ == "__main__":
     if not _acquire_pid_lock():
-        raise SystemExit(1)
+        raise SystemExit(0)  # temiz çıkış → launchctl yeniden başlatmaz
     try:
         asyncio.run(run_all_services())
     except KeyboardInterrupt:
