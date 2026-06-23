@@ -318,6 +318,9 @@ class ActiveSignalsPanel(QWidget):
         mtf = f"{int(row.mtf)}" if row.mtf is not None else "—"
         pnl = (f"{row.pnl_pct:+.2f}%" if row.pnl_pct is not None else "—")
 
+        pre  = _r(row.vpmv_pre_avg, '.1f')
+        slop = _r(row.vpmv_slope,   '+.1f')
+        rat  = _r(row.vpmv_ratio,   '.3f')
         text = (
             f"  α {_r(row.alpha, '+.4f')}  "
             f"β {_r(row.beta)}  │  "
@@ -325,6 +328,7 @@ class ActiveSignalsPanel(QWidget):
             f"VPMV {_r(row.vpm, '.1f')}  "
             f"MTF {mtf}  "
             f"ST {st}  │  "
+            f"pre {pre}  slope {slop}  ratio {rat}  │  "
             f"P&L {pnl}"
         )
         self._detail_bar.setText(text)
