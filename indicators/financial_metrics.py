@@ -278,20 +278,10 @@ def calculate_metrics(df, ref_df=None, beta_window=50, alpha_window=20):
         logger.warning("NaN detected in sortino_ratio")
         df["sortino_ratio"] = df["sortino_ratio"].fillna(0)
 
-    df.loc[:, "max_drawdown"] = (
-        df["low"].rolling(window=LOOKBACK_COMMON, min_periods=1).min()
-    )
-    df.loc[:, "drawdown"] = df["price"] - df["max_drawdown"]
-    df.loc[:, "drawdown_percent"] = (df["drawdown"] / df["price"]) * 100
-    min_drawdown = (
-        df["drawdown_percent"]
-        .rolling(window=LOOKBACK_COMMON, min_periods=1)
-        .min()
-        .abs()
-        .div(100.0)
-        .add(1e-6)
-    )
-    df.loc[:, "calmar_ratio"] = df["avg_return"] / min_drawdown
+    rolling_peak = df["price"].rolling(window=LOOKBACK_COMMON, min_periods=1).max()
+    rolling_drawdown = (df["price"] - rolling_peak) / rolling_peak.replace(0, np.nan)
+    max_drawdown = rolling_drawdown.rolling(window=LOOKBACK_COMMON, min_periods=1).min().abs().add(1e-6)
+    df.loc[:, "calmar_ratio"] = df["avg_return"] / max_drawdown
     if df["calmar_ratio"].isna().any():
         logger.warning("NaN detected in calmar_ratio")
         df["calmar_ratio"] = df["calmar_ratio"].fillna(0)
@@ -437,38 +427,5 @@ def calculate_metrics(df, ref_df=None, beta_window=50, alpha_window=20):
         df["normalized_signal_momentum"], index=df.index
     )
 
-    # df.loc[:, 'buy_crossover'] = (df['smoothed_cumulative'] > 0) & (df['smoothed_cumulative'].shift(1) <= 0)
-    # df.loc[:, 'sell_crossunder'] = (df['smoothed_cumulative'] < 0) & (df['smoothed_cumulative'].shift(1) >= 0)
-
-    # df.loc[:, 'is_buy_active'] = False
-    # df.loc[:, 'is_sell_active'] = False
-    # df.loc[:, 'buy_mum_sayisi'] = 0
-    # df.loc[:, 'sell_mum_sayisi'] = 0
-    # df.loc[:, 'saved_signal_momentum'] = np.nan
-    # df.loc[:, 'buy_metin'] = ""
-    # df.loc[:, 'sell_metin'] = ""
-
-    # for i in range(1, len(df)):
-    #    if df['buy_crossover'].iloc[i]:
-    #        df.loc[df.index[i], 'is_buy_active'] = True
-    #        df.loc[df.index[i], 'is_sell_active'] = False
-    #        df.loc[df.index[i], 'buy_mum_sayisi'] = 0
-    #        df.loc[df.index[i], 'sell_mum_sayisi'] = 0
-    #        df.loc[df.index[i], 'saved_signal_momentum'] = df['smoothed_signal_momentum'].iloc[i]
-    #    elif df['sell_crossunder'].iloc[i]:
-
-    # Rolling excess return ortalama
-    mean_excess_returns = excess_returns.rolling(
-        window=max(30, LOOKBACK_COMMON), min_periods=30
-    ).mean()
-
-    # Information Ratio hesaplama: mean_excess_return / tracking_error
-    df["information_ratio"] = np.where(
-        (tracking_error.isna()) | (tracking_error == 0) | (tracking_error < 1e-8),
-        0.0,
-        mean_excess_returns / tracking_error,
-    )
-    # logger.debug(f"buy_metin:\n{df['buy_metin'].tail(5)}")
-    # logger.debug(f"sell_metin:\n{df['sell_metin'].tail(5)}")
 
     return df
