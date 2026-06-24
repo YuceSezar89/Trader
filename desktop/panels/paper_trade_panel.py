@@ -406,18 +406,18 @@ class PaperTradePanel(QWidget):
         return None
 
     def _refresh_price_cells(self, symbol: str, live: float) -> None:
-        # Sembol + TF ile eşleşen tüm satırları bul (sıralama sonrası doğru index için)
-        row_data = {row["interval"]: row for row in self._open_rows if row["symbol"] == symbol}
-        if not row_data:
+        id_to_row = {row["id"]: row for row in self._open_rows if row["symbol"] == symbol}
+        if not id_to_row:
             return
 
         for t_idx in range(self._open_table.rowCount()):
             sym_item = self._open_table.item(t_idx, 0)
-            tf_item  = self._open_table.item(t_idx, 2)
             if not sym_item or sym_item.text() != symbol:
                 continue
-            tf  = tf_item.text() if tf_item else ""
-            row = row_data.get(tf) or next(iter(row_data.values()))
+            trade_id = sym_item.data(Qt.ItemDataRole.UserRole)
+            row = id_to_row.get(trade_id)
+            if not row:
+                continue
 
             side  = row["signal_type"]
             entry = float(row["entry_price"])
@@ -561,6 +561,8 @@ class PaperTradePanel(QWidget):
 
             for c_idx, (text, sort_val) in enumerate(cell_data):
                 it = _NumItem(text, sort_val) if sort_val is not None else _item(text)
+                if c_idx == 0:
+                    it.setData(Qt.ItemDataRole.UserRole, row["id"])
                 if sl_danger:
                     it.setBackground(QColor("#3d1515"))
                 if c_idx == 1:

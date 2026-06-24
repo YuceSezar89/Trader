@@ -66,8 +66,24 @@ class PaperTradeManager:
         if not trigger(signal_data) or signal_id is None:
             return
 
+        symbol = signal_data.get("symbol", "")
+
         async with get_session() as session:
             try:
+                existing = await session.execute(
+                    select(PaperTrade.id).where(
+                        PaperTrade.strategy == self.strategy,
+                        PaperTrade.symbol == symbol,
+                        PaperTrade.status == "open",
+                    )
+                )
+                if existing.scalars().first() is not None:
+                    logger.info(
+                        "[PaperTrade][%s] %s için zaten açık pozisyon var, atlandı",
+                        self.strategy, symbol,
+                    )
+                    return
+
                 sig_result = await session.execute(
                     select(Signal).where(Signal.id == signal_id)
                 )
@@ -96,12 +112,12 @@ class PaperTradeManager:
                     if raw:
                         snap = _json.loads(raw)
                         rank_map = {item["symbol"]: item["rank"] for item in snap}
-                        rank_at_entry = rank_map.get(signal_data.get("symbol", ""))
+                        rank_at_entry = rank_map.get(symbol)
                 except Exception:
                     pass
 
                 recent_win_rate = await self._recent_win_rate(
-                    session, signal_data.get("symbol", ""), self.strategy
+                    session, symbol, self.strategy
                 )
 
                 opened_at = signal_data.get("opened_at") or datetime.utcnow()
@@ -113,7 +129,7 @@ class PaperTradeManager:
                 trade = PaperTrade(
                     signal_id=signal_id,
                     strategy=self.strategy,
-                    symbol=signal_data.get("symbol", ""),
+                    symbol=symbol,
                     signal_type=signal_data.get("signal_type", ""),
                     interval=signal_data.get("interval", ""),
                     position_usd=POSITION_USD,
