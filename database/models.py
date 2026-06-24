@@ -98,8 +98,9 @@ class Signal(Base):
     is_confluence      = Column(Boolean, nullable=True, default=False)
     trailing_stop_price = Column(Float, nullable=True)
 
-    sortino_ratio   = Column(Float, nullable=True)
-    calmar_ratio    = Column(Float, nullable=True)
+    sortino_ratio      = Column(Float, nullable=True)
+    calmar_ratio       = Column(Float, nullable=True)
+    information_ratio  = Column(Float, nullable=True)
     vpmv_pre_avg    = Column(Float, nullable=True)
     vpmv_ratio      = Column(Float, nullable=True)
     vpmv_slope      = Column(Float, nullable=True)
