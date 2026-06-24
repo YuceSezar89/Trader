@@ -14,6 +14,9 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
+from zoneinfo import ZoneInfo
+
+_IST = ZoneInfo("Europe/Istanbul")
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -111,7 +114,7 @@ class SignalLifecycleManager:
                         interval          = interval,
                         indicators        = indicators,
                         signal_type       = sig_type,
-                        opened_at         = signal_data.get("opened_at", datetime.now()),
+                        opened_at         = signal_data.get("opened_at", datetime.now(_IST)),
                         open_price        = open_price,
                         status            = "active",
                         vpms_score        = signal_data.get("vpms_score"),
@@ -164,7 +167,7 @@ class SignalLifecycleManager:
                 )
                 actives = result.scalars().all()
 
-                now = datetime.now()
+                now = datetime.now(_IST)
                 for sig in actives:
                     hours = TIMEOUT_HOURS.get(sig.interval, _DEFAULT_TIMEOUT)
                     if sig.opened_at < now - timedelta(hours=hours):
@@ -252,7 +255,7 @@ class SignalLifecycleManager:
         reason: str,
     ) -> None:
         sig.status       = "closed"
-        sig.closed_at    = datetime.now()
+        sig.closed_at    = datetime.now(_IST)
         sig.close_price  = close_price
         sig.close_reason = reason
         sig.realized_pnl = _calc_pnl(sig.signal_type, float(sig.open_price), close_price)

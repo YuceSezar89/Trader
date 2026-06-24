@@ -14,6 +14,13 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import TIMESTAMP as PG_TIMESTAMP
 from sqlalchemy.orm import DeclarativeBase, relationship
 from datetime import datetime
+from zoneinfo import ZoneInfo
+
+_IST = ZoneInfo("Europe/Istanbul")
+
+
+def _now_ist() -> datetime:
+    return datetime.now(_IST)
 
 
 # SQLAlchemy 2.0 stili, mypy ve linter uyumluluğu için
@@ -59,7 +66,7 @@ class Signal(Base):
     indicators   = Column(String, nullable=False)
     signal_type  = Column(String, nullable=False)
 
-    opened_at    = Column(DateTime, nullable=False, default=datetime.now)
+    opened_at    = Column(DateTime, nullable=False, default=_now_ist)
     open_price   = Column(Float, nullable=False)
 
     vpms_score   = Column(Float, nullable=True)
@@ -127,7 +134,7 @@ class PaperTrade(Base):
 
     status          = Column(String(20), nullable=False, default="open")
     close_reason    = Column(String(50), nullable=True)
-    opened_at       = Column(PG_TIMESTAMP(timezone=True), nullable=False, default=datetime.now)
+    opened_at       = Column(PG_TIMESTAMP(timezone=True), nullable=False, default=_now_ist)
     closed_at       = Column(PG_TIMESTAMP(timezone=True), nullable=True)
 
     # ML snapshot
@@ -168,4 +175,4 @@ class PaperPortfolio(Base):
     total_trades     = Column(Integer, nullable=False, default=0)
     winning_trades   = Column(Integer, nullable=False, default=0)
     total_pnl_usd    = Column(Float, nullable=False, default=0.0)
-    updated_at       = Column(PG_TIMESTAMP(timezone=True), nullable=False, default=datetime.now)
+    updated_at       = Column(PG_TIMESTAMP(timezone=True), nullable=False, default=_now_ist)
