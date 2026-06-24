@@ -298,6 +298,19 @@ async def process_and_enrich_signals(
                 except Exception:  # pylint: disable=broad-exception-caught
                     pass
 
+                # CVD slope (deneysel — sadece log, hiçbir filtreye bağlı değil)
+                try:
+                    _cvd_hl  = (df["high"] - df["low"]).clip(lower=1e-8)
+                    _cvd_bv  = df["volume"] * (df["close"] - df["low"]) / _cvd_hl
+                    _cvd     = (2 * _cvd_bv - df["volume"]).cumsum()
+                    _cvd_slope = round(float(_cvd.diff().rolling(10).mean().iloc[-1]), 4)
+                    logger.info(
+                        "CVD | %s | %s | %s | slope=%.4f",
+                        symbol, sig_type, interval, _cvd_slope,
+                    )
+                except Exception:  # pylint: disable=broad-exception-caught
+                    pass
+
                 # 4. Minimum skor filtresi (B kapısı)
                 if vpms_score is not None and vpms_score < min_vpmv:
                     logger.info(
