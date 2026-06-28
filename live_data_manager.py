@@ -19,6 +19,7 @@ from utils.exceptions import BinanceAPIError
 from indicators.core import add_all_indicators
 from database.crud import (
     bulk_insert_price_data,
+    bulk_insert_price_data_multi,
     get_cagg_klines,
     get_last_timestamp,
     get_oldest_timestamp,
@@ -37,7 +38,9 @@ from utils.redis_client import RedisClient
 
 # MTF init/refresh için ayrı thread pool — default executor'ı (WS sinyalleri) bloklamaz
 _MTF_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=12, thread_name_prefix="mtf_init")
-_TICK_TF_WHITELIST = {'1m', '5m', '15m', '30m'}
+_TICK_TF_WHITELIST = {'1m', '5m', '15m', '30m', '1h', '4h', '6h', '8h', '12h', '1d'}
+_TICK_THROTTLE_SECS = {'1m': 2, '5m': 2, '15m': 2, '30m': 2,
+                       '1h': 30, '4h': 60, '6h': 60, '8h': 60, '12h': 120, '1d': 120}
 
 
 def setup_logging():
@@ -310,8 +313,7 @@ class LiveDataManager:
                 await self._flush_batch_buffer()
 
     async def _flush_batch_buffer(self):
-        """Buffer'daki tüm kline verilerini veritabanına toplu olarak yazar."""
-
+        """Buffer'daki tüm kline verilerini tek transaction'da yazar."""
         if not self.kline_buffer:
             return
 
@@ -320,30 +322,10 @@ class LiveDataManager:
         self.last_flush_time = time.time()
 
         try:
-            # Verileri symbol'e göre grupla
-            symbol_groups = {}
-            for kline in buffer_copy:
-                symbol = kline["symbol"]
-                if symbol not in symbol_groups:
-                    symbol_groups[symbol] = []
-                symbol_groups[symbol].append(kline)
-
-            # Her symbol için ayrı ayrı batch insert
-            for symbol, klines in symbol_groups.items():
-                df = pd.DataFrame(klines)
-                # symbol ve interval kolonlarını kaldır (bulk_insert_price_data bunları beklemez)
-                df = df.drop(["symbol", "interval"], axis=1)
-
-                async with self.db_lock:
-                    await bulk_insert_price_data(symbol, df, interval=self.interval)
-
-                logger.info(
-                    f"[{symbol}] {len(klines)} adet kline toplu olarak veritabanına kaydedildi."
-                )
-
-        except Exception as e:
-            logger.error(f"Batch insert hatası: {e}", exc_info=True)
-            # Hata durumunda verileri tekrar buffer'a ekle
+            async with self.db_lock:
+                await bulk_insert_price_data_multi(buffer_copy)
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.error("Batch flush hatası: %s", e, exc_info=True)
             async with self.buffer_lock:
                 self.kline_buffer.extend(buffer_copy)
 
@@ -438,7 +420,8 @@ class LiveDataManager:
                             return
                         tick_key = f"{symbol}:{interval}"
                         now = time.time()
-                        if now - self._tick_last_sent.get(tick_key, 0) >= 2.0:
+                        throttle = _TICK_THROTTLE_SECS.get(interval, 2)
+                        if now - self._tick_last_sent.get(tick_key, 0) >= throttle:
                             self._tick_last_sent[tick_key] = now
                             asyncio.run_coroutine_threadsafe(
                                 self._handle_tick(symbol, interval, kline), self.loop
@@ -454,11 +437,15 @@ class LiveDataManager:
     async def _handle_tick(self, symbol: str, interval: str, kline_data: Dict) -> None:
         """Açık mumu kapalı buffer'a ekleyerek Redis'e yazar ve pub/sub tetikler."""
         try:
+            if interval == "1m":
+                self._last_prices[symbol] = float(kline_data["c"])
+
             if symbol not in self.mtf_buffers or interval not in self.mtf_buffers[symbol]:
                 return
             buf = self.mtf_buffers[symbol][interval]
             if buf.empty:
                 return
+            _tbv = float(kline_data["V"])
             tick_row = {
                 "open_time": int(kline_data["t"]),
                 "open": float(kline_data["o"]),
@@ -469,8 +456,10 @@ class LiveDataManager:
                 "close_time": int(kline_data["T"]),
                 "quote_asset_volume": float(kline_data["q"]),
                 "number_of_trades": int(kline_data["n"]),
-                "taker_buy_base_asset_volume": float(kline_data["V"]),
+                "taker_buy_base_asset_volume": _tbv,
                 "taker_buy_quote_asset_volume": float(kline_data["Q"]),
+                "buy_volume": _tbv,
+                "sell_volume": float(kline_data["v"]) - _tbv,
             }
             limit = self.mtf_buffer_limits.get(interval, 100)
             tick_open_time = tick_row["open_time"]
@@ -481,9 +470,6 @@ class LiveDataManager:
             await RedisClient.set_mtf_klines(symbol, interval, merged)
             await RedisClient.publish_kline_update(symbol, interval)
             logger.debug("[%s] %s tick Redis'e yazıldı", symbol, interval)
-
-            if interval == "1m":
-                self._last_prices[symbol] = float(kline_data["c"])
 
         except Exception as e:  # pylint: disable=broad-exception-caught
             logger.debug("[%s] %s tick hatası: %s", symbol, interval, e)
@@ -499,6 +485,7 @@ class LiveDataManager:
         """
         try:
             # Parse kline data
+            _tbv = float(kline_data["V"])
             new_row = {
                 "open_time": int(kline_data["t"]),
                 "open": float(kline_data["o"]),
@@ -509,8 +496,10 @@ class LiveDataManager:
                 "close_time": int(kline_data["T"]),
                 "quote_asset_volume": float(kline_data["q"]),
                 "number_of_trades": int(kline_data["n"]),
-                "taker_buy_base_asset_volume": float(kline_data["V"]),
+                "taker_buy_base_asset_volume": _tbv,
                 "taker_buy_quote_asset_volume": float(kline_data["Q"]),
+                "buy_volume": _tbv,
+                "sell_volume": float(kline_data["v"]) - _tbv,
             }
 
             # MTF buffer'a ekle (her timeframe için ayrı buffer)
@@ -802,20 +791,33 @@ class LiveDataManager:
         if not self.mtf_enabled:
             return
 
-        # ── Hızlı yükleme: gap dolmayan semboller Redis'ten buffer'a alınır (DB yok, hesap yok) ──
-        if reload_symbols is not None:
-            quick_symbols = [s for s in self.symbols if s not in reload_symbols]
-            if quick_symbols:
-                logger.info("[MTF] %d sembol Redis'ten hızlı yükleniyor...", len(quick_symbols))
-                for sym in quick_symbols:
-                    for tf in self.supported_timeframes:
-                        df = await RedisClient.get_mtf_klines(sym, tf)
-                        if df is not None and not df.empty:
-                            self.mtf_buffers[sym][tf] = df.tail(self.mtf_buffer_limits.get(tf, 1000))
-                logger.info("[MTF] Hızlı yükleme tamamlandı: %d sembol", len(quick_symbols))
-            symbols_to_reload = [s for s in self.symbols if s in reload_symbols]
-        else:
-            symbols_to_reload = list(self.symbols)
+        # ── Hızlı yükleme: TÜM semboller önce Redis'ten alınır ──────────────────────────────────
+        # Hem reload_symbols=None (ilk açılış) hem de reload_symbols=set durumunda çalışır.
+        # Redis'te yeterli veri (≥ limit/2) olan semboller chart'ta anında görünür.
+        min_bars_ratio = 0.5
+        redis_hit: set[str] = set()
+        logger.info("[MTF] %d sembol Redis cache hızlı yükleniyor...", len(self.symbols))
+
+        async def _load_from_redis(sym: str) -> tuple[str, bool]:
+            all_tf_ok = True
+            for tf in self.supported_timeframes:
+                limit = self.mtf_buffer_limits.get(tf, 250)
+                df = await RedisClient.get_mtf_klines(sym, tf, limit=limit)
+                if df is not None and len(df) >= limit * min_bars_ratio:
+                    self.mtf_buffers[sym][tf] = df.tail(limit)
+                else:
+                    all_tf_ok = False
+            return sym, all_tf_ok
+
+        redis_results = await asyncio.gather(*[_load_from_redis(s) for s in self.symbols])
+        for sym, ok in redis_results:
+            if ok:
+                redis_hit.add(sym)
+        logger.info("[MTF] Redis hızlı yükleme: %d/%d sembol tam yüklendi.", len(redis_hit), len(self.symbols))
+
+        # ── Batch yükleme: Redis'te eksik/yetersiz olanlar + zorla yenilenmesi gerekenler ────────
+        force_reload = reload_symbols if reload_symbols is not None else set()
+        symbols_to_reload = [s for s in self.symbols if s not in redis_hit or s in force_reload]
 
         if not symbols_to_reload:
             logger.info("🎉 MTF Batch Initialization tamamlandı! WebSocket canlı mod başlatılabilir.")

@@ -72,10 +72,11 @@ class RedisClient:
         loop_id = id(loop)
 
         if loop_id not in cls._binary_pools:
-            cls._binary_pools[loop_id] = redis.ConnectionPool.from_url(
+            cls._binary_pools[loop_id] = redis.BlockingConnectionPool.from_url(
                 Config.REDIS_URL,
                 decode_responses=False,
                 max_connections=100,
+                timeout=5,
                 socket_keepalive=True,
                 socket_connect_timeout=5,
             )

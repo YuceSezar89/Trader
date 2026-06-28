@@ -129,7 +129,11 @@ async def bulk_insert_price_data(symbol: str, df: pd.DataFrame, interval: Option
     if interval is not None:
         df_copy['interval'] = interval
     df_copy['timestamp'] = pd.to_datetime(df_copy['open_time'], unit='ms').dt.tz_localize('UTC').dt.tz_convert('Europe/Istanbul').dt.tz_localize(None)
-    
+
+    if 'taker_buy_base_asset_volume' in df_copy.columns:
+        df_copy['buy_volume']  = df_copy['taker_buy_base_asset_volume']
+        df_copy['sell_volume'] = df_copy['volume'] - df_copy['taker_buy_base_asset_volume']
+
     # Modele uygun sütunları seç ve 'open_time'ı hariç tut
     model_columns = [c.name for c in PriceData.__table__.columns]
     columns_to_keep = [col for col in df_copy.columns if col in model_columns]
@@ -175,6 +179,64 @@ async def bulk_insert_price_data(symbol: str, df: pd.DataFrame, interval: Option
         await session.commit()
         logger.info(f"[{symbol}] {total_inserted} adet fiyat verisi kaydedildi.")
 
+async def bulk_insert_price_data_multi(records: List[Dict[str, Any]]) -> int:
+    """Birden fazla sembolün kline satırlarını tek transaction'da yazar.
+
+    Her dict'te 'symbol', 'interval', 'open_time' ve OHLCV alanları olmalı.
+    """
+    if not records:
+        return 0
+
+    model_columns = {c.name for c in PriceData.__table__.columns}
+
+    df = pd.DataFrame(records)
+    df["timestamp"] = (
+        pd.to_datetime(df["open_time"], unit="ms")
+        .dt.tz_localize("UTC")
+        .dt.tz_convert("Europe/Istanbul")
+        .dt.tz_localize(None)
+    )
+    if "taker_buy_base_asset_volume" in df.columns:
+        df["buy_volume"]  = df["taker_buy_base_asset_volume"]
+        df["sell_volume"] = df["volume"] - df["taker_buy_base_asset_volume"]
+
+    cols = [c for c in df.columns if c in model_columns]
+    rows = df[cols].to_dict("records")
+
+    batch_size = 1000
+    total = 0
+    async with get_session() as session:
+        for i in range(0, len(rows), batch_size):
+            batch = rows[i : i + batch_size]
+            stmt = postgresql_insert(PriceData).values(batch)
+            update_dict = {
+                c.name: getattr(stmt.excluded, c.name)
+                for c in PriceData.__table__.columns
+                if not c.primary_key
+            }
+            stmt = stmt.on_conflict_do_update(
+                constraint="price_data_symbol_interval_timestamp_key",
+                set_=update_dict,
+            )
+            try:
+                await session.execute(stmt)
+                total += len(batch)
+            except Exception:  # pylint: disable=broad-exception-caught
+                await session.rollback()
+                for row in batch:
+                    try:
+                        s = postgresql_insert(PriceData).values([row])
+                        s = s.on_conflict_do_nothing(index_elements=["symbol", "timestamp"])
+                        await session.execute(s)
+                        await session.commit()
+                        total += 1
+                    except Exception:  # pylint: disable=broad-exception-caught
+                        await session.rollback()
+        await session.commit()
+    logger.info("bulk_insert_multi: %d satır yazıldı (%d sembol)", total, len({r.get('symbol') for r in records}))
+    return total
+
+
 async def save_price_data_batch(data_map: Dict[str, pd.DataFrame], interval: Optional[str] = None):
     """
     DataFrame haritasındaki fiyat verilerini toplu olarak kaydeder.
@@ -189,8 +251,11 @@ async def save_price_data_batch(data_map: Dict[str, pd.DataFrame], interval: Opt
         df_copy['symbol'] = symbol
         if interval is not None:
             df_copy['interval'] = interval
-        # open_time'dan Europe/Istanbul zaman dilimine göre formatlanmış string oluştur
         df_copy['timestamp'] = pd.to_datetime(df_copy['open_time'], unit='ms').dt.tz_localize('UTC').dt.tz_convert('Europe/Istanbul').dt.tz_localize(None)
+
+        if 'taker_buy_base_asset_volume' in df_copy.columns:
+            df_copy['buy_volume']  = df_copy['taker_buy_base_asset_volume']
+            df_copy['sell_volume'] = df_copy['volume'] - df_copy['taker_buy_base_asset_volume']
 
         # Sadece modelde olan sütunları tut
         model_columns = [c.name for c in PriceData.__table__.columns]
