@@ -9,18 +9,9 @@ from sqlalchemy import (
     PrimaryKeyConstraint,
     UniqueConstraint,
     ForeignKey,
-    ForeignKeyConstraint,
 )
-from sqlalchemy.dialects.postgresql import TIMESTAMP as PG_TIMESTAMP
 from sqlalchemy.orm import DeclarativeBase, relationship
 from datetime import datetime
-from zoneinfo import ZoneInfo
-
-_IST = ZoneInfo("Europe/Istanbul")
-
-
-def _now_ist() -> datetime:
-    return datetime.now(_IST)
 
 
 # SQLAlchemy 2.0 stili, mypy ve linter uyumluluğu için
@@ -49,7 +40,9 @@ class PriceData(Base):
     high = Column(Float)
     low = Column(Float)
     close = Column(Float)
-    volume = Column(Float)
+    volume     = Column(Float)
+    buy_volume  = Column(Float, nullable=True)
+    sell_volume = Column(Float, nullable=True)
 
     __table_args__ = (
         PrimaryKeyConstraint("symbol", "timestamp"),
@@ -66,7 +59,7 @@ class Signal(Base):
     indicators   = Column(String, nullable=False)
     signal_type  = Column(String, nullable=False)
 
-    opened_at    = Column(DateTime, nullable=False, default=_now_ist)
+    opened_at    = Column(DateTime, nullable=False, default=datetime.now)
     open_price   = Column(Float, nullable=False)
 
     vpms_score   = Column(Float, nullable=True)
@@ -106,6 +99,12 @@ class Signal(Base):
     vpmv_slope      = Column(Float, nullable=True)
     vpmv_post_avg   = Column(Float, nullable=True)
     vpmv_post_delta = Column(Float, nullable=True)
+    cvd_slope       = Column(Float, nullable=True)
+    vp_buy_avg      = Column(Float, nullable=True)
+    vp_sell_avg     = Column(Float, nullable=True)
+    vp_score        = Column(Float, nullable=True)
+    deviso_score    = Column(Float, nullable=True)
+    deviso_delta    = Column(Float, nullable=True)
 
     paper_trades = relationship("PaperTrade", back_populates="signal", lazy="noload")
 
@@ -135,8 +134,8 @@ class PaperTrade(Base):
 
     status          = Column(String(20), nullable=False, default="open")
     close_reason    = Column(String(50), nullable=True)
-    opened_at       = Column(PG_TIMESTAMP(timezone=True), nullable=False, default=_now_ist)
-    closed_at       = Column(PG_TIMESTAMP(timezone=True), nullable=True)
+    opened_at       = Column(DateTime, nullable=False, default=datetime.now)
+    closed_at       = Column(DateTime, nullable=True)
 
     # ML snapshot
     btc_z_score     = Column(Float, nullable=True)
@@ -160,6 +159,10 @@ class PaperTrade(Base):
     vpmv_slope      = Column(Float, nullable=True)
     vpmv_post_avg   = Column(Float, nullable=True)
     vpmv_post_delta = Column(Float, nullable=True)
+    cvd_slope       = Column(Float, nullable=True)
+    vp_buy_avg      = Column(Float, nullable=True)
+    vp_sell_avg     = Column(Float, nullable=True)
+    vp_score        = Column(Float, nullable=True)
 
     signal = relationship("Signal", back_populates="paper_trades", lazy="noload")
 
@@ -176,4 +179,4 @@ class PaperPortfolio(Base):
     total_trades     = Column(Integer, nullable=False, default=0)
     winning_trades   = Column(Integer, nullable=False, default=0)
     total_pnl_usd    = Column(Float, nullable=False, default=0.0)
-    updated_at       = Column(PG_TIMESTAMP(timezone=True), nullable=False, default=_now_ist)
+    updated_at       = Column(DateTime, nullable=False, default=datetime.now)

@@ -14,9 +14,6 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
-from zoneinfo import ZoneInfo
-
-_IST = ZoneInfo("Europe/Istanbul")
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -109,12 +106,20 @@ class SignalLifecycleManager:
                     else:
                         sl_price = tp_price = sl_mult = tp_mult = None
 
+                    new_deviso = signal_data.get("deviso_score")
+                    prev_deviso = await self._get_prev_deviso(session, symbol, interval, sig_type)
+                    deviso_delta = (
+                        round(new_deviso - prev_deviso, 2)
+                        if new_deviso is not None and prev_deviso is not None
+                        else None
+                    )
+
                     new_sig = Signal(
                         symbol            = symbol,
                         interval          = interval,
                         indicators        = indicators,
                         signal_type       = sig_type,
-                        opened_at         = signal_data.get("opened_at", datetime.now(_IST)),
+                        opened_at         = signal_data.get("opened_at", datetime.now()),
                         open_price        = open_price,
                         status            = "active",
                         vpms_score        = signal_data.get("vpms_score"),
@@ -139,6 +144,12 @@ class SignalLifecycleManager:
                         vpmv_pre_avg      = signal_data.get("vpmv_pre_avg"),
                         vpmv_slope        = signal_data.get("vpmv_slope"),
                         vpmv_ratio        = signal_data.get("vpmv_ratio"),
+                        cvd_slope         = signal_data.get("cvd_slope"),
+                        vp_buy_avg        = signal_data.get("vp_buy_avg"),
+                        vp_sell_avg       = signal_data.get("vp_sell_avg"),
+                        vp_score          = signal_data.get("vp_score"),
+                        deviso_score      = new_deviso,
+                        deviso_delta      = deviso_delta,
                     )
                     session.add(new_sig)
                     await session.flush()
@@ -168,10 +179,13 @@ class SignalLifecycleManager:
                 )
                 actives = result.scalars().all()
 
-                now = datetime.now(_IST)
+                now = datetime.now()
                 for sig in actives:
                     hours = TIMEOUT_HOURS.get(sig.interval, _DEFAULT_TIMEOUT)
-                    if sig.opened_at < now - timedelta(hours=hours):
+                    opened = sig.opened_at
+                    if isinstance(opened, datetime) and opened.tzinfo is not None:
+                        opened = opened.replace(tzinfo=None)
+                    if now - opened > timedelta(hours=hours):
                         await self._close(session, sig, float(sig.open_price), "timeout")
                         closed += 1
 
@@ -226,6 +240,20 @@ class SignalLifecycleManager:
                 logger.error("Manuel kapatma hatası: %s", exc, exc_info=True)
                 return False
 
+    async def _get_prev_deviso(
+        self, session: AsyncSession, symbol: str, interval: str, signal_type: str
+    ) -> Optional[float]:
+        result = await session.execute(
+            select(Signal.deviso_score).where(
+                Signal.symbol      == symbol,
+                Signal.interval    == interval,
+                Signal.signal_type == signal_type,
+                Signal.deviso_score.isnot(None),
+            ).order_by(Signal.id.desc()).limit(1)
+        )
+        row = result.scalar_one_or_none()
+        return float(row) if row is not None else None
+
     async def _get_active(
         self, session: AsyncSession, symbol: str, interval: str
     ) -> Optional[Signal]:
@@ -256,7 +284,7 @@ class SignalLifecycleManager:
         reason: str,
     ) -> None:
         sig.status       = "closed"
-        sig.closed_at    = datetime.now(_IST)
+        sig.closed_at    = datetime.now()
         sig.close_price  = close_price
         sig.close_reason = reason
         sig.realized_pnl = _calc_pnl(sig.signal_type, float(sig.open_price), close_price)

@@ -1,0 +1,1 @@
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS deviso_score FLOAT;

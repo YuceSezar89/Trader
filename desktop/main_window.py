@@ -6,21 +6,18 @@ Dockable panel layout, menü/toolbar/status bar barındırır.
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSlot
-from PyQt6.QtGui import QAction, QFont, QKeySequence
+from PyQt6.QtGui import QAction, QKeySequence
 from PyQt6.QtWidgets import (
-    QApplication,
     QComboBox,
     QDockWidget,
     QLabel,
     QLineEdit,
     QMainWindow,
     QPushButton,
-    QStatusBar,
     QToolBar,
     QWidget,
 )
@@ -29,12 +26,15 @@ from desktop.panels.active_signals_panel import ActiveSignalsPanel
 from desktop.panels.chart_panel import ChartPanel
 from desktop.panels.divergence_panel import DivergencePanel
 from desktop.panels.paper_trade_panel import PaperTradePanel
+from desktop.panels.vpmv_divergence_panel import VpmvDivergencePanel
+from desktop.panels.deviso_panel import DevisoPanel
 from desktop.panels.ranking_panel import RankingPanel
 from desktop.panels.watchlist_panel import WatchlistPanel
 from desktop.theme import COLORS
 from desktop.widgets.log_panel import LogPanel
 from desktop.workers.divergence_worker import DivergenceWorker
 from desktop.workers.health_worker import HealthWorker, ServiceStatus
+from desktop.workers.vpmv_worker import VpmvWorker
 from desktop.workers.market_worker import MarketWorker
 from desktop.workers.signal_worker import SignalWorker
 
@@ -273,6 +273,17 @@ class MainWindow(QMainWindow):
         self._add_panel_toggle(divergence_dock)
         self._docks["divergence"] = divergence_dock
 
+        # ── VPMV Ayrışma paneli (sağ tabified) ────────────────────────────
+        self._vpmv_panel = VpmvDivergencePanel(self)
+        vpmv_dock = QDockWidget("VPMV Ayrışma", self)
+        vpmv_dock.setObjectName("dock_vpmv")
+        vpmv_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        vpmv_dock.setWidget(self._vpmv_panel)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, vpmv_dock)
+        self.tabifyDockWidget(chart_dock, vpmv_dock)
+        self._add_panel_toggle(vpmv_dock)
+        self._docks["vpmv"] = vpmv_dock
+
         # ── Güç Sıralaması paneli (sağ tabified) ──────────────────────────
         self._ranking_panel = RankingPanel(redis_url, self)
         ranking_dock = QDockWidget("Güç Sıralaması", self)
@@ -283,6 +294,17 @@ class MainWindow(QMainWindow):
         self.tabifyDockWidget(chart_dock, ranking_dock)
         self._add_panel_toggle(ranking_dock)
         self._docks["ranking"] = ranking_dock
+
+        # ── Deviso Sıralama paneli (sağ tabified) ─────────────────────────
+        self._deviso_panel = DevisoPanel(self)
+        deviso_dock = QDockWidget("Deviso Sırala", self)
+        deviso_dock.setObjectName("dock_deviso")
+        deviso_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        deviso_dock.setWidget(self._deviso_panel)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, deviso_dock)
+        self.tabifyDockWidget(chart_dock, deviso_dock)
+        self._add_panel_toggle(deviso_dock)
+        self._docks["deviso"] = deviso_dock
 
         # ── Paper Trade paneli (alt, tabified) ────────────────────────────
         self._paper_trade_panel = PaperTradePanel(db_cfg, redis_url, self)
@@ -413,6 +435,20 @@ class MainWindow(QMainWindow):
         )
         self._divergence_worker.start()
         self._workers.append(self._divergence_worker)
+
+        # VPMV worker — sinyal sonrası VPMV momentum ayrışması
+        self._vpmv_worker = VpmvWorker(redis_url, parent=self)
+        self._vpmv_worker.vpmv_updated.connect(self._vpmv_panel.on_vpmv_updated)
+        self._vpmv_worker.status_updated.connect(self._vpmv_panel.on_status_updated)
+        self._signal_worker.signals_loaded.connect(self._vpmv_worker.set_symbols)
+        self._signal_worker.new_signal.connect(self._vpmv_worker.add_symbol)
+        self._vpmv_worker.start()
+        self._workers.append(self._vpmv_worker)
+
+        # Deviso panel — signals_loaded/new_signal/signals_closed ile beslenir
+        self._signal_worker.signals_loaded.connect(self._deviso_panel.on_signals_loaded)
+        self._signal_worker.new_signal.connect(self._deviso_panel.on_new_signal)
+        self._signal_worker.signals_closed.connect(self._deviso_panel.on_signals_closed)
 
     # ── Slot'lar ──────────────────────────────────────────────────────────
 

@@ -5,7 +5,7 @@ Alt: açık pozisyonlar tablosu + kapalı işlem geçmişi
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 import json
@@ -46,7 +46,16 @@ class _FetchWorker(QThread):
         try:
             conn = psycopg2.connect(**self._db_config)
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute("SELECT * FROM paper_portfolio WHERE strategy = 'conf_100'")
+                cur.execute("""
+                    SELECT
+                        COUNT(*) FILTER (WHERE status = 'closed') AS total_trades,
+                        COUNT(*) FILTER (WHERE status = 'closed' AND pnl_pct > 0) AS winning_trades,
+                        COALESCE(SUM(pnl_usd) FILTER (WHERE status = 'closed'), 0) AS total_pnl_usd,
+                        10000 + COALESCE(SUM(pnl_usd) FILTER (WHERE status = 'closed'), 0) AS balance,
+                        10000 AS initial_balance,
+                        0 AS max_drawdown_pct
+                    FROM paper_trades
+                """)
                 pf = dict(cur.fetchone()) if cur.rowcount else None
 
                 cur.execute("""
@@ -76,21 +85,21 @@ class _FetchWorker(QThread):
             import logging
             logging.getLogger(__name__).error("[PaperTradePanel] fetch hatası: %s", exc, exc_info=True)
 
-OPEN_COLS  = ["Sembol", "Yön", "TF", "Strateji", "Giriş$", "Fiyat$", "P&L$", "P&L%", "SL%", "TP%", "Trail$", "VPMS", "Süre"]
+OPEN_COLS  = ["Sembol", "Yön", "TF", "Strateji", "Giriş$", "Fiyat$", "P&L$", "P&L%", "SL%", "TP%", "Trail$", "VPMV", "Süre"]
 HIST_COLS  = ["Sembol", "Yön", "TF", "Strateji", "Giriş$", "Çıkış$", "P&L$", "P&L%", "Neden", "Kapatma"]
 
 
 def _age(dt: datetime | None) -> str:
     if dt is None:
         return "—"
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    secs = int((datetime.now(timezone.utc) - dt).total_seconds())
+    if dt.tzinfo is not None:
+        dt = dt.replace(tzinfo=None)
+    secs = max(0, int((datetime.now() - dt).total_seconds()))
     if secs < 60:
         return f"{secs}s"
     if secs < 3600:
         return f"{secs // 60}dk"
-    return f"{secs // 3600}s{(secs % 3600) // 60}dk"
+    return f"{secs // 3600}s {(secs % 3600) // 60}dk"
 
 
 def _pnl_color(val: float | None) -> QColor:
@@ -186,6 +195,14 @@ class PaperTradePanel(QWidget):
                   self._lbl_drawdown, self._lbl_open]:
             summary.addWidget(w)
         summary.addStretch()
+
+        self._pt_toggle_btn = QPushButton("● PT: Aktif")
+        self._pt_toggle_btn.setFixedWidth(110)
+        self._pt_toggle_btn.setCheckable(False)
+        self._pt_toggle_btn.clicked.connect(self._toggle_paper_trade)
+        summary.addWidget(self._pt_toggle_btn)
+        self._sync_pt_button()
+
         root.addLayout(summary)
 
         # ── Tab widget ──
@@ -274,6 +291,38 @@ class PaperTradePanel(QWidget):
         self._tabs.addTab(open_widget, "Açık Pozisyonlar")
         self._tabs.addTab(hist_widget, "Kapalı İşlemler")
         root.addWidget(self._tabs, stretch=1)
+
+    def _is_pt_enabled(self) -> bool:
+        if self._redis is None:
+            return True
+        try:
+            val = self._redis.get("settings:paper_trade_enabled")
+            return val != b"0"
+        except Exception:  # pylint: disable=broad-exception-caught
+            return True
+
+    def _sync_pt_button(self) -> None:
+        enabled = self._is_pt_enabled()
+        if enabled:
+            self._pt_toggle_btn.setText("⏸ PT Durdur")
+            self._pt_toggle_btn.setStyleSheet(
+                f"color: {COLORS['text_primary']}; font-weight: bold;"
+            )
+        else:
+            self._pt_toggle_btn.setText("▶ PT Başlat")
+            self._pt_toggle_btn.setStyleSheet(
+                f"color: {COLORS['green']}; font-weight: bold;"
+            )
+
+    def _toggle_paper_trade(self) -> None:
+        if self._redis is None:
+            return
+        try:
+            enabled = self._is_pt_enabled()
+            self._redis.set("settings:paper_trade_enabled", "0" if enabled else "1")
+            self._sync_pt_button()
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
 
     def _stat_label(self, title: str, value: str) -> QLabel:
         box = QWidget()
@@ -592,8 +641,8 @@ class PaperTradePanel(QWidget):
             pnl_usd = float(row["pnl_usd"]) if row["pnl_usd"] else 0.0
             pnl_pct = float(row["pnl_pct"]) if row["pnl_pct"] else 0.0
             closed  = row["closed_at"]
-            if isinstance(closed, datetime) and closed.tzinfo is None:
-                closed = closed.replace(tzinfo=timezone.utc)
+            if isinstance(closed, datetime) and closed.tzinfo is not None:
+                closed = closed.replace(tzinfo=None)
             src         = row.get("source", "signal")
             strat       = row.get("strategy", "")
             strat_label = "✋ " + strat if src == "manual" else strat

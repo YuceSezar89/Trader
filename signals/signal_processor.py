@@ -131,43 +131,68 @@ def _compute_vpmv_scores(df: pd.DataFrame, signal_type: str) -> tuple[float, flo
     return vol_score, momentum_score, vlt_score, price_score
 
 
-def _compute_vp_bullish(df: pd.DataFrame, lookback: int = 200) -> bool:
+def _compute_deviso_score(df: pd.DataFrame) -> Optional[float]:
     """
-    Pine Script VP indikatörü mantığı:
-    buyPositiveAvg > sellNegativeAvg ise bullish (Long için konfirmasyon).
+    ΔRSI(14) / Δprice% → EMA(7) → percentile rank (son 100 bar) → 0-100.
+    Percentile rank sayesinde timeframe ve coin bağımsız karşılaştırılabilir.
     """
     try:
+        if len(df) < 30:
+            return None
+        close = df["close"].astype(float)
+        rsi = calculate_rsi(df, period=14)
+        price_pct = close.pct_change() * 100.0
+        raw = rsi.diff() / price_pct.replace(0.0, np.nan)
+        smoothed = raw.ewm(span=7, adjust=False).mean()
+        valid = smoothed.dropna()
+        if len(valid) < 20:
+            return None
+        recent = valid.iloc[-100:]
+        current = float(valid.iloc[-1])
+        rank = float((recent < current).sum()) / len(recent)
+        return round(rank * 100.0, 2)
+    except Exception:  # pylint: disable=broad-exception-caught
+        return None
+
+
+def _compute_vp_score(df: pd.DataFrame, lookback: int = 500) -> tuple[float, float]:
+    """
+    %VP Normalized Lines — PineScript birebir çeviri.
+
+    PineScript ta.cum() → Python cumsum() (DataFrame başından itibaren)
+    Normalize: rolling(lookback).min/max — PineScript ta.lowest/highest(lookback)
+
+    Returns: (buy_positive_avg, sell_negative_avg) — her ikisi 0-100 arası
+    vp_score = buy_positive_avg - sell_negative_avg  →  pozitif: alıcı baskısı
+    """
+    try:
+        price_change = df["close"].diff().fillna(0.0)
+        cum_positive = price_change.clip(lower=0.0).cumsum()
+        cum_negative = (-price_change).clip(lower=0.0).cumsum()
+        total_move   = (cum_positive + cum_negative).replace(0, np.nan)
+        positive_pct = (cum_positive / total_move * 100).fillna(50.0)
+        negative_pct = (cum_negative / total_move * 100).fillna(50.0)
+
         hl_range = (df["high"] - df["low"]).clip(lower=1e-8)
         bv = df["volume"] * (df["close"] - df["low"]) / hl_range
         sv = df["volume"] * (df["high"] - df["close"]) / hl_range
-
-        win = min(len(df), lookback)
-        cum_buy  = bv.rolling(win, min_periods=1).sum()
-        cum_sell = sv.rolling(win, min_periods=1).sum()
+        cum_buy  = bv.cumsum()
+        cum_sell = sv.cumsum()
         total_vol = (cum_buy + cum_sell).replace(0, np.nan)
         buy_pct  = (cum_buy  / total_vol * 100).fillna(50.0)
         sell_pct = (cum_sell / total_vol * 100).fillna(50.0)
 
-        price_diff = df["close"].diff().fillna(0.0)
-        pos_move = price_diff.clip(lower=0.0)
-        neg_move = (-price_diff).clip(lower=0.0)
-        cum_pos  = pos_move.rolling(win, min_periods=1).sum()
-        cum_neg  = neg_move.rolling(win, min_periods=1).sum()
-        total_move = (cum_pos + cum_neg).replace(0, np.nan)
-        pos_pct  = (cum_pos / total_move * 100).fillna(50.0)
-        neg_pct  = (cum_neg / total_move * 100).fillna(50.0)
+        def _norm(s: pd.Series) -> pd.Series:
+            lo = s.rolling(lookback, min_periods=1).min()
+            hi = s.rolling(lookback, min_periods=1).max()
+            return ((s - lo) / (hi - lo + 1e-10) * 100).fillna(50.0)
 
-        def _norm(series: pd.Series) -> pd.Series:
-            lo = series.rolling(50, min_periods=1).min()
-            hi = series.rolling(50, min_periods=1).max()
-            return ((series - lo) / (hi - lo + 1e-10) * 100).fillna(50.0)
+        buy_pos_avg  = (_norm(buy_pct)  + _norm(positive_pct)) / 2
+        sell_neg_avg = (_norm(sell_pct) + _norm(negative_pct)) / 2
 
-        buy_pos_avg  = (_norm(buy_pct)  + _norm(pos_pct))  / 2
-        sell_neg_avg = (_norm(sell_pct) + _norm(neg_pct))  / 2
-
-        return bool(buy_pos_avg.iloc[-1] > sell_neg_avg.iloc[-1])
+        return round(float(buy_pos_avg.iloc[-1]), 2), round(float(sell_neg_avg.iloc[-1]), 2)
     except Exception:
-        return True  # hata durumunda filtreyi devre dışı bırak
+        return 50.0, 50.0
 
 
 async def process_and_enrich_signals(
@@ -207,7 +232,7 @@ async def process_and_enrich_signals(
             ref_df_prepared = ref_df.copy()
             ref_df_prepared.index = pd.Index(pd.to_datetime(ref_df_prepared["open_time"], unit="ms"))
 
-            df_with_metrics = calculate_metrics(df_prepared, ref_df_prepared)
+            df_with_metrics = calculate_metrics(df_prepared, ref_df_prepared, interval=interval)
             latest_metrics = df_with_metrics.iloc[-1].to_dict()
             alpha = latest_metrics.get("alpha")
             beta = latest_metrics.get("beta")
@@ -298,12 +323,19 @@ async def process_and_enrich_signals(
                 except Exception:  # pylint: disable=broad-exception-caught
                     pass
 
-                # CVD slope (deneysel — sadece log, hiçbir filtreye bağlı değil)
+                # CVD slope (normalize, -1..+1)
+                _cvd_slope: Optional[float] = None
                 try:
-                    _cvd_hl  = (df["high"] - df["low"]).clip(lower=1e-8)
-                    _cvd_bv  = df["volume"] * (df["close"] - df["low"]) / _cvd_hl
-                    _cvd     = (2 * _cvd_bv - df["volume"]).cumsum()
-                    _cvd_slope = round(float(_cvd.diff().rolling(10).mean().iloc[-1]), 4)
+                    if "buy_volume" in df.columns and df["buy_volume"].notna().any():
+                        _bv = df["buy_volume"].fillna(
+                            df["volume"] * (df["close"] - df["low"]) / (df["high"] - df["low"]).clip(lower=1e-8)
+                        )
+                    else:
+                        _cvd_hl = (df["high"] - df["low"]).clip(lower=1e-8)
+                        _bv = df["volume"] * (df["close"] - df["low"]) / _cvd_hl
+                    _cvd      = (2 * _bv - df["volume"]).cumsum()
+                    _avg_vol  = df["volume"].rolling(10).mean().clip(lower=1e-8)
+                    _cvd_slope = round(float((_cvd.diff().rolling(10).mean() / _avg_vol).iloc[-1]), 4)
                     logger.info(
                         "CVD | %s | %s | %s | slope=%.4f",
                         symbol, sig_type, interval, _cvd_slope,
@@ -434,6 +466,24 @@ async def process_and_enrich_signals(
                 enriched_signal["vpmv_pre_avg"] = _vpmv_pre_avg
                 enriched_signal["vpmv_slope"]   = _vpmv_slope
                 enriched_signal["vpmv_ratio"]   = _vpmv_ratio
+                enriched_signal["cvd_slope"]    = _cvd_slope
+
+                _deviso = _compute_deviso_score(df)
+                enriched_signal["deviso_score"] = _deviso
+                logger.info(
+                    "DEVISO | %s | %s | %s | score=%s",
+                    symbol, sig_type, interval, _deviso,
+                )
+
+                _vp_buy, _vp_sell = _compute_vp_score(df)
+                _vp_score = round(_vp_buy - _vp_sell, 2)
+                enriched_signal["vp_buy_avg"]  = _vp_buy
+                enriched_signal["vp_sell_avg"] = _vp_sell
+                enriched_signal["vp_score"]    = _vp_score
+                logger.info(
+                    "VP | %s | %s | %s | buy=%.1f sell=%.1f score=%.1f",
+                    symbol, sig_type, interval, _vp_buy, _vp_sell, _vp_score,
+                )
 
                 logger.info(f"[{symbol}] Sinyal işleniyor: {signal_name} - {sig_type}")
                 signal_id = await signal_lifecycle_manager.process(enriched_signal, current_price=current_price)
@@ -462,10 +512,12 @@ async def process_and_enrich_signals(
                         regime_trend=regime_trend,
                         volatility_regime=volatility_regime,
                     )
-                    if is_confluence:
-                        await paper_trade_manager.on_new_signal(**_pt_kwargs)
-                    await ha_cross_manager.on_new_signal(**_pt_kwargs)
-                    await rsi_15m_manager.on_new_signal(**_pt_kwargs)
+                    _pt_flag = await RedisClient.get_client().get("settings:paper_trade_enabled")
+                    if _pt_flag != b"0":
+                        if is_confluence:
+                            await paper_trade_manager.on_new_signal(**_pt_kwargs)
+                        await ha_cross_manager.on_new_signal(**_pt_kwargs)
+                        await rsi_15m_manager.on_new_signal(**_pt_kwargs)
 
             except Exception as e:
                 logger.error(f"[{symbol}] Sinyal kayıt hatası: {e}", exc_info=True)
