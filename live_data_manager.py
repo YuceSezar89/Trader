@@ -468,7 +468,6 @@ class LiveDataManager:
                 [base, pd.DataFrame([tick_row])], ignore_index=True
             ).tail(limit)
             await RedisClient.set_mtf_klines(symbol, interval, merged)
-            await RedisClient.publish_kline_update(symbol, interval)
             logger.debug("[%s] %s tick Redis'e yazıldı", symbol, interval)
 
         except Exception as e:  # pylint: disable=broad-exception-caught
@@ -567,6 +566,7 @@ class LiveDataManager:
                             ref_df=ref_df,
                             interval=interval,
                             oi_data=oi_data_json,
+                            symbol_buffers=self.mtf_buffers.get(symbol, {}),
                         )
                     )
                     self.processing_tasks.add(task)
@@ -679,6 +679,7 @@ class LiveDataManager:
                 ref_df=ref_df.copy(),
                 interval=self.interval,
                 oi_data=oi_data_json,
+                symbol_buffers=self.mtf_buffers.get(symbol, {}),
             )
         except Exception as e:
             logger.error(f"Sinyal işleme ana hatası - {symbol}: {e}", exc_info=True)
@@ -1081,6 +1082,7 @@ class LiveDataManager:
                         ref_df=ref_df.copy(),
                         interval=timeframe,
                         oi_data=oi_data_json,
+                        symbol_buffers=self.mtf_buffers.get(symbol, {}),
                     )
                     logger.info(f"🎯 [{symbol}] {timeframe} MTF sinyali üretimi tamamlandı (process_and_enrich_signals)")
             else:

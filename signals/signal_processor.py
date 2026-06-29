@@ -49,12 +49,19 @@ _SIGNAL_GENERATION_TFS = {"5m", "15m"}
 _HTF_CONFIRM_TFS = ["4h", "6h", "8h", "12h", "1d"]
 
 
-async def _count_htf_ha_bullish(symbol: str, signal_type: str) -> int:
+async def _count_htf_ha_bullish(
+    symbol: str,
+    signal_type: str,
+    symbol_buffers: Optional[dict] = None,
+) -> int:
     """HTF buffer'larında kaç TF'nin HA yönü sinyal yönüyle uyuştuğunu sayar."""
     count = 0
     for tf in _HTF_CONFIRM_TFS:
         try:
-            df = await RedisClient.get_mtf_klines(symbol, tf)
+            if symbol_buffers is not None:
+                df = symbol_buffers.get(tf)
+            else:
+                df = await RedisClient.get_mtf_klines(symbol, tf)
             if df is None or df.empty:
                 continue
             if "ha_open" not in df.columns or "ha_close" not in df.columns:
@@ -68,7 +75,12 @@ async def _count_htf_ha_bullish(symbol: str, signal_type: str) -> int:
     return count
 
 
-async def _compute_mtf_score(symbol: str, interval: str, signal_type: str) -> float:
+async def _compute_mtf_score(
+    symbol: str,
+    interval: str,
+    signal_type: str,
+    symbol_buffers: Optional[dict] = None,
+) -> float:
     """
     Üst TF'lerin ST yönüne göre MTF konfirmasyon skoru döner (0 / 50 / 100).
 
@@ -83,7 +95,10 @@ async def _compute_mtf_score(symbol: str, interval: str, signal_type: str) -> fl
     checked = 0
     for tf in higher_tfs:
         try:
-            df = await RedisClient.get_mtf_klines(symbol, tf)
+            if symbol_buffers is not None:
+                df = symbol_buffers.get(tf)
+            else:
+                df = await RedisClient.get_mtf_klines(symbol, tf)
             if df is None or df.empty or "st_direction" not in df.columns:
                 continue
             valid = df["st_direction"].dropna()
@@ -201,6 +216,7 @@ async def process_and_enrich_signals(
     ref_df: pd.DataFrame,
     interval: str,
     oi_data: Optional[str] = None,
+    symbol_buffers: Optional[dict] = None,
 ) -> None:
     """
     Bir sembol için teknik sinyalleri hesaplar, finansal metriklerle zenginleştirir
@@ -351,7 +367,7 @@ async def process_and_enrich_signals(
                     continue
 
                 # 5. MTF konfirmasyon skoru hesapla
-                mtf_score = await _compute_mtf_score(symbol, interval, sig_type)
+                mtf_score = await _compute_mtf_score(symbol, interval, sig_type, symbol_buffers)
                 logger.info(
                     f"[{symbol}] MTF konfirmasyon | {interval} {sig_type} "
                     f"→ score={mtf_score:.0f} "
@@ -390,7 +406,7 @@ async def process_and_enrich_signals(
                 btc_z: Optional[float] = None
                 btc_trend_str: Optional[str] = None
                 try:
-                    btc_df = await RedisClient.get_mtf_klines("BTCUSDT", interval)
+                    btc_df = ref_df if not ref_df.empty else None
                     if btc_df is not None and len(btc_df) >= 210:
                         btc_closes = btc_df["close"].astype(float)
                         btc_ema = btc_closes.ewm(span=200, adjust=False).mean()
@@ -407,7 +423,7 @@ async def process_and_enrich_signals(
                 # HTF HA hizalanması (sadece HA_Cross sinyalleri için)
                 htf_bull_count = 0
                 if indicators_name == "HA_Cross":
-                    htf_bull_count = await _count_htf_ha_bullish(symbol, sig_type)
+                    htf_bull_count = await _count_htf_ha_bullish(symbol, sig_type, symbol_buffers)
 
                 is_confluence = (
                     indicators_name == "HA_Cross" and

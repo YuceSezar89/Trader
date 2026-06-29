@@ -26,6 +26,7 @@ class RedisClient:
     _pools: Dict[int, redis.ConnectionPool] = {}
     _binary_pools: Dict[int, redis.ConnectionPool] = {}
     _write_semaphores: Dict[int, asyncio.Semaphore] = {}
+    _read_semaphores: Dict[int, asyncio.Semaphore] = {}
 
     @classmethod
     def _get_write_semaphore(cls) -> asyncio.Semaphore:
@@ -37,6 +38,17 @@ class RedisClient:
         if loop_id not in cls._write_semaphores:
             cls._write_semaphores[loop_id] = asyncio.Semaphore(30)
         return cls._write_semaphores[loop_id]
+
+    @classmethod
+    def _get_read_semaphore(cls) -> asyncio.Semaphore:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        loop_id = id(loop)
+        if loop_id not in cls._read_semaphores:
+            cls._read_semaphores[loop_id] = asyncio.Semaphore(50)
+        return cls._read_semaphores[loop_id]
 
     @classmethod
     def _get_pool_for_current_loop(cls) -> redis.ConnectionPool:
@@ -53,7 +65,7 @@ class RedisClient:
             cls._pools[loop_id] = redis.BlockingConnectionPool.from_url(
                 Config.REDIS_URL,
                 decode_responses=True,
-                max_connections=100,
+                max_connections=300,
                 timeout=3,
                 socket_keepalive=True,
                 socket_connect_timeout=5,
@@ -75,7 +87,7 @@ class RedisClient:
             cls._binary_pools[loop_id] = redis.BlockingConnectionPool.from_url(
                 Config.REDIS_URL,
                 decode_responses=False,
-                max_connections=100,
+                max_connections=300,
                 timeout=5,
                 socket_keepalive=True,
                 socket_connect_timeout=5,
@@ -153,6 +165,12 @@ class RedisClient:
     @classmethod
     async def get_df(cls, key: str) -> Optional[pd.DataFrame]:
         """Redis'ten bir DataFrame'i okur (Arrow IPC veya JSON fallback)."""
+        sem = cls._get_read_semaphore()
+        async with sem:
+            return await cls._get_df_inner(key)
+
+    @classmethod
+    async def _get_df_inner(cls, key: str) -> Optional[pd.DataFrame]:
         r = cls._get_binary_client()
         try:
             data = await r.get(key)
@@ -179,8 +197,7 @@ class RedisClient:
     async def set_json(cls, key: str, data: Any, ex: Optional[int] = None) -> bool:
         """JSON verisini Redis'e yaz."""
         try:
-            client = await cls.get_client()
-            # Datetime objelerini string'e çevir
+            client = cls.get_client()
             json_data = json.dumps(data, ensure_ascii=False, default=str)
             await client.set(key, json_data, ex=ex)
             return True
@@ -247,14 +264,7 @@ class RedisClient:
     async def set_mtf_klines(cls, symbol: str, timeframe: str, df: pd.DataFrame) -> bool:
         """
         Multi-timeframe kline verilerini cache'e yazar.
-        
-        Args:
-            symbol: Sembol
-            timeframe: Zaman dilimi
-            df: OHLCV DataFrame
-            
-        Returns:
-            bool: Başarılı ise True
+        SET + PUBLISH tek pipeline'da — ayrı connection gerekmez.
         """
         try:
             key = cls._get_mtf_key(symbol, timeframe, "live_kline_data")
@@ -263,13 +273,20 @@ class RedisClient:
             if "open_time" in df.columns and df["open_time"].duplicated().any():
                 df = df.drop_duplicates(subset=["open_time"], keep="last")
 
-            await cls.set_df(key, df, ex=ttl)
-            await cls.publish_kline_update(symbol, timeframe)
-            logger.debug(f"MTF klines cache'lendi: {key} (TTL: {ttl}s)")
+            sem = cls._get_write_semaphore()
+            async with sem:
+                r = cls._get_binary_client()
+                loop = asyncio.get_running_loop()
+                arrow_bytes = await loop.run_in_executor(_ARROW_EXECUTOR, cls._df_to_arrow_bytes, df)
+                async with r.pipeline(transaction=False) as pipe:
+                    pipe.set(key, arrow_bytes, ex=ttl)
+                    pipe.publish("kline_updated", f"{symbol}:{timeframe}")
+                    await pipe.execute()
+            logger.debug("MTF klines cache'lendi: %s (TTL: %ds)", key, ttl)
             return True
 
         except Exception as e:
-            logger.error(f"MTF klines cache hatası [{symbol}:{timeframe}]: {e}")
+            logger.error("MTF klines cache hatası [%s:%s]: %s", symbol, timeframe, e)
             return False
 
     @classmethod
