@@ -1,5 +1,5 @@
 """
-DevisoPanel — aktif sinyalleri deviso_score'a göre sıralayan tablo.
+DevisoPanel — aktif sinyalleri devisso_score'a göre sıralayan tablo.
 
 Kolonlar: # | Sembol | TF | Yön | Score | Δ | Zaman
 """
@@ -55,7 +55,7 @@ class DevisoPanel(QWidget):
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
 
-        self._status = QLabel("Deviso Sıralama")
+        self._status = QLabel("Devisso Sıralama")
         self._status.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px;")
         layout.addWidget(self._status)
 
@@ -102,18 +102,18 @@ class DevisoPanel(QWidget):
     def _refresh(self) -> None:
         rows = sorted(
             self._signals.values(),
-            key=lambda r: (r.get("deviso_score") or -1),
+            key=lambda r: (r.get("devisso_score") or -1),
             reverse=True,
         )
         self._populate(rows)
-        with_score = sum(1 for r in rows if r.get("deviso_score") is not None)
-        self._status.setText(f"{len(rows)} aktif sinyal | {with_score} deviso hesaplı")
+        with_score = sum(1 for r in rows if r.get("devisso_score") is not None)
+        self._status.setText(f"{len(rows)} aktif sinyal | {with_score} devisso hesaplı")
 
     def _populate(self, rows: List[Dict[str, Any]]) -> None:
         self._table.setRowCount(len(rows))
         for i, r in enumerate(rows):
-            score = r.get("deviso_score")
-            delta = r.get("deviso_delta")
+            score = r.get("devisso_score")
+            delta = r.get("devisso_delta")
             sig_type = r.get("signal_type", "")
             opened_at = r.get("opened_at")
 

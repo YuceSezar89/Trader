@@ -106,11 +106,16 @@ class SignalLifecycleManager:
                     else:
                         sl_price = tp_price = sl_mult = tp_mult = None
 
-                    new_deviso = signal_data.get("deviso_score")
-                    prev_deviso = await self._get_prev_deviso(session, symbol, interval, sig_type)
-                    deviso_delta = (
+                    new_deviso = signal_data.get("devisso_score")
+                    prev_deviso = await self._get_prev_devisso(session, symbol, interval, sig_type)
+                    devisso_delta = (
                         round(new_deviso - prev_deviso, 2)
                         if new_deviso is not None and prev_deviso is not None
+                        else None
+                    )
+                    devisso_ratio = (
+                        round(new_deviso / prev_deviso, 3)
+                        if new_deviso is not None and prev_deviso is not None and prev_deviso != 0
                         else None
                     )
 
@@ -148,8 +153,9 @@ class SignalLifecycleManager:
                         vp_buy_avg        = signal_data.get("vp_buy_avg"),
                         vp_sell_avg       = signal_data.get("vp_sell_avg"),
                         vp_score          = signal_data.get("vp_score"),
-                        deviso_score      = new_deviso,
-                        deviso_delta      = deviso_delta,
+                        devisso_score     = new_deviso,
+                        devisso_delta     = devisso_delta,
+                        devisso_ratio     = devisso_ratio,
                     )
                     session.add(new_sig)
                     await session.flush()
@@ -240,15 +246,15 @@ class SignalLifecycleManager:
                 logger.error("Manuel kapatma hatası: %s", exc, exc_info=True)
                 return False
 
-    async def _get_prev_deviso(
+    async def _get_prev_devisso(
         self, session: AsyncSession, symbol: str, interval: str, signal_type: str
     ) -> Optional[float]:
         result = await session.execute(
-            select(Signal.deviso_score).where(
+            select(Signal.devisso_score).where(
                 Signal.symbol      == symbol,
                 Signal.interval    == interval,
                 Signal.signal_type == signal_type,
-                Signal.deviso_score.isnot(None),
+                Signal.devisso_score.isnot(None),
             ).order_by(Signal.id.desc()).limit(1)
         )
         row = result.scalar_one_or_none()

@@ -70,7 +70,7 @@ class SignalWorker(QThread):
                            sortino_ratio, calmar_ratio,
                            vpmv_pre_avg, vpmv_slope, vpmv_ratio,
                            cvd_slope, vp_buy_avg, vp_sell_avg, vp_score,
-                           deviso_score, deviso_delta
+                           devisso_score, devisso_delta, devisso_ratio
                     FROM signals
                     WHERE status = 'active'
                     ORDER BY opened_at DESC
@@ -100,7 +100,7 @@ class SignalWorker(QThread):
                            sortino_ratio, calmar_ratio,
                            vpmv_pre_avg, vpmv_slope, vpmv_ratio,
                            cvd_slope, vp_buy_avg, vp_sell_avg, vp_score,
-                           deviso_score, deviso_delta
+                           devisso_score, devisso_delta, devisso_ratio
                     FROM signals
                     WHERE id > %s
                     ORDER BY id ASC

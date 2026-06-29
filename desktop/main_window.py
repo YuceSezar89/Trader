@@ -295,9 +295,9 @@ class MainWindow(QMainWindow):
         self._add_panel_toggle(ranking_dock)
         self._docks["ranking"] = ranking_dock
 
-        # ── Deviso Sıralama paneli (sağ tabified) ─────────────────────────
+        # ── Devisso Sıralama paneli (sağ tabified) ────────────────────────
         self._deviso_panel = DevisoPanel(self)
-        deviso_dock = QDockWidget("Deviso Sırala", self)
+        deviso_dock = QDockWidget("Devisso Sırala", self)
         deviso_dock.setObjectName("dock_deviso")
         deviso_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
         deviso_dock.setWidget(self._deviso_panel)

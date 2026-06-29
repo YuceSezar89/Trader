@@ -146,7 +146,7 @@ def _compute_vpmv_scores(df: pd.DataFrame, signal_type: str) -> tuple[float, flo
     return vol_score, momentum_score, vlt_score, price_score
 
 
-def _compute_deviso_score(df: pd.DataFrame) -> Optional[float]:
+def _compute_devisso_score(df: pd.DataFrame) -> Optional[float]:
     """
     ΔRSI(14) / Δprice% → EMA(7) → percentile rank (son 100 bar) → 0-100.
     Percentile rank sayesinde timeframe ve coin bağımsız karşılaştırılabilir.
@@ -484,10 +484,10 @@ async def process_and_enrich_signals(
                 enriched_signal["vpmv_ratio"]   = _vpmv_ratio
                 enriched_signal["cvd_slope"]    = _cvd_slope
 
-                _deviso = _compute_deviso_score(df)
-                enriched_signal["deviso_score"] = _deviso
+                _deviso = _compute_devisso_score(df)
+                enriched_signal["devisso_score"] = _deviso
                 logger.info(
-                    "DEVISO | %s | %s | %s | score=%s",
+                    "DEVISSO | %s | %s | %s | score=%s",
                     symbol, sig_type, interval, _deviso,
                 )
 
