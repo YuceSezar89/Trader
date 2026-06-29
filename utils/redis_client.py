@@ -131,17 +131,16 @@ class RedisClient:
         cls, key: str, df: pd.DataFrame, ex: int = 60 * 60 * 24
     ) -> None:
         """Bir Pandas DataFrame'i Arrow IPC formatında Redis'e yazar."""
-        sem = cls._get_write_semaphore()
-        async with sem:
-            r = cls._get_binary_client()
-            try:
-                loop = asyncio.get_running_loop()
-                arrow_bytes = await loop.run_in_executor(_ARROW_EXECUTOR, cls._df_to_arrow_bytes, df)
+        try:
+            loop = asyncio.get_running_loop()
+            arrow_bytes = await loop.run_in_executor(_ARROW_EXECUTOR, cls._df_to_arrow_bytes, df)
+            sem = cls._get_write_semaphore()
+            async with sem:
+                r = cls._get_binary_client()
                 await r.set(key, arrow_bytes, ex=ex)
-                logger.debug(f"DataFrame Redis'e yazıldı (Arrow). Anahtar: {key}")
-            except Exception as e:
-                logger.error(f"Redis'e DataFrame yazma hatası (Anahtar: {key}): {e}")
-        # Pool otomatik yönetir, close() gerekmez
+                logger.debug("DataFrame Redis'e yazıldı (Arrow). Anahtar: %s", key)
+        except Exception as e:
+            logger.error("Redis'e DataFrame yazma hatası (Anahtar: %s): %s", key, e)
 
     @classmethod
     async def get_hot_klines(cls, symbol: str, limit: int = 500) -> Optional[pd.DataFrame]:

@@ -539,7 +539,6 @@ class LiveDataManager:
                 legacy_redis_key = f"{Config.REDIS_LIVE_DATA_KEY_PREFIX}:{symbol}"
                 await RedisClient.set_df(legacy_redis_key, self.kline_data[symbol])
                 await RedisClient.set_hot_klines(symbol, self.kline_data[symbol])
-                await RedisClient.publish_kline_update(symbol, "1m")
 
             # Batch insert için buffer'a ekle (sadece 1m için - diğer TF'ler opsiyonel)
             if interval == '1m':
