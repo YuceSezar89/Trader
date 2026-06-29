@@ -73,14 +73,14 @@ class SignalFilter:
             state.last_short_high = high
             self._dirty = True
             if prev_long_low is None:
-                return True
+                return False
             return low < prev_long_low
 
         if signal_type == "Long":
             state.last_long_low = low
             self._dirty = True
             if prev_short_high is None:
-                return True
+                return False
             return high > prev_short_high
 
         return False
