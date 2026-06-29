@@ -524,21 +524,12 @@ class LiveDataManager:
                 await RedisClient.set_mtf_klines(symbol, interval, self.mtf_buffers[symbol][interval])
                 logger.debug(f"[{symbol}] {interval} buffer updated and cached")
 
-            # Legacy 1m buffer için backward compatibility (1m interval'da)
+            # Legacy 1m buffer (kline_data) — sadece DB batch insert için tutuluyor
             if interval == '1m':
                 new_df = pd.DataFrame([new_row])
                 self.kline_data[symbol] = pd.concat(
                     [self.kline_data[symbol], new_df], ignore_index=True
-                )
-                self.kline_data[symbol] = self.kline_data[symbol].tail(1000)
-                self.kline_data[symbol] = await asyncio.to_thread(add_all_indicators, self.kline_data[symbol])
-
-                # Legacy Redis keys
-                new_redis_key = f"{Config.REDIS_LIVE_DATA_KEY_PREFIX}:{symbol}:1m"
-                await RedisClient.set_df(new_redis_key, self.kline_data[symbol])
-                legacy_redis_key = f"{Config.REDIS_LIVE_DATA_KEY_PREFIX}:{symbol}"
-                await RedisClient.set_df(legacy_redis_key, self.kline_data[symbol])
-                await RedisClient.set_hot_klines(symbol, self.kline_data[symbol])
+                ).tail(1000)
 
             # Batch insert için buffer'a ekle (sadece 1m için - diğer TF'ler opsiyonel)
             if interval == '1m':
@@ -1911,6 +1902,16 @@ class LiveDataManager:
             await rsi_15m_manager.check_all_prices(prices)
             await manual_manager.check_all_prices(prices)
 
+    async def _filter_save_loop(self) -> None:
+        """Her 30s'de SignalFilter state'ini Redis'e kaydeder (restart-proof)."""
+        from signals.signal_engine import signal_engine as _se
+        while True:
+            await asyncio.sleep(30)
+            try:
+                await _se.save_filter_state()
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                logger.debug("SignalFilter state kaydetme hatası: %s", e)
+
     async def _manual_refresh_loop(self) -> None:
         """UI'dan açılan manuel işlemleri algılayıp manual_manager cache'ini yeniler."""
         redis = RedisClient.get_client()
@@ -2036,6 +2037,8 @@ class LiveDataManager:
         """
         try:
             logger.info("[BackgroundStartup] Başladı (WebSocket zaten aktif).")
+            from signals.signal_engine import signal_engine as _se
+            await _se.load_filter_state()
             filled_symbols = await self._startup_gap_fill()
             if self.mtf_enabled:
                 await self._initialize_mtf_dataframes(reload_symbols=filled_symbols)
@@ -2065,6 +2068,7 @@ class LiveDataManager:
                 asyncio.create_task(self._risk_check_loop()),
                 asyncio.create_task(self._vpmv_post_loop()),
                 asyncio.create_task(self._manual_refresh_loop()),
+                asyncio.create_task(self._filter_save_loop()),
             ]
 
             logger.info(

@@ -455,6 +455,15 @@ class SignalEngine:
             return {name: "ERROR" for name in tasks}
 
 
+    async def save_filter_state(self) -> None:
+        from utils.redis_client import RedisClient
+        await self._filter.save_to_redis(RedisClient)
+
+    async def load_filter_state(self) -> None:
+        from utils.redis_client import RedisClient
+        await self._filter.load_from_redis(RedisClient)
+
+
 # --- Global Signal Engine Instance ---
 # Kodun diğer kısımlarından bu tekil örnek kullanılmalıdır.
 signal_engine = SignalEngine()

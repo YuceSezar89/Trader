@@ -4,7 +4,7 @@ import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from io import StringIO
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 import pandas as pd
 import pyarrow as pa
@@ -22,11 +22,18 @@ class RedisClient:
     """Asenkron Redis istemcisi için merkezi bir yönetici sınıfı.
 
     Her process/event loop için ayrı bir bağlantı havuzu yönetir.
+    set_mtf_klines çağrıları pending dict'e birikir; _batch_flush_loop
+    her 500ms'de tek pipeline ile Redis'e iter — burst sorunu ortadan kalkar.
     """
     _pools: Dict[int, redis.ConnectionPool] = {}
     _binary_pools: Dict[int, redis.ConnectionPool] = {}
     _write_semaphores: Dict[int, asyncio.Semaphore] = {}
     _read_semaphores: Dict[int, asyncio.Semaphore] = {}
+
+    # Batch flush state — asyncio single-threaded, race condition yok
+    _pending_klines: Dict[str, Tuple[bytes, int]] = {}  # key → (arrow_bytes, ttl)
+    _pending_publishes: Set[str] = set()                # "symbol:tf"
+    _flusher_task: Optional[asyncio.Task] = None
 
     @classmethod
     def _get_write_semaphore(cls) -> asyncio.Semaphore:
@@ -88,7 +95,7 @@ class RedisClient:
                 Config.REDIS_URL,
                 decode_responses=False,
                 max_connections=300,
-                timeout=5,
+                timeout=30,
                 socket_keepalive=True,
                 socket_connect_timeout=5,
             )
@@ -262,32 +269,56 @@ class RedisClient:
     @classmethod
     async def set_mtf_klines(cls, symbol: str, timeframe: str, df: pd.DataFrame) -> bool:
         """
-        Multi-timeframe kline verilerini cache'e yazar.
-        SET + PUBLISH tek pipeline'da — ayrı connection gerekmez.
+        MTF kline'ı pending dict'e ekler — batch flusher Redis'e iter.
+        Çağrı başına bağlantı yok, semaphore yok, burst sorunu yok.
         """
         try:
             key = cls._get_mtf_key(symbol, timeframe, "live_kline_data")
             ttl = cls._get_ttl_for_timeframe(timeframe)
-
             if "open_time" in df.columns and df["open_time"].duplicated().any():
                 df = df.drop_duplicates(subset=["open_time"], keep="last")
-
             loop = asyncio.get_running_loop()
             arrow_bytes = await loop.run_in_executor(_ARROW_EXECUTOR, cls._df_to_arrow_bytes, df)
+            cls._pending_klines[key] = (arrow_bytes, ttl)
+            cls._pending_publishes.add(f"{symbol}:{timeframe}")
+            cls._ensure_flusher()
+            return True
+        except Exception as e:
+            logger.error("MTF klines batch hatası [%s:%s]: %s", symbol, timeframe, e)
+            return False
 
-            sem = cls._get_write_semaphore()
-            async with sem:
+    @classmethod
+    def _ensure_flusher(cls) -> None:
+        """Batch flush goroutine çalışmıyorsa başlatır."""
+        if cls._flusher_task is None or cls._flusher_task.done():
+            cls._flusher_task = asyncio.create_task(
+                cls._batch_flush_loop(), name="redis_batch_flusher"
+            )
+
+    @classmethod
+    async def _batch_flush_loop(cls) -> None:
+        """Her 500ms'de pending kline'ları tek pipeline ile Redis'e iter."""
+        logger.info("Redis batch flusher başlatıldı (500ms)")
+        while True:
+            await asyncio.sleep(0.5)
+            if not cls._pending_klines:
+                continue
+            # Swap: yeni yazmaları boş dict'e yönlendir, eskiyi flush et
+            pending = cls._pending_klines
+            publishes = cls._pending_publishes
+            cls._pending_klines = {}
+            cls._pending_publishes = set()
+            try:
                 r = cls._get_binary_client()
                 async with r.pipeline(transaction=False) as pipe:
-                    pipe.set(key, arrow_bytes, ex=ttl)
-                    pipe.publish("kline_updated", f"{symbol}:{timeframe}")
+                    for k, (data, ttl) in pending.items():
+                        pipe.set(k, data, ex=ttl)
+                    for msg in publishes:
+                        pipe.publish("kline_updated", msg)
                     await pipe.execute()
-            logger.debug("MTF klines cache'lendi: %s (TTL: %ds)", key, ttl)
-            return True
-
-        except Exception as e:
-            logger.error("MTF klines cache hatası [%s:%s]: %s", symbol, timeframe, e)
-            return False
+                logger.debug("Batch flush: %d SET, %d PUBLISH", len(pending), len(publishes))
+            except Exception as e:
+                logger.error("Batch flush hatası: %s", e)
 
     @classmethod
     async def publish_kline_update(cls, symbol: str, timeframe: str) -> None:
@@ -302,29 +333,30 @@ class RedisClient:
     async def get_mtf_klines(cls, symbol: str, timeframe: str, limit: Optional[int] = None) -> Optional[pd.DataFrame]:
         """
         Multi-timeframe kline verilerini cache'den okur.
-        
-        Args:
-            symbol: Sembol
-            timeframe: Zaman dilimi
-            limit: Döndürülecek maksimum bar sayısı
-            
-        Returns:
-            pd.DataFrame: OHLCV verisi veya None
+        Önce in-memory _pending_klines'a bakar (Redis round-trip yok).
         """
+        key = cls._get_mtf_key(symbol, timeframe, "live_kline_data")
+
+        cached = cls._pending_klines.get(key)
+        if cached is not None:
+            arrow_bytes, _ = cached
+            try:
+                loop = asyncio.get_running_loop()
+                df = await loop.run_in_executor(_ARROW_EXECUTOR, cls._arrow_bytes_to_df, arrow_bytes)
+                if df is not None and not df.empty:
+                    return df.tail(limit) if limit else df
+            except Exception:
+                pass
+
         try:
-            key = cls._get_mtf_key(symbol, timeframe, "live_kline_data")
             df = await cls.get_df(key)
-            
             if df is not None and not df.empty:
                 if limit:
                     df = df.tail(limit)
-                logger.debug(f"MTF klines cache'den okundu: {key} ({len(df)} bars)")
                 return df
-            
             return None
-            
         except Exception as e:
-            logger.error(f"MTF klines okuma hatası [{symbol}:{timeframe}]: {e}")
+            logger.error("MTF klines okuma hatası [%s:%s]: %s", symbol, timeframe, e)
             return None
     
     @classmethod
