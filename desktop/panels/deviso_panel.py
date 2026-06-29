@@ -1,7 +1,7 @@
 """
 DevisoPanel — aktif sinyalleri devisso_score'a göre sıralayan tablo.
 
-Kolonlar: # | Sembol | TF | Yön | Score | Δ | Zaman
+Kolonlar: # | Sembol | TF | Yön | Score | Δ | Ratio | Zaman
 """
 
 from datetime import datetime
@@ -26,8 +26,9 @@ _COL_TF     = 2
 _COL_DIR    = 3
 _COL_SCORE  = 4
 _COL_DELTA  = 5
-_COL_TIME   = 6
-_HEADERS = ["#", "Sembol", "TF", "Yön", "Score", "Δ", "Zaman"]
+_COL_RATIO  = 6
+_COL_TIME   = 7
+_HEADERS = ["#", "Sembol", "TF", "Yön", "Score", "Δ", "Ratio", "Zaman"]
 
 _C_GREEN  = QColor(COLORS["green"])
 _C_RED    = QColor(COLORS["red"])
@@ -114,6 +115,7 @@ class DevisoPanel(QWidget):
         for i, r in enumerate(rows):
             score = r.get("devisso_score")
             delta = r.get("devisso_delta")
+            ratio = r.get("devisso_ratio")
             sig_type = r.get("signal_type", "")
             opened_at = r.get("opened_at")
 
@@ -154,6 +156,19 @@ class DevisoPanel(QWidget):
                 delta_item.setForeground(_C_MUTED)
             self._table.setItem(i, _COL_DELTA, delta_item)
 
+            if ratio is not None:
+                ratio_item = _item(f"{ratio:.2f}x")
+                if ratio > 1.0:
+                    ratio_item.setForeground(_C_GREEN)
+                elif ratio < 1.0:
+                    ratio_item.setForeground(_C_RED)
+                else:
+                    ratio_item.setForeground(_C_WHITE)
+            else:
+                ratio_item = _item("-")
+                ratio_item.setForeground(_C_MUTED)
+            self._table.setItem(i, _COL_RATIO, ratio_item)
+
             if isinstance(opened_at, datetime):
                 time_str = opened_at.strftime("%m-%d %H:%M")
             elif isinstance(opened_at, str):
@@ -168,3 +183,4 @@ class DevisoPanel(QWidget):
         self._table.resizeColumnToContents(_COL_TF)
         self._table.resizeColumnToContents(_COL_SCORE)
         self._table.resizeColumnToContents(_COL_DELTA)
+        self._table.resizeColumnToContents(_COL_RATIO)
