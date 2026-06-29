@@ -6,9 +6,8 @@ import signal
 import socket
 import subprocess
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from utils.logger import get_logger
-from database.crud import initialize_database
 
 # Çalıştırılacak servislerin ana fonksiyonlarını import et
 from live_data_manager import main as live_data_main
@@ -106,82 +105,82 @@ def start_pgbouncer():  # pylint: disable=too-many-branches,too-many-statements
         return False
 
 
+def _run_performance_update(perf_logger) -> None:
+    """Performans güncelleme işini çalıştırır (senkron, executor'da çağrılır)."""
+    perf_logger.info("=" * 60)
+    perf_logger.info("Performance update başlıyor...")
+    perf_logger.info("=" * 60)
+    try:
+        analyzer = SignalPerformanceAnalyzer()
+        result = analyzer.batch_update_performance(hours_back=8760, max_signals=None)
+        perf_logger.info("Performance update tamamlandı:")
+        perf_logger.info("  Total: %d", result.get("total", 0))
+        perf_logger.info("  Success: %d", result.get("success", 0))
+        perf_logger.info("  Failed: %d", result.get("failed", 0))
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        perf_logger.error("Performance update hatası: %s", e, exc_info=True)
+    finally:
+        perf_logger.info("=" * 60)
+
+
 async def daily_performance_update_task():
     """Her gün saat 02:00'da signal performance güncelleme görevi."""
-    # Ayrı logger oluştur
     perf_logger = get_logger("PerformanceUpdater")
-
-    target_hour = 2  # Saat 02:00
+    target_hour = 2
     target_minute = 0
 
     perf_logger.info(
-        f"Performance update task başlatıldı (hedef: {target_hour:02d}:{target_minute:02d})"
+        "Performance update task başlatıldı (hedef: %02d:%02d)", target_hour, target_minute
     )
-    logger.info(
-        f"Performance update task başlatıldı (hedef: {target_hour:02d}:{target_minute:02d})"
-    )
+
+    # Startup: hesaplanmamış kayıt varsa hemen çalıştır
+    try:
+        import psycopg2
+        from config import Config
+        _conn = psycopg2.connect(
+            host=Config.DB_HOST, port=Config.DB_PORT, database=Config.DB_NAME,
+            user=Config.DB_USER, password=Config.DB_PASSWORD,
+        )
+        _cur = _conn.cursor()
+        _cur.execute("SELECT COUNT(*) FROM signal_performance WHERE is_calculated = FALSE")
+        pending = _cur.fetchone()[0]
+        _cur.close()
+        _conn.close()
+        if pending > 0:
+            perf_logger.info("Startup: %d hesaplanmamış sinyal — hemen başlıyor...", pending)
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, _run_performance_update, perf_logger)
+        else:
+            perf_logger.info("Startup: hesaplanmamış sinyal yok.")
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        perf_logger.error("Startup performance check hatası: %s", e, exc_info=True)
 
     while True:
         try:
-            # Şu anki zaman
             now = datetime.now()
-
-            # Hedef zaman (bugün veya yarın saat 02:00)
             target_time = now.replace(
                 hour=target_hour, minute=target_minute, second=0, microsecond=0
             )
-
-            # Eğer hedef zaman geçmişse, yarına ayarla
             if now >= target_time:
-                target_time = target_time.replace(day=target_time.day + 1)
+                target_time += timedelta(days=1)
 
-            # Bekleme süresi
             wait_seconds = (target_time - now).total_seconds()
-            next_str = target_time.strftime("%Y-%m-%d %H:%M:%S")
             perf_logger.info(
                 "Sonraki performance update: %s (%.1f saat)",
-                next_str,
-                wait_seconds / 3600,
-            )
-            logger.info(
-                "Sonraki performance update: %s (%.1f saat)",
-                next_str,
+                target_time.strftime("%Y-%m-%d %H:%M:%S"),
                 wait_seconds / 3600,
             )
 
-            # Hedef zamana kadar bekle
             await asyncio.sleep(wait_seconds)
 
-            # Performance update çalıştır
-            perf_logger.info("=" * 60)
-            perf_logger.info("Günlük performance update başlıyor...")
-            perf_logger.info("=" * 60)
-
-            try:
-                analyzer = SignalPerformanceAnalyzer()
-                result = analyzer.batch_update_performance(
-                    hours_back=720, max_signals=1000  # 30 gün
-                )
-
-                perf_logger.info("Performance update tamamlandı:")
-                perf_logger.info(f"  Total: {result.get('total', 0)}")
-                perf_logger.info(f"  Success: {result.get('success', 0)}")
-                perf_logger.info(f"  Failed: {result.get('failed', 0)}")
-                perf_logger.info(f"  Skipped: {result.get('skipped', 0)}")
-
-            except Exception as e:  # pylint: disable=broad-exception-caught
-                perf_logger.error(f"Performance update hatası: {e}", exc_info=True)
-
-            perf_logger.info("=" * 60)
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, _run_performance_update, perf_logger)
 
         except asyncio.CancelledError:
             perf_logger.info("Performance update task iptal edildi")
-            logger.info("Performance update task iptal edildi")
             break
         except Exception as e:  # pylint: disable=broad-exception-caught
-            perf_logger.error(f"Performance update task hatası: {e}", exc_info=True)
-            logger.error(f"Performance update task hatası: {e}", exc_info=True)
-            # Hata olsa bile devam et, 1 saat sonra tekrar dene
+            perf_logger.error("Performance update task hatası: %s", e, exc_info=True)
             await asyncio.sleep(3600)
 
 
@@ -305,10 +304,7 @@ async def run_all_services():
     """Tüm servisleri doğru sırada başlatır ve yönetir."""
     logger.info("Tüm servisler başlatılıyor...")
 
-    # 1. Veritabanını başlat
-    await initialize_database()
-
-    # 2. PgBouncer'ı başlat ve hazır olmasını bekle
+    # 1. PgBouncer'ı başlat ve hazır olmasını bekle
     if not start_pgbouncer():
         logger.error("PgBouncer başlatılamadı, çıkılıyor...")
         return

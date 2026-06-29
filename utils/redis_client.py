@@ -273,11 +273,12 @@ class RedisClient:
             if "open_time" in df.columns and df["open_time"].duplicated().any():
                 df = df.drop_duplicates(subset=["open_time"], keep="last")
 
+            loop = asyncio.get_running_loop()
+            arrow_bytes = await loop.run_in_executor(_ARROW_EXECUTOR, cls._df_to_arrow_bytes, df)
+
             sem = cls._get_write_semaphore()
             async with sem:
                 r = cls._get_binary_client()
-                loop = asyncio.get_running_loop()
-                arrow_bytes = await loop.run_in_executor(_ARROW_EXECUTOR, cls._df_to_arrow_bytes, df)
                 async with r.pipeline(transaction=False) as pipe:
                     pipe.set(key, arrow_bytes, ex=ttl)
                     pipe.publish("kline_updated", f"{symbol}:{timeframe}")
