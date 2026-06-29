@@ -321,6 +321,10 @@ class ActiveSignalsPanel(QWidget):
         pre  = _r(row.vpmv_pre_avg, '.1f')
         slop = _r(row.vpmv_slope,   '+.1f')
         rat  = _r(row.vpmv_ratio,   '.3f')
+        cvd  = _r(row.cvd_slope,    '+.3f')
+        vpb  = _r(row.vp_buy_avg,   '.1f')
+        vps  = _r(row.vp_sell_avg,  '.1f')
+        vpsc = _r(row.vp_score,     '+.1f')
         text = (
             f"  α {_r(row.alpha, '+.4f')}  "
             f"β {_r(row.beta)}  │  "
@@ -329,6 +333,8 @@ class ActiveSignalsPanel(QWidget):
             f"MTF {mtf}  "
             f"ST {st}  │  "
             f"pre {pre}  slope {slop}  ratio {rat}  │  "
+            f"CVD {cvd}  │  "
+            f"VP buy {vpb}  sell {vps}  score {vpsc}  │  "
             f"P&L {pnl}"
         )
         self._detail_bar.setText(text)

@@ -22,11 +22,23 @@ PRE_BARS  = 5
 POST_BARS = 4
 
 
+def _directional_volume(df: pd.DataFrame, side: float) -> pd.Series:
+    """Long için buy_volume, Short için sell_volume; yoksa toplam hacim."""
+    has_dir = (
+        "buy_volume" in df.columns
+        and "sell_volume" in df.columns
+        and df["buy_volume"].notna().any()
+    )
+    if has_dir:
+        return df["buy_volume"] if side > 0 else df["sell_volume"]
+    return df["volume"]
+
+
 def compute_series(df: pd.DataFrame, signal_type: str) -> pd.Series:
     """Tüm df için bar bazlı VPMV serisi döner (0-100)."""
     side = 1.0 if signal_type == "Long" else -1.0
 
-    vol = normalize_volume_0_100(df["volume"])
+    vol = normalize_volume_0_100(_directional_volume(df, side))
     rsi = calculate_rsi(df, period=14)
     mom = normalize_momentum_0_100(rsi.diff().fillna(0.0) * side)
     atr = calculate_atr(df, period=Config.ATR_PERIOD)

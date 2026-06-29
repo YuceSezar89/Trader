@@ -1973,7 +1973,7 @@ class LiveDataManager:
         from database.models import Signal
         from signals.signal_lifecycle_manager import signal_lifecycle_manager
 
-        recon_log = get_logger("SignalRecon")
+        recon_log = logging.getLogger("SignalRecon")
 
         try:
             async with get_session() as session:

@@ -71,6 +71,8 @@ class DivergenceWorker(QThread):  # pylint: disable=too-many-instance-attributes
         self._directions: dict[str, str] = {}   # symbol → "long" | "short"
         self._offsets: dict[str, float] = {}    # symbol → z-score at reset
         self._pending_resets: set[str] = set()  # sıradaki hesaplamada offset alınacak
+        self._indicators: dict[str, str] = {}   # symbol → indicators string
+        self._vpmv: dict[str, float] = {}       # symbol → vpmv_pre_avg
 
     def set_timeframe(self, tf: str) -> None:
         """Aktif zaman dilimini günceller ve hemen yeniden hesaplar."""
@@ -87,6 +89,8 @@ class DivergenceWorker(QThread):  # pylint: disable=too-many-instance-attributes
                     continue
                 sym = s["symbol"]
                 self._symbols.add(sym)
+                self._indicators[sym] = s.get("indicators") or ""
+                self._vpmv[sym] = float(s.get("vpmv_pre_avg") or 0.0)
                 # İlk yükleme: yön kaydedilir, reset yapılmaz
                 if sym not in self._directions:
                     self._directions[sym] = _direction(s.get("signal_type", ""))
@@ -101,6 +105,8 @@ class DivergenceWorker(QThread):  # pylint: disable=too-many-instance-attributes
         new_dir = _direction(signal.get("signal_type", ""))
         with self._lock:
             self._symbols.add(sym)
+            self._indicators[sym] = signal.get("indicators") or ""
+            self._vpmv[sym] = float(signal.get("vpmv_pre_avg") or 0.0)
             current_dir = self._directions.get(sym)
             if current_dir and current_dir != new_dir:
                 # Ters sinyal → bir sonraki hesaplamada offset sıfırlanacak
@@ -200,12 +206,18 @@ class DivergenceWorker(QThread):  # pylint: disable=too-many-instance-attributes
         if not series:
             return None
 
+        with self._lock:
+            indicators_map = dict(self._indicators)
+            vpmv_map = dict(self._vpmv)
+
         return {
             "series": series,
             "current": current,
             "tf": self._timeframe,
             "timestamps": timestamps,
             "diverge_since": diverge_since,
+            "indicators": indicators_map,
+            "vpmv": vpmv_map,
         }
 
     def _fetch_klines(self, key: bytes) -> Optional[pd.DataFrame]:

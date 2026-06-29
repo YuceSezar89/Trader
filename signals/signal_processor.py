@@ -1,3 +1,4 @@
+import time
 import numpy as np
 import pandas as pd
 from typing import Optional
@@ -21,6 +22,22 @@ from signals.paper_trade_manager import paper_trade_manager, ha_cross_manager, r
 from signals.risk_manager import risk_manager
 
 logger = get_logger(__name__)
+
+_PT_FLAG_CACHE: dict = {"value": b"1", "ts": 0.0}
+_PT_FLAG_TTL = 30.0
+
+
+async def _get_pt_flag() -> bytes:
+    now = time.monotonic()
+    if now - _PT_FLAG_CACHE["ts"] < _PT_FLAG_TTL:
+        return _PT_FLAG_CACHE["value"]
+    try:
+        val = await RedisClient.get_client().get("settings:paper_trade_enabled")
+        _PT_FLAG_CACHE["value"] = val if val is not None else b"1"
+        _PT_FLAG_CACHE["ts"] = now
+    except Exception:
+        pass
+    return _PT_FLAG_CACHE["value"]
 
 _MIN_BARS: dict[str, int] = {
     "1m":  300,
@@ -148,8 +165,10 @@ def _compute_vpmv_scores(df: pd.DataFrame, signal_type: str) -> tuple[float, flo
 
 def _compute_devisso_score(df: pd.DataFrame) -> Optional[float]:
     """
-    ΔRSI(14) / Δprice% → EMA(7) → percentile rank (son 100 bar) → 0-100.
-    Percentile rank sayesinde timeframe ve coin bağımsız karşılaştırılabilir.
+    Δprice% / ΔRSI(14) → EMA(7) → percentile rank (son 100 bar) → 0-100.
+    ERSI (RSI Verimliliği): fiyat birim RSI başına ne kadar hareket etti.
+    Yüksek → verimli (fiyat az RSI ile çok hareket etti, trend sağlıklı).
+    Düşük  → verimsiz (aynı hareket için RSI çok yoruldu, trend zorlanıyor).
     """
     try:
         if len(df) < 30:
@@ -157,7 +176,7 @@ def _compute_devisso_score(df: pd.DataFrame) -> Optional[float]:
         close = df["close"].astype(float)
         rsi = calculate_rsi(df, period=14)
         price_pct = close.pct_change() * 100.0
-        raw = rsi.diff() / price_pct.replace(0.0, np.nan)
+        raw = price_pct / rsi.diff().replace(0.0, np.nan)
         smoothed = raw.ewm(span=7, adjust=False).mean()
         valid = smoothed.dropna()
         if len(valid) < 20:
@@ -508,28 +527,28 @@ async def process_and_enrich_signals(
                     risk_manager.register(symbol)
 
                 if signal_id and current_price:
-                    funding: Optional[float] = None
-                    try:
-                        import json as _json
-                        ticker_raw = await RedisClient.get_client().get(f"ticker:{symbol}")
-                        if ticker_raw:
-                            ticker_d = _json.loads(ticker_raw)
-                            funding = ticker_d.get("funding_rate")
-                    except Exception:
-                        pass
-
-                    _pt_kwargs = dict(
-                        signal_data=enriched_signal,
-                        signal_id=signal_id,
-                        current_price=current_price,
-                        btc_z_score=btc_z,
-                        btc_trend=btc_trend_str,
-                        funding_rate=funding,
-                        regime_trend=regime_trend,
-                        volatility_regime=volatility_regime,
-                    )
-                    _pt_flag = await RedisClient.get_client().get("settings:paper_trade_enabled")
+                    _pt_flag = await _get_pt_flag()
                     if _pt_flag != b"0":
+                        funding: Optional[float] = None
+                        try:
+                            import json as _json
+                            ticker_raw = await RedisClient.get_client().get(f"ticker:{symbol}")
+                            if ticker_raw:
+                                ticker_d = _json.loads(ticker_raw)
+                                funding = ticker_d.get("funding_rate")
+                        except Exception:
+                            pass
+
+                        _pt_kwargs = dict(
+                            signal_data=enriched_signal,
+                            signal_id=signal_id,
+                            current_price=current_price,
+                            btc_z_score=btc_z,
+                            btc_trend=btc_trend_str,
+                            funding_rate=funding,
+                            regime_trend=regime_trend,
+                            volatility_regime=volatility_regime,
+                        )
                         if is_confluence:
                             await paper_trade_manager.on_new_signal(**_pt_kwargs)
                         await ha_cross_manager.on_new_signal(**_pt_kwargs)

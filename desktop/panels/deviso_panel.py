@@ -30,6 +30,17 @@ _COL_RATIO  = 6
 _COL_TIME   = 7
 _HEADERS = ["#", "Sembol", "TF", "Yön", "Score", "Δ", "Ratio", "Zaman"]
 
+_TOOLTIPS = [
+    "Sıralama — Devisso score'a göre yüksekten düşüğe",
+    "İşlem çifti",
+    "Zaman dilimi (timeframe)",
+    "Sinyal yönü — Long (alım) veya Short (satım)",
+    "Devisso Score (0-100) — RSI Verimliliği\nFiyat değişimi (%) / RSI değişimi oranının yüzdelik sırası (son 100 bar).\nYüksek → Az RSI ile çok fiyat hareketi — trend verimli ve sağlıklı\nDüşük → Aynı hareket için RSI çok yoruldu — trend zorlanıyor",
+    "Delta — Önceki aynı yöndeki sinyale göre score farkı.\nPozitif → piyasa daha verimli hareket etti\nNegatif → piyasa daha çok zorlandı",
+    "Efficiency Ratio — Mevcut score / Önceki sinyal score (aynı yön).\n>1.0 → piyasa öncekine göre daha verimli\n<1.0 → piyasa öncekine göre daha zorlandı",
+    "Sinyalin açılma zamanı",
+]
+
 _C_GREEN  = QColor(COLORS["green"])
 _C_RED    = QColor(COLORS["red"])
 _C_MUTED  = QColor(COLORS["text_muted"])
@@ -62,6 +73,8 @@ class DevisoPanel(QWidget):
 
         self._table = QTableWidget(0, len(_HEADERS))
         self._table.setHorizontalHeaderLabels(_HEADERS)
+        for _col, _tip in enumerate(_TOOLTIPS):
+            self._table.horizontalHeaderItem(_col).setToolTip(_tip)
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self._table.setAlternatingRowColors(True)

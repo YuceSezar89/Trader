@@ -117,6 +117,10 @@ class SignalRow:
     vpmv_pre_avg: Optional[float] = None
     vpmv_slope: Optional[float] = None
     vpmv_ratio: Optional[float] = None
+    cvd_slope: Optional[float] = None
+    vp_buy_avg: Optional[float] = None
+    vp_sell_avg: Optional[float] = None
+    vp_score: Optional[float] = None
     pnl_pct: Optional[float] = field(default=None, init=False)
 
     def update_price(self, price: float) -> None:
@@ -333,6 +337,10 @@ class SignalsModel(QAbstractTableModel):
             vpmv_pre_avg=s.get("vpmv_pre_avg"),
             vpmv_slope=s.get("vpmv_slope"),
             vpmv_ratio=s.get("vpmv_ratio"),
+            cvd_slope=s.get("cvd_slope"),
+            vp_buy_avg=s.get("vp_buy_avg"),
+            vp_sell_avg=s.get("vp_sell_avg"),
+            vp_score=s.get("vp_score"),
         )
         idx = len(self._rows)
         self._rows.append(row)

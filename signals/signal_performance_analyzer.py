@@ -210,12 +210,12 @@ class SignalPerformanceAnalyzer:
                 SELECT high, low
                 FROM price_data
                 WHERE symbol = %s
-                  AND interval = %s
+                  AND interval = '1m'
                   AND timestamp >= %s
                   AND timestamp <= %s
                 ORDER BY timestamp ASC;
             """,
-                (symbol, interval, start_time, end_time),
+                (symbol, start_time, end_time),
             )
 
             return cursor.fetchall()
@@ -250,12 +250,12 @@ class SignalPerformanceAnalyzer:
             # Signal ve performance bilgilerini çek
             cursor.execute(
                 """
-                SELECT 
+                SELECT
                     s.symbol,
                     s.signal_type,
-                    s.timestamp,
+                    s.opened_at,
                     s.interval,
-                    s.price as entry_price,
+                    s.open_price as entry_price,
                     sp.atr_at_entry
                 FROM signals s
                 JOIN signal_performance sp ON s.id = sp.signal_id
@@ -271,7 +271,7 @@ class SignalPerformanceAnalyzer:
 
             # N bar sonraki zamanı hesapla
             interval_minutes = self._interval_to_minutes(signal["interval"])
-            target_time = signal["timestamp"] + timedelta(
+            target_time = signal["opened_at"] + timedelta(
                 minutes=interval_minutes * n_bars
             )
 
@@ -344,12 +344,12 @@ class SignalPerformanceAnalyzer:
             # Signal bilgilerini çek
             cursor.execute(
                 """
-                SELECT 
+                SELECT
                     s.symbol,
                     s.signal_type,
-                    s.timestamp,
+                    s.opened_at,
                     s.interval,
-                    s.price as entry_price,
+                    s.open_price as entry_price,
                     sp.atr_at_entry
                 FROM signals s
                 JOIN signal_performance sp ON s.id = sp.signal_id
@@ -364,13 +364,13 @@ class SignalPerformanceAnalyzer:
 
             # Lookback zaman aralığı
             interval_minutes = self._interval_to_minutes(signal["interval"])
-            end_time = signal["timestamp"] + timedelta(
+            end_time = signal["opened_at"] + timedelta(
                 minutes=interval_minutes * lookback_bars
             )
 
             # Fiyat aralığını çek
             price_range = self._get_price_range(
-                signal["symbol"], signal["timestamp"], end_time, signal["interval"]
+                signal["symbol"], signal["opened_at"], end_time, signal["interval"]
             )
 
             if not price_range:
@@ -559,8 +559,8 @@ class SignalPerformanceAnalyzer:
                 FROM signal_performance sp
                 JOIN signals s ON s.id = sp.signal_id
                 WHERE sp.is_calculated = FALSE
-                  AND s.timestamp >= NOW() - INTERVAL '%s hours'
-                ORDER BY s.timestamp ASC
+                  AND s.opened_at >= NOW() - INTERVAL '%s hours'
+                ORDER BY s.opened_at ASC
             """
 
             if max_signals:

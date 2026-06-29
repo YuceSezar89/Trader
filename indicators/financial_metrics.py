@@ -11,15 +11,31 @@ SMOOTH_PERIOD_COMMON = 3
 MOMENTUM_LENGTH = 14
 RSI_LENGTH = 14
 
+# Interval bazında lookback ve yıllık bar sayısı
+_LOOKBACK_BY_TF: dict[str, int] = {
+    "1m": 500,  "5m": 288,  "15m": 200, "30m": 192,
+    "1h": 168,  "4h": 180,  "6h": 120,  "8h": 90,
+    "12h": 60,  "1d": 250,
+}
+_BARS_PER_YEAR: dict[str, int] = {
+    "1m": 525600, "5m": 105120, "15m": 35040, "30m": 17520,
+    "1h": 8760,   "4h": 2190,   "6h": 1460,   "8h": 1095,
+    "12h": 730,   "1d": 365,
+}
+
 logger = logging.getLogger(__name__)
 
 
-def calculate_metrics(df, ref_df=None, beta_window=50, alpha_window=20):
+def calculate_metrics(df, ref_df=None, beta_window=50, alpha_window=20, interval: str = "1h"):
     logger.debug(f"Input DataFrame shape: {df.shape}")
     logger.debug(f"Input DataFrame head:\n{df.head(5)}")
     logger.debug(f"DataFrame dtypes:\n{df.dtypes}")
     # SettingWithCopyWarning uyarılarını önlemek için olası dilimleri kopyaya çevir
     df = df.copy()
+
+    lookback    = _LOOKBACK_BY_TF.get(interval, LOOKBACK_COMMON)
+    ann_sqrt    = _BARS_PER_YEAR.get(interval, 8760) ** 0.5
+    beta_window = lookback
 
     if not isinstance(df, pd.DataFrame):
         logger.error(f"Expected pandas.DataFrame, got {type(df)}")
@@ -250,49 +266,48 @@ def calculate_metrics(df, ref_df=None, beta_window=50, alpha_window=20):
         .fillna(0)
     )
     df.loc[:, "avg_return"] = (
-        df["returns"].rolling(window=LOOKBACK_COMMON, min_periods=1).mean()
+        df["returns"].rolling(window=lookback, min_periods=1).mean()
     )
     df.loc[:, "std_dev_return"] = (
-        df["returns"].rolling(window=LOOKBACK_COMMON, min_periods=1).std().fillna(0)
+        df["returns"].rolling(window=lookback, min_periods=1).std().fillna(0)
     )
+    # Annualize: raw_sharpe * sqrt(bars_per_year)
     df.loc[:, "sharpe_ratio"] = np.where(
-        df["std_dev_return"] == 0, 0, df["avg_return"] / (df["std_dev_return"] + 1e-6)
+        df["std_dev_return"] == 0,
+        0,
+        (df["avg_return"] / (df["std_dev_return"] + 1e-6)) * ann_sqrt,
     )
-    if df["sharpe_ratio"].isna().any():
-        logger.warning("NaN detected in sharpe_ratio")
-        df["sharpe_ratio"] = df["sharpe_ratio"].fillna(0)
+    df["sharpe_ratio"] = df["sharpe_ratio"].fillna(0)
 
     df.loc[:, "downside_returns"] = np.where(df["returns"] < 0, df["returns"], 0)
     df.loc[:, "std_dev_downside"] = (
         df["downside_returns"]
-        .rolling(window=LOOKBACK_COMMON, min_periods=1)
+        .rolling(window=lookback, min_periods=1)
         .std()
         .fillna(0)
     )
+    # Annualize: raw_sortino * sqrt(bars_per_year)
     df.loc[:, "sortino_ratio"] = np.where(
         df["std_dev_downside"] == 0,
         0,
-        df["avg_return"] / (df["std_dev_downside"] + 1e-6),
+        (df["avg_return"] / (df["std_dev_downside"] + 1e-6)) * ann_sqrt,
     )
-    if df["sortino_ratio"].isna().any():
-        logger.warning("NaN detected in sortino_ratio")
-        df["sortino_ratio"] = df["sortino_ratio"].fillna(0)
+    df["sortino_ratio"] = df["sortino_ratio"].fillna(0)
 
-    rolling_peak = df["price"].rolling(window=LOOKBACK_COMMON, min_periods=1).max()
-    rolling_drawdown = (df["price"] - rolling_peak) / rolling_peak.replace(0, np.nan)
-    max_drawdown = rolling_drawdown.rolling(window=LOOKBACK_COMMON, min_periods=1).min().abs().add(1e-6)
-    df.loc[:, "calmar_ratio"] = df["avg_return"] / max_drawdown
-    if df["calmar_ratio"].isna().any():
-        logger.warning("NaN detected in calmar_ratio")
-        df["calmar_ratio"] = df["calmar_ratio"].fillna(0)
+    # Calmar: annualized return / max drawdown (peak-to-current, tek geçiş)
+    rolling_peak = df["price"].rolling(window=lookback, min_periods=1).max()
+    current_dd   = ((df["price"] - rolling_peak) / rolling_peak.replace(0, np.nan)).abs().add(1e-6)
+    ann_return   = df["avg_return"] * _BARS_PER_YEAR.get(interval, 8760)
+    df.loc[:, "calmar_ratio"] = ann_return / current_dd
+    df["calmar_ratio"] = df["calmar_ratio"].fillna(0).clip(-50, 50)
 
     df.loc[:, "positive_returns"] = np.where(df["returns"] > 0, df["returns"], 0)
     df["positive_returns"] = (
-        df["positive_returns"].rolling(window=LOOKBACK_COMMON, min_periods=1).sum()
+        df["positive_returns"].rolling(window=lookback, min_periods=1).sum()
     )
     df.loc[:, "negative_returns"] = np.where(df["returns"] < 0, -df["returns"], 0)
     df["negative_returns"] = (
-        df["negative_returns"].rolling(window=LOOKBACK_COMMON, min_periods=1).sum()
+        df["negative_returns"].rolling(window=lookback, min_periods=1).sum()
     )
     df.loc[:, "omega_ratio"] = np.where(
         df["negative_returns"] == 0,
@@ -316,14 +331,14 @@ def calculate_metrics(df, ref_df=None, beta_window=50, alpha_window=20):
         # Explicitly set fill_method=None to avoid FutureWarning in newer pandas versions
         market_returns = aligned_ref_df["close"].pct_change(fill_method=None).fillna(0)
         mean_market_return = market_returns.rolling(
-            window=LOOKBACK_COMMON, min_periods=1
+            window=lookback, min_periods=1
         ).mean()
         covar = (asset_returns - df["avg_return"]) * (
             market_returns - mean_market_return
         )
-        rolling_cov = covar.rolling(window=LOOKBACK_COMMON, min_periods=1).mean()
+        rolling_cov = covar.rolling(window=lookback, min_periods=1).mean()
         rolling_var = (
-            market_returns.rolling(window=LOOKBACK_COMMON, min_periods=1)
+            market_returns.rolling(window=lookback, min_periods=1)
             .var()
             .replace(0, np.nan)
         )
@@ -342,12 +357,12 @@ def calculate_metrics(df, ref_df=None, beta_window=50, alpha_window=20):
 
         # Rolling tracking error hesaplama (minimum 30 veri noktası)
         tracking_error = excess_returns.rolling(
-            window=max(30, LOOKBACK_COMMON), min_periods=30
+            window=max(30, lookback), min_periods=30
         ).std()
 
         # Rolling excess return ortalama
         mean_excess_returns = excess_returns.rolling(
-            window=max(30, LOOKBACK_COMMON), min_periods=30
+            window=max(30, lookback), min_periods=30
         ).mean()
 
         # Information Ratio hesaplama: mean_excess_return / tracking_error

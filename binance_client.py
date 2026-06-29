@@ -106,7 +106,8 @@ class BinanceClientManager:
                 "close_time", "quote_asset_volume", "number_of_trades",
                 "taker_buy_base_asset_volume", "taker_buy_quote_asset_volume", "ignore"
             ])
-            df = df.astype({"open": float, "high": float, "low": float, "close": float, "volume": float})
+            df = df.astype({"open": float, "high": float, "low": float, "close": float, "volume": float,
+                            "taker_buy_base_asset_volume": float, "taker_buy_quote_asset_volume": float})
             return df
         except aiohttp.ClientError as e:
             # Ağ/bağlantı sorunları için

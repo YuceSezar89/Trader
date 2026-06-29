@@ -9,7 +9,7 @@ Her strateji için ayrı instance kullanılır:
 
 import json as _json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Callable, Optional
 
 from sqlalchemy import select
@@ -28,7 +28,7 @@ FEE_RATE     = 0.0005
 MAX_OPEN     = 10
 
 _STRATEGY_TRIGGERS: dict[str, Callable[[dict], bool]] = {
-    "conf_100": lambda sd: False,
+    "conf_100": lambda sd: True,
     "ha_cross": lambda sd: sd.get("indicators") == "HA_Cross",
     "rsi_15m":  lambda sd: "RSI_Cross" in (sd.get("indicators") or "") and sd.get("interval") == "15m",
 }
@@ -120,11 +120,11 @@ class PaperTradeManager:
                     session, symbol, self.strategy
                 )
 
-                opened_at = signal_data.get("opened_at") or datetime.utcnow()
+                opened_at = signal_data.get("opened_at") or datetime.now()
                 if isinstance(opened_at, str):
                     opened_at = datetime.fromisoformat(opened_at)
                 if isinstance(opened_at, datetime) and opened_at.tzinfo is not None:
-                    opened_at = opened_at.astimezone(timezone.utc).replace(tzinfo=None)
+                    opened_at = opened_at.replace(tzinfo=None)
 
                 trade = PaperTrade(
                     signal_id=signal_id,
@@ -318,7 +318,7 @@ class PaperTradeManager:
         pnl_usd = (pnl_pct / 100) * POSITION_USD - fee_usd
 
         trade.status       = "closed"
-        trade.closed_at    = datetime.utcnow()
+        trade.closed_at    = datetime.now()
         trade.exit_price   = exit_price
         trade.close_reason = reason
         trade.pnl_pct      = pnl_pct
@@ -336,7 +336,7 @@ class PaperTradeManager:
             drawdown = (portfolio.peak_balance - portfolio.balance) / portfolio.peak_balance * 100
             if drawdown > portfolio.max_drawdown_pct:
                 portfolio.max_drawdown_pct = drawdown
-            portfolio.updated_at = datetime.utcnow()
+            portfolio.updated_at = datetime.now()
             trade.balance_after  = portfolio.balance
 
         logger.info(
@@ -357,7 +357,7 @@ class PaperTradeManager:
         pnl_usd = (pnl_pct / 100) * POSITION_USD - fee_usd
 
         trade.status       = "closed"
-        trade.closed_at    = datetime.utcnow()
+        trade.closed_at    = datetime.now()
         trade.exit_price   = exit_price
         trade.close_reason = reason
         trade.pnl_pct      = pnl_pct
@@ -380,7 +380,7 @@ class PaperTradeManager:
             drawdown = (portfolio.peak_balance - portfolio.balance) / portfolio.peak_balance * 100
             if drawdown > portfolio.max_drawdown_pct:
                 portfolio.max_drawdown_pct = drawdown
-            portfolio.updated_at = datetime.utcnow()
+            portfolio.updated_at = datetime.now()
             trade.balance_after  = portfolio.balance
             session.add(portfolio)
 
