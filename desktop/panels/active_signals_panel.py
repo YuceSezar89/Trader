@@ -33,7 +33,8 @@ class ActiveSignalsPanel(QWidget):
         symbol_selected(str, str): Satıra tıklandığında (symbol, interval).
     """
 
-    symbol_selected = pyqtSignal(str, str)
+    symbol_selected      = pyqtSignal(str, str)
+    signal_data_selected = pyqtSignal(dict)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -345,6 +346,14 @@ class ActiveSignalsPanel(QWidget):
         row = self._selected_row()
         if row:
             self.symbol_selected.emit(row.symbol, row.interval)
+            self.signal_data_selected.emit({
+                "signal_type": row.signal_type,
+                "opened_at": row.timestamp.isoformat() if row.timestamp else None,
+                "entry_price": row.entry_price,
+                "stop_loss_price": row.stop_loss_price,
+                "take_profit_price": row.take_profit_price,
+                "trailing_stop_price": row.trailing_stop_price,
+            })
 
     def _selected_row(self):
         indexes = self._table.selectionModel().selectedRows()

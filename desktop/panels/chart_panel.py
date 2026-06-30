@@ -122,6 +122,8 @@ class ChartPanel(QWidget):  # pylint: disable=too-many-instance-attributes
         if df is not None and not df.empty:
             last = df["close"].iloc[-1]
             self._price_label.setText(f"{last:,.4f}")
+        # Sembol değişince marker'ları temizle
+        self._chart.clear_signal_marker()
 
     def _fetch_data(self, symbol: str, tf: str) -> Optional[pd.DataFrame]:
         """Redis Arrow → JSON fallback → DB fallback."""
@@ -256,3 +258,8 @@ class ChartPanel(QWidget):  # pylint: disable=too-many-instance-attributes
     def current_tf(self) -> str:
         """Şu an gösterilen TF'i döner."""
         return self._tf
+
+    @pyqtSlot(dict)
+    def set_signal_marker(self, signal_data: dict) -> None:
+        """Aktif sinyal panelinden çift tıkla gelen sinyal verisini grafik üzerinde gösterir."""
+        self._chart.set_signal_marker(signal_data)

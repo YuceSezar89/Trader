@@ -253,6 +253,7 @@ class MainWindow(QMainWindow):
         # ── Aktif Sinyaller (alt, gerçek panel) ───────────────────────────
         self._active_signals_panel = ActiveSignalsPanel(self)
         self._active_signals_panel.symbol_selected.connect(self._chart_panel.load_symbol)
+        self._active_signals_panel.signal_data_selected.connect(self._chart_panel.set_signal_marker)
         active_sig_dock = QDockWidget("Aktif Sinyaller", self)
         active_sig_dock.setObjectName("dock_active_sig")
         active_sig_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)

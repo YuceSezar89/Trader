@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 from PyQt6.QtCore import QTimer, QUrl, pyqtSlot
 from PyQt6.QtWebEngineWidgets import QWebEngineView
@@ -25,6 +26,8 @@ _EMA_SPAN = 21
 _EMA_ALPHA = 2 / (_EMA_SPAN + 1)   # ≈ 0.0909
 _RSI_PERIOD = 14
 _RSI_ALPHA = 1 / _RSI_PERIOD        # ≈ 0.0714
+_ST_PERIOD = 10
+_ST_MULT = 3.0
 
 _HTML_TEMPLATE = """<!DOCTYPE html>
 <html>
@@ -53,6 +56,8 @@ const COLORS = {{
 
 const container = document.getElementById('chart');
 let chart, candleSeries, emaSeries, volSeries, rsiSeries, rsi70, rsi30;
+let stUpSeries, stDownSeries;
+let _priceLines = [];
 
 function initChart() {{
   const w = container.clientWidth;
@@ -142,6 +147,25 @@ function initChart() {{
     crosshairMarkerVisible: false, priceScaleId: 'rsi',
   }});
 
+  // Supertrend — uptrend (yeşil) ve downtrend (kırmızı) serileri
+  stUpSeries = chart.addLineSeries({{
+    color: COLORS.green,
+    lineWidth: 2,
+    priceLineVisible: false,
+    lastValueVisible: false,
+    crosshairMarkerVisible: false,
+  }});
+  safeApply(stUpSeries, {{ scaleMargins: {{ top: 0.05, bottom: 0.35 }} }});
+
+  stDownSeries = chart.addLineSeries({{
+    color: COLORS.red,
+    lineWidth: 2,
+    priceLineVisible: false,
+    lastValueVisible: false,
+    crosshairMarkerVisible: false,
+  }});
+  safeApply(stDownSeries, {{ scaleMargins: {{ top: 0.05, bottom: 0.35 }} }});
+
   window._chartReady = true;
   }} catch(e) {{ console.log('initChart HATA:', e.message, e.stack); }}
 }}  // initChart sonu
@@ -189,6 +213,39 @@ function loadData(candlesJson, emaJson, volJson, rsiJson, attempt) {{
   }} catch(e) {{
     console.log('loadData error:', e.message);
   }}
+}}
+
+function loadSupertrend(stUpJson, stDownJson) {{
+  if (!stUpSeries || !stDownSeries) return;
+  try {{
+    stUpSeries.setData(JSON.parse(stUpJson));
+    stDownSeries.setData(JSON.parse(stDownJson));
+  }} catch(e) {{ console.log('loadSupertrend error:', e.message); }}
+}}
+
+function setSignalMarkers(markersJson, priceLineJson) {{
+  try {{ candleSeries.setMarkers([]); }} catch(e) {{}}
+  _priceLines.forEach(pl => {{ try {{ candleSeries.removePriceLine(pl); }} catch(e) {{}} }});
+  _priceLines = [];
+  try {{
+    const markers = JSON.parse(markersJson);
+    if (markers.length) candleSeries.setMarkers(markers);
+  }} catch(e) {{ console.log('setMarkers error:', e.message); }}
+  try {{
+    JSON.parse(priceLineJson).forEach(l => {{
+      const pl = candleSeries.createPriceLine({{
+        price: l.price, color: l.color, lineWidth: 1,
+        lineStyle: 2, axisLabelVisible: true, title: l.title,
+      }});
+      _priceLines.push(pl);
+    }});
+  }} catch(e) {{ console.log('setPriceLines error:', e.message); }}
+}}
+
+function clearSignalMarkers() {{
+  try {{ candleSeries.setMarkers([]); }} catch(e) {{}}
+  _priceLines.forEach(pl => {{ try {{ candleSeries.removePriceLine(pl); }} catch(e) {{}} }});
+  _priceLines = [];
 }}
 
 function setPriceFormat(precision, minMove) {{
@@ -257,6 +314,7 @@ class TVChart(QWebEngineView):
         self._tf = ""
         self._ready = False
         self._pending_df: Optional[pd.DataFrame] = None
+        self._pending_signal: Optional[dict] = None
         self._bar_state: Optional[dict] = None  # son kapalı bar'ın EMA/RSI durumu
 
         self.loadFinished.connect(self._on_load_finished)
@@ -268,7 +326,9 @@ class TVChart(QWebEngineView):
         if ok and self._pending_df is not None:
             df, sym, tf = self._pending_df
             self._pending_df = None
-            QTimer.singleShot(600, lambda: self._send_data(df, sym, tf))
+            sig = self._pending_signal
+            self._pending_signal = None
+            QTimer.singleShot(600, lambda: self._send_data(df, sym, tf, sig))
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -277,15 +337,16 @@ class TVChart(QWebEngineView):
             if w > 10 and h > 10:
                 self.page().runJavaScript(f"resizeChart({w},{h})")
 
-    def load_df(self, df: pd.DataFrame, symbol: str = "", tf: str = "") -> None:
+    def load_df(self, df: pd.DataFrame, symbol: str = "", tf: str = "", signal: Optional[dict] = None) -> None:
         self._symbol = symbol
         self._tf = tf
         if df is None or df.empty:
             return
         if not self._ready:
             self._pending_df = (df, symbol, tf)
+            self._pending_signal = signal
             return
-        self._send_data(df, symbol, tf)
+        self._send_data(df, symbol, tf, signal)
 
     def update_last_bar(self, df: pd.DataFrame) -> None:
         """Sadece son mumu günceller — fitContent çağırmaz, zoom/pan korunur."""
@@ -333,9 +394,72 @@ class TVChart(QWebEngineView):
     def set_log_scale(self, enabled: bool) -> None:
         self.page().runJavaScript(f"setLogScale({'true' if enabled else 'false'})")
 
-    def _send_data(self, df: pd.DataFrame, symbol: str, tf: str) -> None:
+    def set_signal_marker(self, signal_data: Optional[dict]) -> None:
+        """Sinyal entry marker + SL/TP price line'larını çizer."""
+        if signal_data is None:
+            self.page().runJavaScript("clearSignalMarkers()")
+            self._pending_signal = None
+            return
+        if not self._ready:
+            self._pending_signal = signal_data
+            return
+        self._apply_signal_marker(signal_data)
+
+    def clear_signal_marker(self) -> None:
+        self._pending_signal = None
+        if self._ready:
+            self.page().runJavaScript("clearSignalMarkers()")
+
+    def _apply_signal_marker(self, signal_data: dict) -> None:
+        sig_type = signal_data.get("signal_type", "LONG")
+        opened_at = signal_data.get("opened_at")
+        entry = signal_data.get("entry_price")
+        sl = signal_data.get("stop_loss_price")
+        tp = signal_data.get("take_profit_price")
+        trail = signal_data.get("trailing_stop_price")
+
+        green = COLORS["green"]
+        red   = COLORS["red"]
+
+        markers = []
+        if opened_at is not None and entry is not None:
+            try:
+                from datetime import datetime  # pylint: disable=import-outside-toplevel
+                if isinstance(opened_at, str):
+                    opened_at = datetime.fromisoformat(opened_at)
+                t = int(opened_at.timestamp()) + 3 * 3600
+                is_long = str(sig_type).upper() == "LONG"
+                markers.append({
+                    "time": t,
+                    "position": "belowBar" if is_long else "aboveBar",
+                    "color": green if is_long else red,
+                    "shape": "arrowUp" if is_long else "arrowDown",
+                    "text": f"{'▲' if is_long else '▼'} {float(entry):.4f}",
+                    "size": 1,
+                })
+            except Exception:  # pylint: disable=broad-exception-caught
+                pass
+
+        price_lines = []
+        sl_price = trail if trail is not None else sl
+        sl_label = "Trail" if trail is not None else "SL"
+        if sl_price is not None:
+            price_lines.append({"price": float(sl_price), "color": red, "title": sl_label})
+        if tp is not None and trail is None:
+            price_lines.append({"price": float(tp), "color": green, "title": "TP"})
+
+        js = (
+            f"setSignalMarkers("
+            f"{json.dumps(json.dumps(markers))},"
+            f"{json.dumps(json.dumps(price_lines))})"
+        )
+        self.page().runJavaScript(js)
+
+    def _send_data(self, df: pd.DataFrame, _symbol: str, _tf: str, signal: Optional[dict] = None) -> None:
         candles, ema_data, vol_data, rsi_data = self._prepare(df)
+        st_up, st_dn = self._prepare_supertrend(df)
         self._bar_state = self._compute_state(df)
+
         js = (
             f"loadData("
             f"{json.dumps(json.dumps(candles))},"
@@ -345,9 +469,71 @@ class TVChart(QWebEngineView):
         )
         self.page().runJavaScript(js)
 
+        self.page().runJavaScript(
+            f"loadSupertrend("
+            f"{json.dumps(json.dumps(st_up))},"
+            f"{json.dumps(json.dumps(st_dn))})"
+        )
+
         last_price = float(df["close"].iloc[-1])
         precision, min_move = self._price_format(last_price)
         self.page().runJavaScript(f"setPriceFormat({precision}, {min_move})")
+
+        if signal is not None:
+            self._apply_signal_marker(signal)
+        else:
+            self.page().runJavaScript("clearSignalMarkers()")
+
+    @staticmethod
+    def _prepare_supertrend(df: pd.DataFrame) -> tuple[list, list]:
+        """Supertrend(10,3) — uptrend (yeşil, lower band) ve downtrend (kırmızı, upper band)."""
+        try:
+            high  = df["high"].astype(float).values
+            low   = df["low"].astype(float).values
+            close = df["close"].astype(float).values
+            ts    = (df["timestamp"].astype("int64") // 10**9 + 3 * 3600).values
+            n = len(close)
+            if n < _ST_PERIOD + 5:
+                return [], []
+
+            # ATR — Wilder's smoothing
+            tr = np.zeros(n)
+            tr[0] = high[0] - low[0]
+            for i in range(1, n):
+                tr[i] = max(high[i] - low[i], abs(high[i] - close[i-1]), abs(low[i] - close[i-1]))
+            atr = np.zeros(n)
+            atr[_ST_PERIOD - 1] = tr[:_ST_PERIOD].mean()
+            for i in range(_ST_PERIOD, n):
+                atr[i] = (atr[i-1] * (_ST_PERIOD - 1) + tr[i]) / _ST_PERIOD
+
+            hl2 = (high + low) / 2.0
+            bu = hl2 + _ST_MULT * atr
+            bl = hl2 - _ST_MULT * atr
+
+            fu = bu.copy()
+            fl = bl.copy()
+            for i in range(1, n):
+                fu[i] = bu[i] if bu[i] < fu[i-1] or close[i-1] > fu[i-1] else fu[i-1]
+                fl[i] = bl[i] if bl[i] > fl[i-1] or close[i-1] < fl[i-1] else fl[i-1]
+
+            # Supertrend line: fl = uptrend, fu = downtrend
+            st = fu.copy()
+            for i in range(1, n):
+                if abs(st[i-1] - fu[i-1]) < 1e-12:   # was downtrend
+                    st[i] = fl[i] if close[i] > fu[i] else fu[i]
+                else:                                   # was uptrend
+                    st[i] = fu[i] if close[i] < fl[i] else fl[i]
+
+            st_up, st_dn = [], []
+            for i in range(_ST_PERIOD, n):
+                t = int(ts[i])
+                if abs(st[i] - fl[i]) < 1e-12:   # uptrend
+                    st_up.append({"time": t, "value": round(float(fl[i]), 8)})
+                else:                              # downtrend
+                    st_dn.append({"time": t, "value": round(float(fu[i]), 8)})
+            return st_up, st_dn
+        except Exception:  # pylint: disable=broad-exception-caught
+            return [], []
 
     @staticmethod
     def _price_format(price: float) -> tuple[int, float]:
