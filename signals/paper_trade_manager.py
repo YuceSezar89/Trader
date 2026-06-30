@@ -12,7 +12,7 @@ import logging
 from datetime import datetime
 from typing import Callable, Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.engine import get_session
@@ -81,6 +81,19 @@ class PaperTradeManager:
                     logger.info(
                         "[PaperTrade][%s] %s için zaten açık pozisyon var, atlandı",
                         self.strategy, symbol,
+                    )
+                    return
+
+                open_count_result = await session.execute(
+                    select(func.count()).where(
+                        PaperTrade.strategy == self.strategy,
+                        PaperTrade.status == "open",
+                    )
+                )
+                if open_count_result.scalar() >= MAX_OPEN:
+                    logger.debug(
+                        "[PaperTrade][%s] MAX_OPEN=%d dolu, atlandı (%s)",
+                        self.strategy, MAX_OPEN, symbol,
                     )
                     return
 

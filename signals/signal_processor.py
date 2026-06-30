@@ -23,17 +23,17 @@ from signals.risk_manager import risk_manager
 
 logger = get_logger(__name__)
 
-_PT_FLAG_CACHE: dict = {"value": b"1", "ts": 0.0}
+_PT_FLAG_CACHE: dict = {"value": "1", "ts": 0.0}
 _PT_FLAG_TTL = 30.0
 
 
-async def _get_pt_flag() -> bytes:
+async def _get_pt_flag() -> str:
     now = time.monotonic()
     if now - _PT_FLAG_CACHE["ts"] < _PT_FLAG_TTL:
         return _PT_FLAG_CACHE["value"]
     try:
         val = await RedisClient.get_client().get("settings:paper_trade_enabled")
-        _PT_FLAG_CACHE["value"] = val if val is not None else b"1"
+        _PT_FLAG_CACHE["value"] = str(val) if val is not None else "1"
         _PT_FLAG_CACHE["ts"] = now
     except Exception:
         pass
@@ -528,7 +528,7 @@ async def process_and_enrich_signals(
 
                 if signal_id and current_price:
                     _pt_flag = await _get_pt_flag()
-                    if _pt_flag != b"0":
+                    if _pt_flag != "0":
                         funding: Optional[float] = None
                         try:
                             import json as _json
