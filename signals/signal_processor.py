@@ -196,49 +196,121 @@ def _compute_smc(df: pd.DataFrame, sig_type: str, lookback: int = 50) -> tuple[O
     pd_zone: (close - low_N) / (high_N - low_N) * 100
       0-25  → Deep Discount | 25-50 → Discount | 50-75 → Premium | 75-100 → Deep Premium
 
-    market_structure:
-      BOS↑  — Long sinyal, önceki trend bullish, swing high kırıldı (devam)
-      BOS↓  — Short sinyal, önceki trend bearish, swing low kırıldı (devam)
-      CHoCH↑ — Long sinyal, önceki trend bearish, swing high kırıldı (dönüş)
-      CHoCH↓ — Short sinyal, önceki trend bullish, swing low kırıldı (dönüş)
-      -     — Yapı kırılımı yok
+    market_structure: pivot tabanlı tespit (smartmoneyconcepts kütüphanesi).
+      BOS↑  / BOS↓  — sinyal mevcut yapıyla aynı yönde (trend devamı)
+      CHoCH↑ / CHoCH↓ — sinyal yapıya karşı (dönüş sinyali)
+      -             — yapı belirlenemedi
     """
     try:
         if len(df) < lookback + 5:
             return None, "-"
 
-        high = df["high"].astype(float)
-        low  = df["low"].astype(float)
-        close = df["close"].astype(float)
+        from smartmoneyconcepts import smc as _smc_lib  # pylint: disable=import-outside-toplevel
 
-        rng_high = high.iloc[-lookback:].max()
-        rng_low  = low.iloc[-lookback:].min()
+        df_use = df.tail(lookback).copy().reset_index(drop=True)
+        high  = df_use["high"].astype(float)
+        low   = df_use["low"].astype(float)
+        close = df_use["close"].astype(float)
+
+        rng_high = float(high.max())
+        rng_low  = float(low.min())
         pd_zone: Optional[float] = None
         if rng_high > rng_low:
             pd_zone = round(((float(close.iloc[-1]) - rng_low) / (rng_high - rng_low)) * 100, 1)
 
-        mid = lookback // 2
-        fh_high = high.iloc[-lookback:-mid].max()
-        sh_high = high.iloc[-mid:-1].max()
-        fh_low  = low.iloc[-lookback:-mid].min()
-        sh_low  = low.iloc[-mid:-1].min()
+        df_smc = df_use[["open", "high", "low", "close", "volume"]].copy()
+        for col in df_smc.columns:
+            df_smc[col] = df_smc[col].astype(float)
 
-        prior_bullish = sh_high > fh_high and sh_low > fh_low
-        prior_bearish = sh_high < fh_high and sh_low < fh_low
+        swing_df = _smc_lib.swing_highs_lows(df_smc, swing_length=5)
+        bos_df   = _smc_lib.bos_choch(df_smc, swing_df, close_break=True)
 
-        swing_high = high.iloc[-lookback:-1].max()
-        swing_low  = low.iloc[-lookback:-1].min()
-        cur = float(close.iloc[-1])
+        structure_dir = 0
+        for i in range(len(bos_df) - 1, -1, -1):
+            bos_val   = bos_df["BOS"].iloc[i]
+            choch_val = bos_df["CHOCH"].iloc[i]
+            if not np.isnan(bos_val):
+                structure_dir = int(bos_val)
+                break
+            if not np.isnan(choch_val):
+                structure_dir = int(choch_val)
+                break
+
+        if structure_dir == 0:
+            return pd_zone, "-"
 
         structure = "-"
-        if sig_type == "Long" and cur > swing_high:
-            structure = "CHoCH↑" if prior_bearish else "BOS↑"
-        elif sig_type == "Short" and cur < swing_low:
-            structure = "CHoCH↓" if prior_bullish else "BOS↓"
+        if structure_dir == 1:
+            structure = "BOS↑" if sig_type == "Long" else "CHoCH↓"
+        elif structure_dir == -1:
+            structure = "BOS↓" if sig_type == "Short" else "CHoCH↑"
 
         return pd_zone, structure
     except Exception:  # pylint: disable=broad-exception-caught
         return None, "-"
+
+
+_FVG_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
+_FVG_LOOKBACK   = 30
+
+
+def _detect_fvg_in_df(df: pd.DataFrame, sig_type: str, entry_price: float, lookback: int = _FVG_LOOKBACK) -> bool:
+    """Son `lookback` barda entry fiyatının içinde kaldığı aktif bir FVG var mı?"""
+    if len(df) < 3:
+        return False
+    high  = df["high"].astype(float).values
+    low   = df["low"].astype(float).values
+    close = df["close"].astype(float).values
+    n = len(high)
+    start = max(0, n - lookback)
+    for i in range(start + 2, n):
+        if sig_type == "Long":
+            gap_bot = high[i - 2]
+            gap_top = low[i]
+            if gap_top > gap_bot and gap_bot <= entry_price <= gap_top:
+                if close[-1] >= gap_bot:
+                    return True
+        else:
+            gap_top = low[i - 2]
+            gap_bot = high[i]
+            if gap_bot < gap_top and gap_bot <= entry_price <= gap_top:
+                if close[-1] <= gap_top:
+                    return True
+    return False
+
+
+async def _compute_fvg(symbol: str, sig_type: str, entry_price: float) -> str:
+    """Tüm TF'lerde aktif FVG var mı? Sonuç: '1h,4h' veya '-'."""
+    import io as _io  # pylint: disable=import-outside-toplevel
+    matched: list[str] = []
+    try:
+        rc = RedisClient.get_client()
+        for tf in _FVG_TIMEFRAMES:
+            try:
+                raw = await rc.get(f"live_kline_data:{symbol}:{tf}")
+                if not raw:
+                    continue
+                if isinstance(raw, bytes) and raw[:4] == b"ARDF":
+                    import pyarrow as _pa  # pylint: disable=import-outside-toplevel
+                    reader = _pa.ipc.open_stream(raw[4:])
+                    df_tf = reader.read_pandas()
+                elif isinstance(raw, (bytes, str)):
+                    raw_str = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+                    df_tf = pd.read_json(_io.StringIO(raw_str), orient="split")
+                else:
+                    continue
+                if "open_time" in df_tf.columns and "timestamp" not in df_tf.columns:
+                    df_tf = df_tf.rename(columns={"open_time": "timestamp"})
+                needed = {"high", "low", "close"}
+                if not needed.issubset(df_tf.columns):
+                    continue
+                if _detect_fvg_in_df(df_tf, sig_type, entry_price):
+                    matched.append(tf)
+            except Exception:  # pylint: disable=broad-exception-caught
+                continue
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+    return ",".join(matched) if matched else "-"
 
 
 def _compute_vp_score(df: pd.DataFrame, lookback: int = 500) -> tuple[float, float]:
@@ -579,6 +651,10 @@ async def process_and_enrich_signals(
                     "SMC | %s | %s | %s | pd=%.1f struct=%s",
                     symbol, sig_type, interval, _pd_zone or -1, _mkt_structure,
                 )
+
+                _fvg_tfs = await _compute_fvg(symbol, sig_type, float(enriched_signal.get("open_price", current_price or 0)))
+                enriched_signal["fvg_tfs"] = _fvg_tfs
+                logger.info("FVG | %s | %s | tfs=%s", symbol, sig_type, _fvg_tfs)
 
                 logger.info(f"[{symbol}] Sinyal işleniyor: {signal_name} - {sig_type}")
                 signal_id = await signal_lifecycle_manager.process(enriched_signal, current_price=current_price)

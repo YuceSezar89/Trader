@@ -93,6 +93,15 @@ class ChartPanel(QWidget):  # pylint: disable=too-many-instance-attributes
         self._log_btn.clicked.connect(self._on_log_toggled)
         header.addWidget(self._log_btn)
 
+        self._smc_btn = QPushButton("SMC")
+        self._smc_btn.setFixedHeight(24)
+        self._smc_btn.setFixedWidth(42)
+        self._smc_btn.setCheckable(True)
+        self._smc_btn.setChecked(False)
+        self._smc_btn.setStyleSheet(self._tf_btn_style(False))
+        self._smc_btn.clicked.connect(self._on_smc_toggled)
+        header.addWidget(self._smc_btn)
+
         root.addLayout(header)
 
         # Grafik
@@ -228,6 +237,10 @@ class ChartPanel(QWidget):  # pylint: disable=too-many-instance-attributes
     def _on_log_toggled(self, enabled: bool) -> None:
         self._log_btn.setStyleSheet(self._tf_btn_style(enabled))
         self._chart.set_log_scale(enabled)
+
+    def _on_smc_toggled(self, enabled: bool) -> None:
+        self._smc_btn.setStyleSheet(self._tf_btn_style(enabled))
+        self._chart.toggle_smc(enabled)
 
     def _on_tf_clicked(self, tf: str) -> None:
         """TF butonuna tıklanınca grafiği günceller."""

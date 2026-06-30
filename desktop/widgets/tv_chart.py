@@ -58,6 +58,11 @@ const container = document.getElementById('chart');
 let chart, candleSeries, emaSeries, volSeries, rsiSeries, rsi70, rsi30;
 let stUpSeries, stDownSeries;
 let _priceLines = [];
+let _fvgLines = [];
+let _smcData = null;
+let _smcEnabled = false;
+let _smcLines = [];
+let _signalMarkers = [];
 
 function initChart() {{
   const w = container.clientWidth;
@@ -224,13 +229,9 @@ function loadSupertrend(stUpJson, stDownJson) {{
 }}
 
 function setSignalMarkers(markersJson, priceLineJson) {{
-  try {{ candleSeries.setMarkers([]); }} catch(e) {{}}
   _priceLines.forEach(pl => {{ try {{ candleSeries.removePriceLine(pl); }} catch(e) {{}} }});
   _priceLines = [];
-  try {{
-    const markers = JSON.parse(markersJson);
-    if (markers.length) candleSeries.setMarkers(markers);
-  }} catch(e) {{ console.log('setMarkers error:', e.message); }}
+  try {{ _signalMarkers = JSON.parse(markersJson); }} catch(e) {{ _signalMarkers = []; }}
   try {{
     JSON.parse(priceLineJson).forEach(l => {{
       const pl = candleSeries.createPriceLine({{
@@ -240,12 +241,64 @@ function setSignalMarkers(markersJson, priceLineJson) {{
       _priceLines.push(pl);
     }});
   }} catch(e) {{ console.log('setPriceLines error:', e.message); }}
+  _refreshAllMarkers();
+}}
+
+function loadFVG(fvgJson) {{
+  _fvgLines.forEach(pl => {{ try {{ candleSeries.removePriceLine(pl); }} catch(e) {{}} }});
+  _fvgLines = [];
+  try {{
+    JSON.parse(fvgJson).forEach(z => {{
+      const top = candleSeries.createPriceLine({{
+        price: z.top, color: z.color, lineWidth: 1,
+        lineStyle: 3, axisLabelVisible: false, title: z.label,
+      }});
+      const bot = candleSeries.createPriceLine({{
+        price: z.bot, color: z.color, lineWidth: 1,
+        lineStyle: 3, axisLabelVisible: false, title: '',
+      }});
+      _fvgLines.push(top, bot);
+    }});
+  }} catch(e) {{ console.log('loadFVG error:', e.message); }}
 }}
 
 function clearSignalMarkers() {{
-  try {{ candleSeries.setMarkers([]); }} catch(e) {{}}
+  _signalMarkers = [];
   _priceLines.forEach(pl => {{ try {{ candleSeries.removePriceLine(pl); }} catch(e) {{}} }});
   _priceLines = [];
+  _refreshAllMarkers();
+}}
+
+function _refreshAllMarkers() {{
+  const smcM = (_smcEnabled && _smcData) ? (_smcData.markers || []) : [];
+  const all = [..._signalMarkers, ...smcM].sort((a, b) => a.time - b.time);
+  try {{ candleSeries.setMarkers(all); }} catch(e) {{}}
+}}
+
+function _renderSMC() {{
+  _smcLines.forEach(pl => {{ try {{ candleSeries.removePriceLine(pl); }} catch(e) {{}} }});
+  _smcLines = [];
+  if (_smcEnabled && _smcData) {{
+    (_smcData.levels || []).forEach(l => {{
+      const pl = candleSeries.createPriceLine({{
+        price: l.price, color: l.color, lineWidth: 1,
+        lineStyle: 2, axisLabelVisible: true, title: l.title,
+      }});
+      _smcLines.push(pl);
+    }});
+  }}
+  _refreshAllMarkers();
+}}
+
+function loadSMC(dataJson, enabled) {{
+  try {{ _smcData = JSON.parse(dataJson); }} catch(e) {{ _smcData = null; }}
+  _smcEnabled = enabled;
+  _renderSMC();
+}}
+
+function toggleSMC(enabled) {{
+  _smcEnabled = enabled;
+  _renderSMC();
 }}
 
 function setPriceFormat(precision, minMove) {{
@@ -315,7 +368,8 @@ class TVChart(QWebEngineView):
         self._ready = False
         self._pending_df: Optional[pd.DataFrame] = None
         self._pending_signal: Optional[dict] = None
-        self._bar_state: Optional[dict] = None  # son kapalı bar'ın EMA/RSI durumu
+        self._bar_state: Optional[dict] = None
+        self._smc_enabled = False
 
         self.loadFinished.connect(self._on_load_finished)
         self.setHtml(_build_html(), QUrl("about:blank"))
@@ -390,6 +444,11 @@ class TVChart(QWebEngineView):
             f"{json.dumps(json.dumps(rsi_pt))})"
         )
         self.page().runJavaScript(js)
+
+    def toggle_smc(self, enabled: bool) -> None:
+        self._smc_enabled = enabled
+        if self._ready:
+            self.page().runJavaScript(f"toggleSMC({'true' if enabled else 'false'})")
 
     def set_log_scale(self, enabled: bool) -> None:
         self.page().runJavaScript(f"setLogScale({'true' if enabled else 'false'})")
@@ -475,6 +534,13 @@ class TVChart(QWebEngineView):
             f"{json.dumps(json.dumps(st_dn))})"
         )
 
+        smc_data = self._prepare_smc(df)
+        self.page().runJavaScript(
+            f"loadSMC("
+            f"{json.dumps(json.dumps(smc_data))},"
+            f"{'true' if self._smc_enabled else 'false'})"
+        )
+
         last_price = float(df["close"].iloc[-1])
         precision, min_move = self._price_format(last_price)
         self.page().runJavaScript(f"setPriceFormat({precision}, {min_move})")
@@ -534,6 +600,84 @@ class TVChart(QWebEngineView):
             return st_up, st_dn
         except Exception:  # pylint: disable=broad-exception-caught
             return [], []
+
+    @staticmethod
+    def _prepare_fvg(df: pd.DataFrame, lookback: int = 50) -> list[dict]:
+        """Son `lookback` barda dolmamış FVG zonlarını döner (grafik overlay için)."""
+        try:
+            high  = df["high"].astype(float).values
+            low   = df["low"].astype(float).values
+            close = df["close"].astype(float).values
+            n = len(high)
+            if n < 3:
+                return []
+            cur_close = close[-1]
+            zones: list[dict] = []
+            start = max(0, n - lookback)
+            for i in range(start + 2, n):
+                # Bullish FVG: gap between candle[i-2].high and candle[i].low
+                gap_bot = high[i - 2]
+                gap_top = low[i]
+                if gap_top > gap_bot and cur_close >= gap_bot:
+                    zones.append({"top": round(float(gap_top), 8), "bot": round(float(gap_bot), 8), "color": COLORS["green"], "label": "FVG↑"})
+                # Bearish FVG: gap between candle[i-2].low and candle[i].high
+                gap_top2 = low[i - 2]
+                gap_bot2 = high[i]
+                if gap_bot2 < gap_top2 and cur_close <= gap_top2:
+                    zones.append({"top": round(float(gap_top2), 8), "bot": round(float(gap_bot2), 8), "color": COLORS["red"], "label": "FVG↓"})
+            return zones
+        except Exception:  # pylint: disable=broad-exception-caught
+            return []
+
+    @staticmethod
+    def _prepare_smc(df: pd.DataFrame) -> dict:
+        """Swing highs/lows + BOS/CHoCH verilerini grafik overlay için hazırlar."""
+        try:
+            from smartmoneyconcepts import smc as _smc  # pylint: disable=import-outside-toplevel
+
+            ts = (df["timestamp"].astype("int64") // 10**9 + 3 * 3600).values
+            df_smc = df[["open", "high", "low", "close", "volume"]].copy().reset_index(drop=True)
+            for col in df_smc.columns:
+                df_smc[col] = df_smc[col].astype(float)
+
+            swing_df = _smc.swing_highs_lows(df_smc, swing_length=5)
+            bos_df   = _smc.bos_choch(df_smc, swing_df, close_break=True)
+
+            green  = COLORS["green"]
+            red    = COLORS["red"]
+            orange = "#ff9900"
+            purple = COLORS["purple"]
+
+            markers = []
+            for i in range(len(swing_df)):
+                hl = swing_df["HighLow"].iloc[i]
+                if np.isnan(hl):
+                    continue
+                t = int(ts[i])
+                if hl == 1.0:
+                    markers.append({"time": t, "position": "aboveBar", "color": red,
+                                    "shape": "arrowDown", "text": "H", "size": 0.8})
+                else:
+                    markers.append({"time": t, "position": "belowBar", "color": green,
+                                    "shape": "arrowUp", "text": "L", "size": 0.8})
+
+            levels = []
+            for i in range(len(bos_df)):
+                bos_val   = bos_df["BOS"].iloc[i]
+                choch_val = bos_df["CHOCH"].iloc[i]
+                lv        = bos_df["Level"].iloc[i]
+                if not np.isnan(bos_val) and not np.isnan(lv) and lv > 0:
+                    levels.append({"price": float(lv),
+                                   "color": green if bos_val == 1 else red,
+                                   "title": "BOS↑" if bos_val == 1 else "BOS↓"})
+                elif not np.isnan(choch_val) and not np.isnan(lv) and lv > 0:
+                    levels.append({"price": float(lv),
+                                   "color": orange if choch_val == 1 else purple,
+                                   "title": "CHoCH↑" if choch_val == 1 else "CHoCH↓"})
+
+            return {"markers": markers, "levels": levels}
+        except Exception:  # pylint: disable=broad-exception-caught
+            return {"markers": [], "levels": []}
 
     @staticmethod
     def _price_format(price: float) -> tuple[int, float]:
