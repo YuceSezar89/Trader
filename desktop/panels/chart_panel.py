@@ -102,6 +102,24 @@ class ChartPanel(QWidget):  # pylint: disable=too-many-instance-attributes
         self._smc_btn.clicked.connect(self._on_smc_toggled)
         header.addWidget(self._smc_btn)
 
+        self._fvg_btn = QPushButton("FVG")
+        self._fvg_btn.setFixedHeight(24)
+        self._fvg_btn.setFixedWidth(42)
+        self._fvg_btn.setCheckable(True)
+        self._fvg_btn.setChecked(False)
+        self._fvg_btn.setStyleSheet(self._tf_btn_style(False))
+        self._fvg_btn.clicked.connect(self._on_fvg_toggled)
+        header.addWidget(self._fvg_btn)
+
+        self._phl_btn = QPushButton("PDH/L")
+        self._phl_btn.setFixedHeight(24)
+        self._phl_btn.setFixedWidth(52)
+        self._phl_btn.setCheckable(True)
+        self._phl_btn.setChecked(False)
+        self._phl_btn.setStyleSheet(self._tf_btn_style(False))
+        self._phl_btn.clicked.connect(self._on_phl_toggled)
+        header.addWidget(self._phl_btn)
+
         root.addLayout(header)
 
         # Grafik
@@ -241,6 +259,14 @@ class ChartPanel(QWidget):  # pylint: disable=too-many-instance-attributes
     def _on_smc_toggled(self, enabled: bool) -> None:
         self._smc_btn.setStyleSheet(self._tf_btn_style(enabled))
         self._chart.toggle_smc(enabled)
+
+    def _on_fvg_toggled(self, enabled: bool) -> None:
+        self._fvg_btn.setStyleSheet(self._tf_btn_style(enabled))
+        self._chart.toggle_fvg(enabled)
+
+    def _on_phl_toggled(self, enabled: bool) -> None:
+        self._phl_btn.setStyleSheet(self._tf_btn_style(enabled))
+        self._chart.toggle_phl(enabled)
 
     def _on_tf_clicked(self, tf: str) -> None:
         """TF butonuna tıklanınca grafiği günceller."""

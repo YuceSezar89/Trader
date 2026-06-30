@@ -254,29 +254,36 @@ _FVG_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
 _FVG_LOOKBACK   = 30
 
 
-def _detect_fvg_in_df(df: pd.DataFrame, sig_type: str, entry_price: float, lookback: int = _FVG_LOOKBACK) -> bool:
-    """Son `lookback` barda entry fiyatının içinde kaldığı aktif bir FVG var mı?"""
+def _detect_fvg_in_df(df: pd.DataFrame, sig_type: str, entry_price: float) -> bool:
+    """Entry fiyatının içinde kaldığı aktif (dolmamış) bir FVG var mı?"""
     if len(df) < 3:
         return False
-    high  = df["high"].astype(float).values
-    low   = df["low"].astype(float).values
-    close = df["close"].astype(float).values
-    n = len(high)
-    start = max(0, n - lookback)
-    for i in range(start + 2, n):
-        if sig_type == "Long":
-            gap_bot = high[i - 2]
-            gap_top = low[i]
-            if gap_top > gap_bot and gap_bot <= entry_price <= gap_top:
-                if close[-1] >= gap_bot:
-                    return True
-        else:
-            gap_top = low[i - 2]
-            gap_bot = high[i]
-            if gap_bot < gap_top and gap_bot <= entry_price <= gap_top:
-                if close[-1] <= gap_top:
-                    return True
-    return False
+    try:
+        from smartmoneyconcepts import smc as _smc_lib  # pylint: disable=import-outside-toplevel
+        df_smc = df[["open", "high", "low", "close", "volume"]].copy().reset_index(drop=True)
+        for col in df_smc.columns:
+            df_smc[col] = df_smc[col].astype(float)
+        fvg_df    = _smc_lib.fvg(df_smc)
+        direction = 1 if sig_type == "Long" else -1
+        cur_close = float(df_smc["close"].iloc[-1])
+        for i in range(len(fvg_df)):
+            fvg_val = fvg_df["FVG"].iloc[i]
+            if np.isnan(fvg_val) or fvg_val != direction:
+                continue
+            mit = fvg_df["MitigatedIndex"].iloc[i]
+            if not np.isnan(mit) and mit > 0:
+                continue  # dolduruldu
+            top = float(fvg_df["Top"].iloc[i])
+            bot = float(fvg_df["Bottom"].iloc[i])
+            if fvg_val == 1 and cur_close < bot:
+                continue  # bullish FVG altına kırıldı
+            if fvg_val == -1 and cur_close > top:
+                continue  # bearish FVG üstüne kırıldı
+            if bot <= entry_price <= top:
+                return True
+        return False
+    except Exception:  # pylint: disable=broad-exception-caught
+        return False
 
 
 async def _compute_fvg(symbol: str, sig_type: str, entry_price: float) -> str:
