@@ -103,9 +103,11 @@ class Signal(Base):
     vp_buy_avg      = Column(Float, nullable=True)
     vp_sell_avg     = Column(Float, nullable=True)
     vp_score        = Column(Float, nullable=True)
-    devisso_score   = Column(Float, nullable=True)
-    devisso_delta   = Column(Float, nullable=True)
-    devisso_ratio   = Column(Float, nullable=True)
+    devisso_score    = Column(Float, nullable=True)
+    devisso_delta    = Column(Float, nullable=True)
+    devisso_ratio    = Column(Float, nullable=True)
+    pd_zone          = Column(Float, nullable=True)
+    market_structure = Column(String(10), nullable=True)
 
     paper_trades = relationship("PaperTrade", back_populates="signal", lazy="noload")
 

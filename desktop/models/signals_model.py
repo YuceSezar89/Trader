@@ -22,7 +22,7 @@ from PyQt6.QtGui import QColor
 
 from desktop.theme import COLORS
 
-COLUMNS = ["Sembol", "Tip", "TF", "İndikatör", "VPMV", "MTF", "α", "β", "Z-Score%", "P&L%", "SL", "TP", "Süre"]
+COLUMNS = ["Sembol", "Tip", "TF", "İndikatör", "VPMV", "MTF", "α", "β", "Z-Score%", "P&L%", "SL", "TP", "P/D", "Yapı", "Süre"]
 
 COL_SYMBOL    = 0
 COL_TYPE      = 1
@@ -36,7 +36,9 @@ COL_ZSCORE    = 8
 COL_PNL       = 9
 COL_SL        = 10
 COL_TP        = 11
-COL_AGE       = 12
+COL_PD        = 12
+COL_STRUCT    = 13
+COL_AGE       = 14
 
 
 def _fmt_score(v: Optional[float]) -> str:
@@ -121,6 +123,8 @@ class SignalRow:
     vp_buy_avg: Optional[float] = None
     vp_sell_avg: Optional[float] = None
     vp_score: Optional[float] = None
+    pd_zone: Optional[float] = None
+    market_structure: str = "-"
     pnl_pct: Optional[float] = field(default=None, init=False)
 
     def update_price(self, price: float) -> None:
@@ -190,6 +194,8 @@ class SignalsModel(QAbstractTableModel):
             case _ if col == COL_PNL:       return _fmt_pnl(row.pnl_pct)
             case _ if col == COL_SL:        return _fmt_price(row.stop_loss_price)
             case _ if col == COL_TP:        return _fmt_price(row.take_profit_price)
+            case _ if col == COL_PD:        return f"{row.pd_zone:.0f}" if row.pd_zone is not None else "—"
+            case _ if col == COL_STRUCT:    return row.market_structure or "-"
             case _ if col == COL_AGE:       return _fmt_age(row.timestamp, row.interval)
         return ""
 
@@ -271,6 +277,17 @@ class SignalsModel(QAbstractTableModel):
             return QColor(COLORS["red"])
         if col == COL_TP:
             return QColor(COLORS["green"])
+        if col == COL_PD and row.pd_zone is not None:
+            aligned = (row.signal_type == "LONG" and row.pd_zone <= 50) or \
+                      (row.signal_type == "SHORT" and row.pd_zone >= 50)
+            return QColor(COLORS["green"] if aligned else COLORS["red"])
+        if col == COL_STRUCT:
+            s = row.market_structure or "-"
+            if s.startswith("BOS"):
+                return QColor(COLORS["green"])
+            if s.startswith("CHoCH"):
+                return QColor(COLORS["yellow"])
+            return QColor(COLORS["text_muted"])
         if col == COL_SYMBOL and row.is_confluence:
             return QColor("#FFD700")
         return None
@@ -341,6 +358,8 @@ class SignalsModel(QAbstractTableModel):
             vp_buy_avg=s.get("vp_buy_avg"),
             vp_sell_avg=s.get("vp_sell_avg"),
             vp_score=s.get("vp_score"),
+            pd_zone=s.get("pd_zone"),
+            market_structure=s.get("market_structure") or "-",
         )
         idx = len(self._rows)
         self._rows.append(row)
@@ -453,6 +472,7 @@ class SignalsProxyModel(QSortFilterProxyModel):
             case _ if col == COL_BETA:      return _cmp(l_row.beta, r_row.beta)
             case _ if col == COL_ZSCORE:    return _cmp(l_row.zscore, r_row.zscore)
             case _ if col == COL_PNL:       return _cmp(l_row.pnl_pct, r_row.pnl_pct)
+            case _ if col == COL_PD:        return _cmp(l_row.pd_zone, r_row.pd_zone)
             case _ if col == COL_AGE:
                 def _ts(t):
                     if t is None:

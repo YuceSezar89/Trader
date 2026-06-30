@@ -1,0 +1,3 @@
+ALTER TABLE signals
+    ADD COLUMN IF NOT EXISTS pd_zone          DOUBLE PRECISION,
+    ADD COLUMN IF NOT EXISTS market_structure VARCHAR(10);

@@ -189,6 +189,58 @@ def _compute_devisso_score(df: pd.DataFrame) -> Optional[float]:
         return None
 
 
+def _compute_smc(df: pd.DataFrame, sig_type: str, lookback: int = 50) -> tuple[Optional[float], str]:
+    """
+    Premium/Discount zone + Market Structure (BOS/CHoCH).
+
+    pd_zone: (close - low_N) / (high_N - low_N) * 100
+      0-25  → Deep Discount | 25-50 → Discount | 50-75 → Premium | 75-100 → Deep Premium
+
+    market_structure:
+      BOS↑  — Long sinyal, önceki trend bullish, swing high kırıldı (devam)
+      BOS↓  — Short sinyal, önceki trend bearish, swing low kırıldı (devam)
+      CHoCH↑ — Long sinyal, önceki trend bearish, swing high kırıldı (dönüş)
+      CHoCH↓ — Short sinyal, önceki trend bullish, swing low kırıldı (dönüş)
+      -     — Yapı kırılımı yok
+    """
+    try:
+        if len(df) < lookback + 5:
+            return None, "-"
+
+        high = df["high"].astype(float)
+        low  = df["low"].astype(float)
+        close = df["close"].astype(float)
+
+        rng_high = high.iloc[-lookback:].max()
+        rng_low  = low.iloc[-lookback:].min()
+        pd_zone: Optional[float] = None
+        if rng_high > rng_low:
+            pd_zone = round(((float(close.iloc[-1]) - rng_low) / (rng_high - rng_low)) * 100, 1)
+
+        mid = lookback // 2
+        fh_high = high.iloc[-lookback:-mid].max()
+        sh_high = high.iloc[-mid:-1].max()
+        fh_low  = low.iloc[-lookback:-mid].min()
+        sh_low  = low.iloc[-mid:-1].min()
+
+        prior_bullish = sh_high > fh_high and sh_low > fh_low
+        prior_bearish = sh_high < fh_high and sh_low < fh_low
+
+        swing_high = high.iloc[-lookback:-1].max()
+        swing_low  = low.iloc[-lookback:-1].min()
+        cur = float(close.iloc[-1])
+
+        structure = "-"
+        if sig_type == "Long" and cur > swing_high:
+            structure = "CHoCH↑" if prior_bearish else "BOS↑"
+        elif sig_type == "Short" and cur < swing_low:
+            structure = "CHoCH↓" if prior_bullish else "BOS↓"
+
+        return pd_zone, structure
+    except Exception:  # pylint: disable=broad-exception-caught
+        return None, "-"
+
+
 def _compute_vp_score(df: pd.DataFrame, lookback: int = 500) -> tuple[float, float]:
     """
     %VP Normalized Lines — PineScript birebir çeviri.
@@ -518,6 +570,14 @@ async def process_and_enrich_signals(
                 logger.info(
                     "VP | %s | %s | %s | buy=%.1f sell=%.1f score=%.1f",
                     symbol, sig_type, interval, _vp_buy, _vp_sell, _vp_score,
+                )
+
+                _pd_zone, _mkt_structure = _compute_smc(df, sig_type)
+                enriched_signal["pd_zone"]          = _pd_zone
+                enriched_signal["market_structure"] = _mkt_structure
+                logger.info(
+                    "SMC | %s | %s | %s | pd=%.1f struct=%s",
+                    symbol, sig_type, interval, _pd_zone or -1, _mkt_structure,
                 )
 
                 logger.info(f"[{symbol}] Sinyal işleniyor: {signal_name} - {sig_type}")
