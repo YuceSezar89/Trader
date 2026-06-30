@@ -156,6 +156,8 @@ class SignalLifecycleManager:
                         devisso_score     = new_deviso,
                         devisso_delta     = devisso_delta,
                         devisso_ratio     = devisso_ratio,
+                        pd_zone           = signal_data.get("pd_zone"),
+                        market_structure  = signal_data.get("market_structure"),
                     )
                     session.add(new_sig)
                     await session.flush()
