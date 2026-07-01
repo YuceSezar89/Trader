@@ -108,6 +108,8 @@ class Signal(Base):
     devisso_ratio    = Column(Float, nullable=True)
     pd_zone          = Column(Float, nullable=True)
     market_structure = Column(String(10), nullable=True)
+    fvg_tfs          = Column(String(40), nullable=True)
+    candle_pattern   = Column(String(100), nullable=True)
 
     paper_trades = relationship("PaperTrade", back_populates="signal", lazy="noload")
 

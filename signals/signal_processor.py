@@ -250,6 +250,35 @@ def _compute_smc(df: pd.DataFrame, sig_type: str, lookback: int = 50) -> tuple[O
         return None, "-"
 
 
+def _compute_candle_pattern(df: pd.DataFrame) -> str:
+    """
+    Son mumda tespit edilen candlestick pattern(ler)i döner.
+    Örnek: "+HAMMER,-SHOOTINGSTAR" ya da "-"
+    Değer: 100 = bullish (+), -100 = bearish (-)
+    """
+    try:
+        import pandas_ta_classic as _pta  # pylint: disable=import-outside-toplevel
+        if len(df) < 5:
+            return "-"
+        df_cdl = df[["open", "high", "low", "close"]].copy().astype(float)
+        df_cdl.ta.cores = 0
+        result = df_cdl.ta.cdl_pattern(name="all")
+        if result is None or result.empty:
+            return "-"
+        last = result.iloc[-1]
+        found = last[last != 0]
+        if found.empty:
+            return "-"
+        parts = []
+        for col, val in found.items():
+            name = str(col).replace("CDL_", "").split("_")[0]
+            sign = "+" if val > 0 else "-"
+            parts.append(f"{sign}{name}")
+        return ",".join(parts)
+    except Exception:  # pylint: disable=broad-exception-caught
+        return "-"
+
+
 _FVG_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
 _FVG_LOOKBACK   = 30
 
@@ -265,7 +294,6 @@ def _detect_fvg_in_df(df: pd.DataFrame, sig_type: str, entry_price: float) -> bo
             df_smc[col] = df_smc[col].astype(float)
         fvg_df    = _smc_lib.fvg(df_smc)
         direction = 1 if sig_type == "Long" else -1
-        cur_close = float(df_smc["close"].iloc[-1])
         for i in range(len(fvg_df)):
             fvg_val = fvg_df["FVG"].iloc[i]
             if np.isnan(fvg_val) or fvg_val != direction:
@@ -275,10 +303,6 @@ def _detect_fvg_in_df(df: pd.DataFrame, sig_type: str, entry_price: float) -> bo
                 continue  # dolduruldu
             top = float(fvg_df["Top"].iloc[i])
             bot = float(fvg_df["Bottom"].iloc[i])
-            if fvg_val == 1 and cur_close < bot:
-                continue  # bullish FVG altına kırıldı
-            if fvg_val == -1 and cur_close > top:
-                continue  # bearish FVG üstüne kırıldı
             if bot <= entry_price <= top:
                 return True
         return False
@@ -662,6 +686,10 @@ async def process_and_enrich_signals(
                 _fvg_tfs = await _compute_fvg(symbol, sig_type, float(enriched_signal.get("open_price", current_price or 0)))
                 enriched_signal["fvg_tfs"] = _fvg_tfs
                 logger.info("FVG | %s | %s | tfs=%s", symbol, sig_type, _fvg_tfs)
+
+                _cdl = _compute_candle_pattern(df)
+                enriched_signal["candle_pattern"] = _cdl
+                logger.info("CDL | %s | %s | pattern=%s", symbol, sig_type, _cdl)
 
                 logger.info(f"[{symbol}] Sinyal işleniyor: {signal_name} - {sig_type}")
                 signal_id = await signal_lifecycle_manager.process(enriched_signal, current_price=current_price)

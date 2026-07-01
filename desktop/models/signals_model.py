@@ -22,7 +22,7 @@ from PyQt6.QtGui import QColor
 
 from desktop.theme import COLORS
 
-COLUMNS = ["Sembol", "Tip", "TF", "İndikatör", "VPMV", "MTF", "α", "β", "Z-Score%", "P&L%", "SL", "TP", "P/D", "Yapı", "Süre"]
+COLUMNS = ["Sembol", "Tip", "TF", "İndikatör", "VPMV", "MTF", "α", "β", "Z-Score%", "P&L%", "SL", "TP", "P/D", "Yapı", "FVG", "Pattern", "Süre"]
 
 COL_SYMBOL    = 0
 COL_TYPE      = 1
@@ -38,7 +38,9 @@ COL_SL        = 10
 COL_TP        = 11
 COL_PD        = 12
 COL_STRUCT    = 13
-COL_AGE       = 14
+COL_FVG       = 14
+COL_PATTERN   = 15
+COL_AGE       = 16
 
 
 def _fmt_score(v: Optional[float]) -> str:
@@ -125,6 +127,8 @@ class SignalRow:
     vp_score: Optional[float] = None
     pd_zone: Optional[float] = None
     market_structure: str = "-"
+    fvg_tfs: str = "-"
+    candle_pattern: str = "-"
     pnl_pct: Optional[float] = field(default=None, init=False)
 
     def update_price(self, price: float) -> None:
@@ -196,6 +200,8 @@ class SignalsModel(QAbstractTableModel):
             case _ if col == COL_TP:        return _fmt_price(row.take_profit_price)
             case _ if col == COL_PD:        return f"{row.pd_zone:.0f}" if row.pd_zone is not None else "—"
             case _ if col == COL_STRUCT:    return row.market_structure or "-"
+            case _ if col == COL_FVG:       return row.fvg_tfs or "-"
+            case _ if col == COL_PATTERN:   return row.candle_pattern or "-"
             case _ if col == COL_AGE:       return _fmt_age(row.timestamp, row.interval)
         return ""
 
@@ -288,6 +294,16 @@ class SignalsModel(QAbstractTableModel):
             if s.startswith("CHoCH"):
                 return QColor(COLORS["yellow"])
             return QColor(COLORS["text_muted"])
+        if col == COL_FVG:
+            return QColor(COLORS["green"] if (row.fvg_tfs and row.fvg_tfs != "-") else COLORS["text_muted"])
+        if col == COL_PATTERN and row.candle_pattern and row.candle_pattern != "-":
+            has_bull = "+" in row.candle_pattern
+            has_bear = "-" in row.candle_pattern
+            if has_bull and has_bear:
+                return QColor(COLORS["yellow"])
+            if has_bull:
+                return QColor(COLORS["green"])
+            return QColor(COLORS["red"])
         if col == COL_SYMBOL and row.is_confluence:
             return QColor("#FFD700")
         return None
@@ -360,6 +376,8 @@ class SignalsModel(QAbstractTableModel):
             vp_score=s.get("vp_score"),
             pd_zone=s.get("pd_zone"),
             market_structure=s.get("market_structure") or "-",
+            fvg_tfs=s.get("fvg_tfs") or "-",
+            candle_pattern=s.get("candle_pattern") or "-",
         )
         idx = len(self._rows)
         self._rows.append(row)

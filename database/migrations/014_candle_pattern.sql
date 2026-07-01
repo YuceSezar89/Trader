@@ -1,0 +1,1 @@
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS candle_pattern VARCHAR(100);
