@@ -21,7 +21,7 @@ from PyQt6.QtWidgets import (
 )
 
 from config import Config
-from desktop.models.signals_model import SignalsModel, SignalsProxyModel
+from desktop.models.signals_model import COL_AGE, SignalsModel, SignalsProxyModel
 from desktop.theme import COLORS
 
 
@@ -145,6 +145,7 @@ class ActiveSignalsPanel(QWidget):
         hh = self._table.horizontalHeader()
         hh.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        hh.sectionHandleDoubleClicked.connect(self._auto_resize_column)
 
         self._table.clicked.connect(self._on_row_clicked)
         self._table.doubleClicked.connect(self._on_row_double_clicked)
@@ -257,9 +258,14 @@ class ActiveSignalsPanel(QWidget):
     def _refresh_age_column(self) -> None:
         if self._model.rowCount() == 0:
             return
-        tl = self._model.index(0, 14)
-        br = self._model.index(self._model.rowCount() - 1, 14)
+        tl = self._model.index(0, COL_AGE)
+        br = self._model.index(self._model.rowCount() - 1, COL_AGE)
         self._model.dataChanged.emit(tl, br, [0])  # DisplayRole = 0
+
+    def _auto_resize_column(self, logical_index: int) -> None:
+        if logical_index == 0:
+            return
+        self._table.resizeColumnToContents(logical_index)
 
     # ── Filtre ────────────────────────────────────────────────────────────────
 
