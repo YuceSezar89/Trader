@@ -152,7 +152,7 @@ class DevisoPanel(QWidget):
         self._table.setSortingEnabled(True)
         self._table.setStyleSheet("""
             QTableWidget { font-size: 12px; }
-            QHeaderView::section { font-size: 11px; font-weight: bold; cursor: pointer; }
+            QHeaderView::section { font-size: 11px; font-weight: bold; }
             QHeaderView::section:hover { background: #2a2a2a; }
         """)
 

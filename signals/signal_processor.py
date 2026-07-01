@@ -656,6 +656,14 @@ async def process_and_enrich_signals(
                 enriched_signal["vpmv_pre_avg"] = _vpmv_pre_avg
                 enriched_signal["vpmv_slope"]   = _vpmv_slope
                 enriched_signal["vpmv_ratio"]   = _vpmv_ratio
+
+                min_ratio = float(Config.VPM.get("MIN_RATIO", 1.3))
+                if _vpmv_ratio is not None and _vpmv_ratio < min_ratio:
+                    logger.info(
+                        "[%s] VPMV ratio=%.3f < %.2f — sinyal atlandı (%s)",
+                        symbol, _vpmv_ratio, min_ratio, signal_name,
+                    )
+                    continue
                 enriched_signal["cvd_slope"]    = _cvd_slope
 
                 _deviso = _compute_devisso_score(df)

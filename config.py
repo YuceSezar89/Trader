@@ -171,6 +171,7 @@ class Config:
     # Not: Şimdilik DB şeması değişmeden kullanılacak; panel ve processor tarafında hesaplanır.
     VPM = {
         'MIN_SCORE': 50.0,       # VPMV minimum skor — altında sinyal kaydedilmez
+        'MIN_RATIO': 1.3,        # sinyal barı / önceki 5 bar ort — altında sinyal atlanır
         'WEIGHTS': {
             'V':   0.35,         # Volume   — rolling log+minmax
             'M':   0.35,         # Momentum — yönlü z-score+sigmoid

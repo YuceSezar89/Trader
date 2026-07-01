@@ -158,6 +158,7 @@ class SignalLifecycleManager:
                         devisso_ratio     = devisso_ratio,
                         pd_zone           = signal_data.get("pd_zone"),
                         market_structure  = signal_data.get("market_structure"),
+                        fvg_tfs           = signal_data.get("fvg_tfs"),
                     )
                     session.add(new_sig)
                     await session.flush()
