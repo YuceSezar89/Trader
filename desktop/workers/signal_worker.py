@@ -3,17 +3,31 @@ SignalWorker — Veritabanından aktif sinyalleri ve yeni sinyal gelişlerini iz
 """
 
 import threading
-from typing import Any
+from typing import Any, Optional
 
 import psycopg2
 import psycopg2.extras
 from PyQt6.QtCore import QThread, pyqtSignal
+
+_SIGNAL_COLUMNS = """id, symbol, signal_type, opened_at,
+       open_price, interval, vpms_score, mtf_score,
+       alpha, beta, status, indicators,
+       st_confirmed, sharpe_ratio, oi_data,
+       stop_loss_price, take_profit_price,
+       z_score_entry, is_confluence, trailing_stop_price,
+       sortino_ratio, calmar_ratio,
+       vpmv_pre_avg, vpmv_slope, vpmv_ratio,
+       cvd_slope, vp_buy_avg, vp_sell_avg, vp_score,
+       devisso_score, devisso_delta, devisso_ratio,
+       pd_zone, market_structure, fvg_tfs, candle_pattern, atr"""
 
 
 class SignalWorker(QThread):
     """
     Her `interval_ms` milisaniyede bir DB'yi sorgular.
     Yeni sinyal ve durum değişikliklerini Qt sinyalleriyle bildirir.
+    Bağlantı kalıcıdır; koptuğunda bir sonraki turda yeniden kurulur ve
+    durum değişimi connection_changed ile panele bildirilir.
     """
 
     signals_loaded = pyqtSignal(list)           # aktif sinyal listesi
@@ -34,75 +48,68 @@ class SignalWorker(QThread):
         self._last_signal_id: int = 0
         self._active_ids: set[int] = set()
         self._wake = threading.Event()
+        self._conn: Optional[psycopg2.extensions.connection] = None
+        self._connected = False
+        self._loaded = False
 
     def run(self) -> None:
         self._running = True
-        try:
-            conn = self._connect()
-            conn.close()
-            self.connection_changed.emit(True, "DB bağlantısı kuruldu")
-        except Exception as exc:
-            self.connection_changed.emit(False, f"DB bağlanamadı: {exc}")
-            return
-
-        self._load_all()
         while self._running:
+            if not self._loaded:
+                self._load_all()
+            else:
+                self._check_new()
             self._wake.wait(timeout=self._interval_ms / 1000)
             self._wake.clear()
-            if not self._running:
-                break
-            self._check_new()
 
-    def _connect(self) -> psycopg2.extensions.connection:
-        return psycopg2.connect(**self._db_config)
+    def _get_conn(self) -> psycopg2.extensions.connection:
+        if self._conn is None or self._conn.closed:
+            self._conn = psycopg2.connect(**self._db_config, connect_timeout=5)
+            self._conn.autocommit = True  # salt-okunur polling; idle-in-transaction bırakma
+        return self._conn
+
+    def _drop_conn(self) -> None:
+        if self._conn is not None:
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+            self._conn = None
+
+    def _set_connected(self, ok: bool, msg: str) -> None:
+        if ok != self._connected:
+            self._connected = ok
+            self.connection_changed.emit(ok, msg)
 
     def _load_all(self) -> None:
         try:
-            conn = self._connect()
+            conn = self._get_conn()
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute("""
-                    SELECT id, symbol, signal_type, opened_at,
-                           open_price, interval, vpms_score, mtf_score,
-                           alpha, beta, status, indicators,
-                           st_confirmed, sharpe_ratio, oi_data,
-                           stop_loss_price, take_profit_price,
-                           z_score_entry, is_confluence, trailing_stop_price,
-                           sortino_ratio, calmar_ratio,
-                           vpmv_pre_avg, vpmv_slope, vpmv_ratio,
-                           cvd_slope, vp_buy_avg, vp_sell_avg, vp_score,
-                           devisso_score, devisso_delta, devisso_ratio,
-                           pd_zone, market_structure, fvg_tfs, candle_pattern, atr
+                cur.execute(f"""
+                    SELECT {_SIGNAL_COLUMNS}
                     FROM signals
                     WHERE status = 'active'
                     ORDER BY opened_at DESC
                     LIMIT 500
                 """)
                 rows = [dict(r) for r in cur.fetchall()]
-                if rows:
-                    self._last_signal_id = max(r["id"] for r in rows)
+                cur.execute("SELECT COALESCE(MAX(id), 0) AS max_id FROM signals")
+                self._last_signal_id = cur.fetchone()["max_id"]
                 self._active_ids = {r["id"] for r in rows}
                 self.signals_loaded.emit(rows)
-            conn.close()
-        except Exception:
-            pass
+            self._loaded = True
+            self._set_connected(True, "DB bağlantısı kuruldu")
+        except Exception as exc:
+            self._drop_conn()
+            self._set_connected(False, f"DB bağlanamadı: {exc}")
 
     def _check_new(self) -> None:
         try:
-            conn = self._connect()
+            conn = self._get_conn()
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 # Yeni sinyaller
-                cur.execute("""
-                    SELECT id, symbol, signal_type, opened_at,
-                           open_price, interval, vpms_score, mtf_score,
-                           alpha, beta, status, indicators,
-                           st_confirmed, sharpe_ratio, oi_data,
-                           stop_loss_price, take_profit_price,
-                           z_score_entry, is_confluence, trailing_stop_price,
-                           sortino_ratio, calmar_ratio,
-                           vpmv_pre_avg, vpmv_slope, vpmv_ratio,
-                           cvd_slope, vp_buy_avg, vp_sell_avg, vp_score,
-                           devisso_score, devisso_delta, devisso_ratio,
-                           pd_zone, market_structure, fvg_tfs, candle_pattern, atr
+                cur.execute(f"""
+                    SELECT {_SIGNAL_COLUMNS}
                     FROM signals
                     WHERE id > %s
                     ORDER BY id ASC
@@ -125,11 +132,13 @@ class SignalWorker(QThread):
                         self._active_ids -= set(closed)
                         self.signals_closed.emit(closed)
 
-            conn.close()
-        except Exception:
-            pass
+            self._set_connected(True, "DB bağlantısı yeniden kuruldu")
+        except Exception as exc:
+            self._drop_conn()
+            self._set_connected(False, f"DB bağlantısı koptu: {exc}")
 
     def stop(self) -> None:
         self._running = False
         self._wake.set()
         self.wait()
+        self._drop_conn()
