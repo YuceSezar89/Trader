@@ -15,9 +15,15 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from config import Config
 from database.engine import get_session
 from database.models import Signal
 from signals.signal_lifecycle_manager import _calc_pnl
+
+_INTERVAL_MINUTES: dict[str, int] = {
+    "1m": 1, "5m": 5, "15m": 15, "30m": 30,
+    "1h": 60, "2h": 120, "4h": 240, "1d": 1440,
+}
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +158,29 @@ class RiskManager:
         return float(sig.open_price) * 0.005
 
     @staticmethod
+    def _early_exit_check(sig: Signal, price: float) -> bool:
+        cfg = Config.VPM
+        if not cfg.get("EARLY_EXIT_ENABLED", False):
+            return False
+        if sig.interval not in ("5m", "15m"):
+            return False
+        if not sig.atr or float(sig.atr) <= 0:
+            return False
+        iv_min = _INTERVAL_MINUTES.get(sig.interval, 5)
+        elapsed_bars = (datetime.now() - sig.opened_at).total_seconds() / 60 / iv_min
+        if elapsed_bars > cfg.get("EARLY_EXIT_MAX_BARS", 10):
+            return False
+        mae_thr = float(cfg.get("EARLY_EXIT_MAE_ATR", -1.5))
+        atr = float(sig.atr)
+        entry = float(sig.open_price)
+        adverse = (price - entry) / atr if sig.signal_type == "Long" else (entry - price) / atr
+        return adverse <= mae_thr
+
+    @staticmethod
     def _update_trailing(sig: Signal, price: float) -> Optional[str]:
+        if RiskManager._early_exit_check(sig, price):
+            return "stop_loss"
+
         sl    = sig.stop_loss_price
         tp    = sig.take_profit_price
         trail = sig.trailing_stop_price

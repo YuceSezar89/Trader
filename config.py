@@ -176,6 +176,9 @@ class Config:
         'LONG_Z_MIN': -2.0,      # Long sinyali için z_score alt sınırı (None = kapalı)
         'SHORT_Z_MAX': 2.0,      # Short sinyali için z_score üst sınırı (None = kapalı)
         'SHORT_Z_MIN': None,     # Short sinyali için z_score alt sınırı (None = kapalı)
+        'EARLY_EXIT_ENABLED':  True,   # İlk N barda MAE eşiği aşılırsa erken çıkış
+        'EARLY_EXIT_MAE_ATR': -1.5,    # ATR cinsinden eşik (negatif = aleyhte)
+        'EARLY_EXIT_MAX_BARS': 10,     # Kaç barda aktif (sonrasında devre dışı)
         'WEIGHTS': {
             'V':   0.35,         # Volume   — rolling log+minmax
             'M':   0.35,         # Momentum — yönlü z-score+sigmoid

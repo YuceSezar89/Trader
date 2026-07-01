@@ -71,7 +71,7 @@ class SignalWorker(QThread):
                            vpmv_pre_avg, vpmv_slope, vpmv_ratio,
                            cvd_slope, vp_buy_avg, vp_sell_avg, vp_score,
                            devisso_score, devisso_delta, devisso_ratio,
-                           pd_zone, market_structure, fvg_tfs, candle_pattern
+                           pd_zone, market_structure, fvg_tfs, candle_pattern, atr
                     FROM signals
                     WHERE status = 'active'
                     ORDER BY opened_at DESC
@@ -102,7 +102,7 @@ class SignalWorker(QThread):
                            vpmv_pre_avg, vpmv_slope, vpmv_ratio,
                            cvd_slope, vp_buy_avg, vp_sell_avg, vp_score,
                            devisso_score, devisso_delta, devisso_ratio,
-                           pd_zone, market_structure, fvg_tfs, candle_pattern
+                           pd_zone, market_structure, fvg_tfs, candle_pattern, atr
                     FROM signals
                     WHERE id > %s
                     ORDER BY id ASC

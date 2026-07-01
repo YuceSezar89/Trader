@@ -22,7 +22,7 @@ from PyQt6.QtGui import QColor
 
 from desktop.theme import COLORS
 
-COLUMNS = ["Sembol", "Tip", "TF", "İndikatör", "VPMV", "MTF", "α", "β", "Z-Score%", "P&L%", "SL", "TP", "P/D", "Yapı", "FVG", "Pattern", "Süre"]
+COLUMNS = ["Sembol", "Tip", "TF", "İndikatör", "VPMV", "MTF", "α", "β", "Z-Score%", "P&L%", "SL", "TP", "P/D", "Yapı", "FVG", "Pattern", "Süre", "Güv"]
 
 COL_SYMBOL    = 0
 COL_TYPE      = 1
@@ -41,6 +41,7 @@ COL_STRUCT    = 13
 COL_FVG       = 14
 COL_PATTERN   = 15
 COL_AGE       = 16
+COL_GUV       = 17
 
 
 def _fmt_score(v: Optional[float]) -> str:
@@ -129,7 +130,16 @@ class SignalRow:
     market_structure: str = "-"
     fvg_tfs: str = "-"
     candle_pattern: str = "-"
+    atr: Optional[float] = None
     pnl_pct: Optional[float] = field(default=None, init=False)
+
+    @property
+    def mae_atr_now(self) -> Optional[float]:
+        if not self.atr or self.atr <= 0 or not self.entry_price or not self.current_price:
+            return None
+        if self.signal_type == "LONG":
+            return (self.current_price - self.entry_price) / self.atr
+        return (self.entry_price - self.current_price) / self.atr
 
     def update_price(self, price: float) -> None:
         self.current_price = price
@@ -203,6 +213,11 @@ class SignalsModel(QAbstractTableModel):
             case _ if col == COL_FVG:       return row.fvg_tfs or "-"
             case _ if col == COL_PATTERN:   return row.candle_pattern or "-"
             case _ if col == COL_AGE:       return _fmt_age(row.timestamp, row.interval)
+            case _ if col == COL_GUV:
+                v = row.mae_atr_now
+                if v is None:
+                    return "—"
+                return f"{v:+.1f}"
         return ""
 
     @staticmethod
@@ -306,6 +321,17 @@ class SignalsModel(QAbstractTableModel):
             return QColor(COLORS["red"])
         if col == COL_SYMBOL and row.is_confluence:
             return QColor("#FFD700")
+        if col == COL_GUV:
+            v = row.mae_atr_now
+            if v is None:
+                return None
+            if v >= -0.5:
+                return QColor(COLORS["green"])
+            if v >= -1.0:
+                return QColor(COLORS["yellow"])
+            if v >= -1.5:
+                return QColor("#FF8C00")
+            return QColor(COLORS["red"])
         return None
 
     # ── Veri yükleme / güncelleme ─────────────────────────────────────────────
@@ -378,6 +404,7 @@ class SignalsModel(QAbstractTableModel):
             market_structure=s.get("market_structure") or "-",
             fvg_tfs=s.get("fvg_tfs") or "-",
             candle_pattern=s.get("candle_pattern") or "-",
+            atr=s.get("atr"),
         )
         idx = len(self._rows)
         self._rows.append(row)
@@ -411,7 +438,7 @@ class SignalsModel(QAbstractTableModel):
         for idx in indices:
             self._rows[idx].update_price(price)
             tl = self.index(idx, COL_PNL)
-            br = self.index(idx, COL_PNL)
+            br = self.index(idx, COL_GUV)
             self.dataChanged.emit(tl, br, [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ForegroundRole])
 
     def signal_at(self, row: int) -> Optional[SignalRow]:
