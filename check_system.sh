@@ -99,7 +99,7 @@ if [ $ERROR_COUNT -eq 0 ]; then
     echo "   python run_services.py"
     echo ""
     echo -e "${BLUE}📊 Panel'i açmak için:${NC}"
-    echo "   streamlit run streamlit_app.py --server.port 8501"
+    echo "   python desktop/main.py"
     exit 0
 else
     echo -e "${RED}❌ $ERROR_COUNT HATA TESPİT EDİLDİ${NC}"
