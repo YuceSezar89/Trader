@@ -19,6 +19,7 @@ from config import Config
 from database.engine import get_session
 from database.models import Signal
 from signals.signal_lifecycle_manager import _calc_pnl
+from signals.trailing import update_trailing
 
 logger = logging.getLogger(__name__)
 
@@ -95,55 +96,6 @@ class RiskManager:
                 await session.rollback()
                 logger.error("RiskManager batch hatası: %s", exc, exc_info=True)
 
-    async def check_price(self, symbol: str, current_price: float) -> list[int]:
-        if symbol not in self._active_symbols:
-            return []
-
-        triggered = []
-        async with get_session() as session:
-            try:
-                result = await session.execute(
-                    select(Signal).where(
-                        Signal.symbol == symbol,
-                        Signal.status == "active",
-                        Signal.stop_loss_price.isnot(None),
-                    )
-                )
-                actives = result.scalars().all()
-
-                if not actives:
-                    self._active_symbols.discard(symbol)
-                    return []
-
-                changed = False
-                for sig in actives:
-                    reason = self._update_trailing(sig, current_price)
-                    if reason:
-                        await self._close(session, sig, current_price, reason)
-                        triggered.append(sig.id)
-                        logger.info(
-                            "[%s] %s id=%d %s @ %.6f (trail=%.6f)",
-                            symbol, sig.signal_type, sig.id, reason,
-                            current_price,
-                            sig.trailing_stop_price or sig.stop_loss_price or 0,
-                        )
-                        changed = True
-                    elif sig.trailing_stop_price is not None:
-                        changed = True
-
-                if changed:
-                    await session.commit()
-
-                remaining = [s for s in actives if s.status == "active"]
-                if not remaining:
-                    self._active_symbols.discard(symbol)
-
-            except Exception as exc:
-                await session.rollback()
-                logger.error("RiskManager hatası [%s]: %s", symbol, exc, exc_info=True)
-
-        return triggered
-
     @staticmethod
     def _trail_distance(sig: Signal) -> float:
         if sig.atr and sig.sl_multiplier:
@@ -175,41 +127,7 @@ class RiskManager:
     def _update_trailing(sig: Signal, price: float) -> Optional[str]:
         if RiskManager._early_exit_check(sig, price):
             return "stop_loss"
-
-        sl    = sig.stop_loss_price
-        tp    = sig.take_profit_price
-        trail = sig.trailing_stop_price
-        dist  = RiskManager._trail_distance(sig)
-
-        if sig.signal_type == "Long":
-            if trail is None:
-                if sl is not None and price <= float(sl):
-                    return "stop_loss"
-                if tp is not None and price >= float(tp):
-                    sig.trailing_stop_price = price - dist
-                    return None
-            else:
-                new_trail = price - dist
-                if new_trail > float(trail):
-                    sig.trailing_stop_price = new_trail
-                if price <= float(sig.trailing_stop_price):
-                    return "trailing_stop"
-
-        else:  # Short
-            if trail is None:
-                if sl is not None and price >= float(sl):
-                    return "stop_loss"
-                if tp is not None and price <= float(tp):
-                    sig.trailing_stop_price = price + dist
-                    return None
-            else:
-                new_trail = price + dist
-                if new_trail < float(trail):
-                    sig.trailing_stop_price = new_trail
-                if price >= float(sig.trailing_stop_price):
-                    return "trailing_stop"
-
-        return None
+        return update_trailing(sig, price, RiskManager._trail_distance(sig))
 
     @staticmethod
     async def _close(

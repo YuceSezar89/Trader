@@ -19,6 +19,7 @@ from database.engine import get_session
 from database.models import PaperTrade, PaperPortfolio, Signal
 from signals.risk_policy import default_policy
 from signals.signal_lifecycle_manager import _calc_pnl
+from signals.trailing import update_trailing
 from utils.redis_client import RedisClient
 
 logger = logging.getLogger(__name__)
@@ -237,44 +238,6 @@ class PaperTradeManager:
                 await session.rollback()
                 logger.error("[PaperTrade][%s] batch check hatası: %s", self.strategy, exc, exc_info=True)
 
-    async def check_price(self, symbol: str, current_price: float) -> None:
-        if symbol not in self._open_symbols:
-            return
-
-        async with get_session() as session:
-            try:
-                result = await session.execute(
-                    select(PaperTrade).where(
-                        PaperTrade.symbol == symbol,
-                        PaperTrade.status == "open",
-                        PaperTrade.strategy == self.strategy,
-                        PaperTrade.stop_loss_price.isnot(None),
-                    )
-                )
-                trades = result.scalars().all()
-                if not trades:
-                    self._open_symbols.discard(symbol)
-                    return
-
-                changed = False
-                for trade in trades:
-                    reason = self._update_trailing(trade, current_price)
-                    if reason:
-                        await self._close(session, trade, current_price, reason)
-                        changed = True
-                    elif trade.trailing_stop_price is not None:
-                        changed = True
-
-                if changed:
-                    await session.commit()
-
-                if all(t.status == "closed" for t in trades):
-                    self._open_symbols.discard(symbol)
-
-            except Exception as exc:
-                await session.rollback()
-                logger.error("[PaperTrade][%s] check_price hatası [%s]: %s", self.strategy, symbol, exc)
-
     @staticmethod
     def _trail_distance(trade: PaperTrade) -> float:
         if trade.atr and trade.stop_loss_price and trade.entry_price:
@@ -285,39 +248,7 @@ class PaperTradeManager:
 
     @staticmethod
     def _update_trailing(trade: PaperTrade, price: float) -> Optional[str]:
-        sl    = trade.stop_loss_price
-        tp    = trade.take_profit_price
-        trail = trade.trailing_stop_price
-        dist  = PaperTradeManager._trail_distance(trade)
-
-        if trade.signal_type == "Long":
-            if trail is None:
-                if sl is not None and price <= float(sl):
-                    return "stop_loss"
-                if tp is not None and price >= float(tp):
-                    trade.trailing_stop_price = price - dist
-                    return None
-            else:
-                new_trail = price - dist
-                if new_trail > float(trail):
-                    trade.trailing_stop_price = new_trail
-                if price <= float(trade.trailing_stop_price):
-                    return "trailing_stop"
-        else:
-            if trail is None:
-                if sl is not None and price >= float(sl):
-                    return "stop_loss"
-                if tp is not None and price <= float(tp):
-                    trade.trailing_stop_price = price + dist
-                    return None
-            else:
-                new_trail = price + dist
-                if new_trail < float(trail):
-                    trade.trailing_stop_price = new_trail
-                if price >= float(trade.trailing_stop_price):
-                    return "trailing_stop"
-
-        return None
+        return update_trailing(trade, price, PaperTradeManager._trail_distance(trade))
 
     @staticmethod
     def _apply_close(
@@ -357,67 +288,6 @@ class PaperTradeManager:
             trade.symbol, trade.signal_type, exit_price, reason,
             pnl_usd, pnl_pct, trade.balance_after or 0,
         )
-
-    async def _close(
-        self,
-        session: AsyncSession,
-        trade: PaperTrade,
-        exit_price: float,
-        reason: str,
-    ) -> None:
-        pnl_pct = _calc_pnl(trade.signal_type, float(trade.entry_price), exit_price)
-        fee_usd = POSITION_USD * FEE_RATE * 2
-        pnl_usd = (pnl_pct / 100) * POSITION_USD - fee_usd
-
-        trade.status       = "closed"
-        trade.closed_at    = datetime.now()
-        trade.exit_price   = exit_price
-        trade.close_reason = reason
-        trade.pnl_pct      = pnl_pct
-        trade.fee_usd      = fee_usd
-        trade.pnl_usd      = pnl_usd
-        session.add(trade)
-
-        portfolio_result = await session.execute(
-            select(PaperPortfolio).where(PaperPortfolio.strategy == self.strategy)
-        )
-        portfolio = portfolio_result.scalars().first()
-        if portfolio:
-            portfolio.balance       += pnl_usd
-            portfolio.total_pnl_usd += pnl_usd
-            portfolio.total_trades  += 1
-            if pnl_usd > 0:
-                portfolio.winning_trades += 1
-            if portfolio.balance > portfolio.peak_balance:
-                portfolio.peak_balance = portfolio.balance
-            drawdown = (portfolio.peak_balance - portfolio.balance) / portfolio.peak_balance * 100
-            if drawdown > portfolio.max_drawdown_pct:
-                portfolio.max_drawdown_pct = drawdown
-            portfolio.updated_at = datetime.now()
-            trade.balance_after  = portfolio.balance
-            session.add(portfolio)
-
-        logger.info(
-            "[PaperTrade] KAPANDI %s %s @ %.6f | %s | PnL: %+.2f$ (%.2f%%) | Bakiye: %.2f$",
-            trade.symbol, trade.signal_type, exit_price, reason,
-            pnl_usd, pnl_pct, trade.balance_after or 0,
-        )
-
-        try:
-            from utils.vpmv import compute_post, POST_BARS
-            import pandas as _pd
-            df = await RedisClient.get_mtf_klines(trade.symbol, trade.interval)
-            if df is not None and not df.empty and trade.opened_at is not None:
-                raw_times = _pd.to_datetime(df["open_time"]) if "open_time" in df.columns else df.index
-                diffs = (raw_times - _pd.Timestamp(trade.opened_at)).abs()
-                bar_idx = int(diffs.argmin())
-                post_avg, post_delta = compute_post(df, trade.signal_type, bar_idx, POST_BARS)
-                if post_avg is not None:
-                    trade.vpmv_post_avg   = round(post_avg, 2)
-                    trade.vpmv_post_delta = round(post_delta, 2)
-                    session.add(trade)
-        except Exception:  # pylint: disable=broad-exception-caught
-            pass
 
     @staticmethod
     async def _recent_win_rate(session: AsyncSession, symbol: str, strategy: str) -> Optional[float]:
