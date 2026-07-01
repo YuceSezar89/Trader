@@ -406,10 +406,16 @@ function _renderPreviousHL() {{
       lineStyle: 1, axisLabelVisible: true, title: 'PDL' + tfLabel,
     }}));
   }}
-  if (_phlData.open) {{
+  if (_phlData.pdo) {{
     _phlLines.push(candleSeries.createPriceLine({{
-      price: _phlData.open, color: '#fcc419', lineWidth: 1,
-      lineStyle: 2, axisLabelVisible: true, title: 'PDO' + tfLabel,
+      price: _phlData.pdo, color: '#fcc419', lineWidth: 1,
+      lineStyle: 2, axisLabelVisible: true, title: 'PDO',
+    }}));
+  }}
+  if (_phlData.do_) {{
+    _phlLines.push(candleSeries.createPriceLine({{
+      price: _phlData.do_, color: '#74c0fc', lineWidth: 1,
+      lineStyle: 2, axisLabelVisible: true, title: 'DO',
     }}));
   }}
 }}
@@ -818,16 +824,13 @@ class TVChart(QWebEngineView):
 
     @staticmethod
     def _prepare_previous_hl(df: pd.DataFrame, tf: str = "1h") -> dict:
-        """TF'e göre önceki periyodun High/Low/Open seviyelerini hesaplar."""
+        """TF'e göre önceki periyodun High/Low + sabit günlük DO/PDO seviyelerini hesaplar."""
         try:
             from smartmoneyconcepts import smc as _smc  # pylint: disable=import-outside-toplevel
 
             _TF_MAP = {
                 "1m": "1h", "5m": "1h", "15m": "4h",
                 "1h": "1D", "4h": "1W", "1d": "1W",
-            }
-            _PANDAS_FREQ = {
-                "1h": "1h", "4h": "4h", "1D": "D", "1W": "W",
             }
             resample_tf = _TF_MAP.get(tf, "1D")
 
@@ -841,20 +844,22 @@ class TVChart(QWebEngineView):
             ph = phl_df["PreviousHigh"].dropna()
             pl = phl_df["PreviousLow"].dropna()
             if ph.empty or pl.empty:
-                return {"high": None, "low": None, "open": None, "tf": resample_tf}
+                return {"high": None, "low": None, "pdo": None, "do_": None, "tf": resample_tf}
 
-            freq = _PANDAS_FREQ.get(resample_tf, "D")
-            resampled_open = df_smc["open"].resample(freq).first().dropna()
-            prev_open = round(float(resampled_open.iloc[-2]), 8) if len(resampled_open) >= 2 else None
+            # DO / PDO — her zaman günlük (D), TF'ten bağımsız
+            daily_open = df_smc["open"].resample("D").first().dropna()
+            pdo  = round(float(daily_open.iloc[-2]), 8) if len(daily_open) >= 2 else None
+            do_  = round(float(daily_open.iloc[-1]), 8) if len(daily_open) >= 1 else None
 
             return {
                 "high": round(float(ph.iloc[-1]), 8),
                 "low":  round(float(pl.iloc[-1]), 8),
-                "open": prev_open,
+                "pdo":  pdo,
+                "do_":  do_,
                 "tf":   resample_tf,
             }
         except Exception:  # pylint: disable=broad-exception-caught
-            return {"high": None, "low": None, "open": None, "tf": ""}
+            return {"high": None, "low": None, "pdo": None, "do_": None, "tf": ""}
 
     @staticmethod
     def _prepare_smc(df: pd.DataFrame, swing_limit: int = 10, level_limit: int = 3) -> dict:
