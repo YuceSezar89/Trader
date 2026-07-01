@@ -12,9 +12,17 @@ import statistics
 from datetime import datetime, timedelta
 
 import psycopg2
+
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from config import Config
 import psycopg2.extras
 
-DB_DSN = "dbname=trader_panel user=yusuf host=localhost port=5432"
+DB_DSN = (f"dbname={Config.DB_NAME} user={Config.DB_USER} "
+          f"host={Config.DB_HOST} port={Config.DB_PORT}")
 log_file = sys.argv[1] if len(sys.argv) > 1 else "logs/services.log"
 
 pattern = re.compile(

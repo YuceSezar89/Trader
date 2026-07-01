@@ -1782,7 +1782,7 @@ class LiveDataManager:
         """Her 10 dakikada bir post_avg boş sinyalleri günceller.
         Sinyal barından sonra POST_BARS bar oluşmuşsa post_avg/post_delta yazılır."""
         _INTERVAL = 600
-        _TF_MINUTES = {"1m": 1, "3m": 3, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440}
+        _TF_MINUTES = Config.INTERVAL_MINUTES
         await asyncio.sleep(120)
 
         while True:

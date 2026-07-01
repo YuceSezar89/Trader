@@ -14,7 +14,15 @@ import numpy as np
 import pandas as pd
 import psycopg2
 
-DB_DSN = "dbname=trader_panel user=yusuf host=localhost"
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from config import Config
+
+DB_DSN = (f"dbname={Config.DB_NAME} user={Config.DB_USER} "
+          f"host={Config.DB_HOST} port={Config.DB_PORT}")
 
 ATR_PERIOD   = 14
 ATR_MA_PERIOD = 50

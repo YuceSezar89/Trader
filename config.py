@@ -63,6 +63,12 @@ class Config:
     # =============================================================================
     MTF_ENABLED = True  # MTF sistemini etkinleştir/devre dışı bırak
     MTF_TIMEFRAMES = ['1m', '5m', '15m', '30m', '1h', '4h', '6h', '8h', '12h', '1d']
+
+    # Interval → dakika eşlemesi (tek kaynak; risk_manager, signals_model, live_data_manager kullanır)
+    INTERVAL_MINUTES = {
+        '1m': 1, '3m': 3, '5m': 5, '15m': 15, '30m': 30,
+        '1h': 60, '2h': 120, '4h': 240, '6h': 360, '8h': 480, '12h': 720, '1d': 1440,
+    }
     MTF_BUFFER_LIMITS = {
         '1m':  1000,
         '5m':  300,

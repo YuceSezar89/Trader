@@ -20,11 +20,6 @@ from database.engine import get_session
 from database.models import Signal
 from signals.signal_lifecycle_manager import _calc_pnl
 
-_INTERVAL_MINUTES: dict[str, int] = {
-    "1m": 1, "5m": 5, "15m": 15, "30m": 30,
-    "1h": 60, "2h": 120, "4h": 240, "1d": 1440,
-}
-
 logger = logging.getLogger(__name__)
 
 
@@ -166,7 +161,7 @@ class RiskManager:
             return False
         if not sig.atr or float(sig.atr) <= 0:
             return False
-        iv_min = _INTERVAL_MINUTES.get(sig.interval, 5)
+        iv_min = Config.INTERVAL_MINUTES.get(sig.interval, 5)
         elapsed_bars = (datetime.now() - sig.opened_at).total_seconds() / 60 / iv_min
         if elapsed_bars > cfg.get("EARLY_EXIT_MAX_BARS", 10):
             return False

@@ -20,6 +20,7 @@ from PyQt6.QtCore import (
 )
 from PyQt6.QtGui import QColor
 
+from config import Config
 from desktop.theme import COLORS
 
 COLUMNS = ["Sembol", "Tip", "TF", "İndikatör", "VPMV", "MTF", "α", "β", "Z-Score%", "P&L%", "SL", "TP", "P/D", "Yapı", "FVG", "Pattern", "Süre", "Güv"]
@@ -71,10 +72,7 @@ def _fmt_price(v: Optional[float]) -> str:
     return f"{v:.8f}"
 
 
-_INTERVAL_MINUTES: dict[str, int] = {
-    "1m": 1, "5m": 5, "15m": 15, "30m": 30,
-    "1h": 60, "2h": 120, "4h": 240, "1d": 1440,
-}
+_INTERVAL_MINUTES: dict[str, int] = Config.INTERVAL_MINUTES
 
 
 def _fmt_age(ts: Optional[datetime], interval: str = "") -> str:
