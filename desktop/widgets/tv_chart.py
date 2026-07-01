@@ -60,8 +60,62 @@ let stUpSeries, stDownSeries;
 let _priceLines = [];
 let _smcData = null;
 let _smcEnabled = false;
-let _smcLines = [];
+let _smcPlugin = null;
 let _signalMarkers = [];
+
+class SMCLevelPlugin {{
+  constructor() {{
+    this._levels = [];
+    this._series = null;
+    this._chart  = null;
+  }}
+  attached({{ series, chart }}) {{ this._series = series; this._chart = chart; }}
+  detached() {{ this._series = null; this._chart = null; }}
+  setLevels(levels) {{ this._levels = levels; }}
+  updateAllViews() {{}}
+  paneViews() {{
+    const self = this;
+    return [{{
+      renderer() {{
+        return {{
+          draw(target) {{
+            if (!self._series || !self._chart || !self._levels.length) return;
+            target.useBitmapCoordinateSpace(scope => {{
+              const ctx = scope.context;
+              const w   = scope.bitmapSize.width;
+              const vpr = scope.verticalPixelRatio;
+              const hpr = scope.horizontalPixelRatio;
+              self._levels.forEach(lv => {{
+                const y = self._series.priceToCoordinate(lv.price);
+                if (y === null) return;
+                const by = y * vpr;
+                const cssX = lv.time
+                  ? self._chart.timeScale().timeToCoordinate(lv.time)
+                  : 0;
+                const x0 = cssX !== null ? cssX * hpr : 0;
+                ctx.save();
+                ctx.globalAlpha = 0.85;
+                ctx.strokeStyle = lv.color;
+                ctx.lineWidth   = 1.5 * vpr;
+                ctx.setLineDash([6 * vpr, 3 * vpr]);
+                ctx.beginPath();
+                ctx.moveTo(x0, by); ctx.lineTo(w, by);
+                ctx.stroke();
+                ctx.setLineDash([]);
+                ctx.globalAlpha = 1.0;
+                ctx.fillStyle = lv.color;
+                ctx.font = 'bold ' + (10 * vpr) + 'px sans-serif';
+                ctx.fillText(lv.title, x0 + 6 * vpr, by - 4 * vpr);
+                ctx.restore();
+              }});
+            }});
+          }}
+        }};
+      }},
+      zOrder() {{ return 'normal'; }}
+    }}];
+  }}
+}}
 let _fvgData = null;
 let _fvgEnabled = false;
 let _fvgPlugin = null;
@@ -181,6 +235,10 @@ function initChart() {{
     _fvgPlugin = new FVGBoxPlugin();
     candleSeries.attachPrimitive(_fvgPlugin);
   }} catch(e) {{ console.log('FVG plugin attach err:', e.message); }}
+  try {{
+    _smcPlugin = new SMCLevelPlugin();
+    candleSeries.attachPrimitive(_smcPlugin);
+  }} catch(e) {{ console.log('SMC plugin attach err:', e.message); }}
 
   // EMA çizgisi
   emaSeries = chart.addLineSeries({{
@@ -348,6 +406,12 @@ function _renderPreviousHL() {{
       lineStyle: 1, axisLabelVisible: true, title: 'PDL' + tfLabel,
     }}));
   }}
+  if (_phlData.open) {{
+    _phlLines.push(candleSeries.createPriceLine({{
+      price: _phlData.open, color: '#fcc419', lineWidth: 1,
+      lineStyle: 2, axisLabelVisible: true, title: 'PDO' + tfLabel,
+    }}));
+  }}
 }}
 
 function loadPreviousHL(dataJson, enabled) {{
@@ -375,16 +439,9 @@ function _refreshAllMarkers() {{
 }}
 
 function _renderSMC() {{
-  _smcLines.forEach(pl => {{ try {{ candleSeries.removePriceLine(pl); }} catch(e) {{}} }});
-  _smcLines = [];
-  if (_smcEnabled && _smcData) {{
-    (_smcData.levels || []).forEach(l => {{
-      const pl = candleSeries.createPriceLine({{
-        price: l.price, color: l.color, lineWidth: 1,
-        lineStyle: 2, axisLabelVisible: true, title: l.title,
-      }});
-      _smcLines.push(pl);
-    }});
+  if (_smcPlugin) {{
+    _smcPlugin.setLevels((_smcEnabled && _smcData) ? (_smcData.levels || []) : []);
+    try {{ chart.applyOptions({{}}); }} catch(e) {{}}
   }}
   _refreshAllMarkers();
 }}
@@ -737,10 +794,9 @@ class TVChart(QWebEngineView):
             for col in df_smc.columns:
                 df_smc[col] = df_smc[col].astype(float)
 
-            fvg_df    = _smc.fvg(df_smc)
-            green     = COLORS["green"]
-            red       = COLORS["red"]
-            cur_close = float(df_smc["close"].iloc[-1])
+            fvg_df = _smc.fvg(df_smc)
+            green  = COLORS["green"]
+            red    = COLORS["red"]
             zones: list[dict] = []
             for i in range(len(fvg_df)):
                 fvg_val = fvg_df["FVG"].iloc[i]
@@ -748,13 +804,9 @@ class TVChart(QWebEngineView):
                     continue
                 mit = fvg_df["MitigatedIndex"].iloc[i]
                 if not np.isnan(mit) and mit > 0:
-                    continue  # kütüphane: dolduruldu
+                    continue  # dolduruldu
                 top = float(fvg_df["Top"].iloc[i])
                 bot = float(fvg_df["Bottom"].iloc[i])
-                if fvg_val == 1 and cur_close < bot:
-                    continue  # bullish FVG — fiyat altına kırdı, geçersiz
-                if fvg_val == -1 and cur_close > top:
-                    continue  # bearish FVG — fiyat üstüne kırdı, geçersiz
                 t = int(ts[i]) if i < len(ts) else None
                 if fvg_val == 1:
                     zones.append({"top": top, "bot": bot, "color": green, "label": "FVG↑", "time": t})
@@ -766,13 +818,16 @@ class TVChart(QWebEngineView):
 
     @staticmethod
     def _prepare_previous_hl(df: pd.DataFrame, tf: str = "1h") -> dict:
-        """TF'e göre önceki periyodun High/Low seviyelerini hesaplar."""
+        """TF'e göre önceki periyodun High/Low/Open seviyelerini hesaplar."""
         try:
             from smartmoneyconcepts import smc as _smc  # pylint: disable=import-outside-toplevel
 
             _TF_MAP = {
                 "1m": "1h", "5m": "1h", "15m": "4h",
                 "1h": "1D", "4h": "1W", "1d": "1W",
+            }
+            _PANDAS_FREQ = {
+                "1h": "1h", "4h": "4h", "1D": "D", "1W": "W",
             }
             resample_tf = _TF_MAP.get(tf, "1D")
 
@@ -786,15 +841,20 @@ class TVChart(QWebEngineView):
             ph = phl_df["PreviousHigh"].dropna()
             pl = phl_df["PreviousLow"].dropna()
             if ph.empty or pl.empty:
-                return {"high": None, "low": None, "tf": resample_tf}
+                return {"high": None, "low": None, "open": None, "tf": resample_tf}
+
+            freq = _PANDAS_FREQ.get(resample_tf, "D")
+            resampled_open = df_smc["open"].resample(freq).first().dropna()
+            prev_open = round(float(resampled_open.iloc[-2]), 8) if len(resampled_open) >= 2 else None
 
             return {
                 "high": round(float(ph.iloc[-1]), 8),
                 "low":  round(float(pl.iloc[-1]), 8),
+                "open": prev_open,
                 "tf":   resample_tf,
             }
         except Exception:  # pylint: disable=broad-exception-caught
-            return {"high": None, "low": None, "tf": ""}
+            return {"high": None, "low": None, "open": None, "tf": ""}
 
     @staticmethod
     def _prepare_smc(df: pd.DataFrame, swing_limit: int = 10, level_limit: int = 3) -> dict:
@@ -836,12 +896,13 @@ class TVChart(QWebEngineView):
                 bos_val   = bos_df["BOS"].iloc[i]
                 choch_val = bos_df["CHOCH"].iloc[i]
                 lv        = bos_df["Level"].iloc[i]
+                t         = int(ts[i]) if i < len(ts) else None
                 if not np.isnan(bos_val) and not np.isnan(lv) and lv > 0:
-                    all_levels.append({"price": float(lv),
+                    all_levels.append({"price": float(lv), "time": t,
                                        "color": green if bos_val == 1 else red,
                                        "title": "BOS↑" if bos_val == 1 else "BOS↓"})
                 elif not np.isnan(choch_val) and not np.isnan(lv) and lv > 0:
-                    all_levels.append({"price": float(lv),
+                    all_levels.append({"price": float(lv), "time": t,
                                        "color": orange if choch_val == 1 else purple,
                                        "title": "CHoCH↑" if choch_val == 1 else "CHoCH↓"})
             levels = all_levels[-level_limit:]
