@@ -1,0 +1,29 @@
+//@version=5
+indicator("VOL-AB", overlay=false, max_bars_back=200)
+
+hlRange  = math.max(high - low, 0.00001)
+buyVol   = volume * (close - low)  / hlRange
+sellVol  = volume * (high - close) / hlRange
+delta    = buyVol - sellVol
+
+dirMean  = ta.sma(delta, 100)
+dirStd   = ta.stdev(delta, 100)
+zScore   = (delta - dirMean) / math.max(dirStd, 0.00001)
+dirScore = 100.0 / (1.0 + math.exp(-zScore))
+
+logVol   = math.log(volume + 1)
+volMin   = ta.lowest(logVol, 50)
+volMax   = ta.highest(logVol, 50)
+volScore = volMax > volMin ? (logVol - volMin) / (volMax - volMin) * 100 : 50.0
+
+bv5 = buyVol[1] + buyVol[2] + buyVol[3] + buyVol[4] + buyVol[5]
+sv5 = sellVol[1] + sellVol[2] + sellVol[3] + sellVol[4] + sellVol[5]
+prevol = bv5 / math.max(bv5 + sv5, 0.00001) * 100
+
+plot(volScore, "Yonsuz", color=color.blue,   linewidth=2)
+plot(dirScore, "Yonlu",  color=color.orange, linewidth=2)
+plot(prevol,   "PREVOL", color=color.green,  linewidth=1)
+
+hline(70, color=color.gray, linestyle=hline.style_dashed)
+hline(50, color=color.gray, linestyle=hline.style_dotted)
+hline(30, color=color.gray, linestyle=hline.style_dashed)

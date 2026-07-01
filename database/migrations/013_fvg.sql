@@ -1,0 +1,2 @@
+ALTER TABLE signals
+    ADD COLUMN IF NOT EXISTS fvg_tfs VARCHAR(40);

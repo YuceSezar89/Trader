@@ -109,7 +109,10 @@ nx.json
 inceleme/
 pgbouncer.log
 pgbouncer.pid
+*.bak
+utils/sorgu.txt
 *.md
+!CLAUDE.md
 
 # --- Log ve geçici dosyalar ---
 *.tmp
