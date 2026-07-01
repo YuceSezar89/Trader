@@ -561,6 +561,18 @@ async def process_and_enrich_signals(
                 except Exception:
                     pass
 
+                if z_score_entry is not None:
+                    _is_long = sig_type == "Long"
+                    _z_min = Config.VPM.get("LONG_Z_MIN" if _is_long else "SHORT_Z_MIN")
+                    _z_max = Config.VPM.get("LONG_Z_MAX" if _is_long else "SHORT_Z_MAX")
+                    if (_z_min is not None and z_score_entry < _z_min) or \
+                       (_z_max is not None and z_score_entry > _z_max):
+                        logger.info(
+                            "[%s] Z-score=%.3f filtre dışı (%s, min=%s max=%s) — sinyal atlandı",
+                            symbol, z_score_entry, sig_type, _z_min, _z_max,
+                        )
+                        continue
+
                 # 6.3. Rejim tespiti
                 regime_trend: Optional[str] = None
                 volatility_regime: Optional[str] = None

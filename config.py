@@ -172,6 +172,10 @@ class Config:
     VPM = {
         'MIN_SCORE': 50.0,       # VPMV minimum skor — altında sinyal kaydedilmez
         'MIN_RATIO': 1.3,        # sinyal barı / önceki 5 bar ort — altında sinyal atlanır
+        'LONG_Z_MAX':  None,     # Long sinyali için z_score üst sınırı (None = kapalı)
+        'LONG_Z_MIN': -2.0,      # Long sinyali için z_score alt sınırı (None = kapalı)
+        'SHORT_Z_MAX': 2.0,      # Short sinyali için z_score üst sınırı (None = kapalı)
+        'SHORT_Z_MIN': None,     # Short sinyali için z_score alt sınırı (None = kapalı)
         'WEIGHTS': {
             'V':   0.35,         # Volume   — rolling log+minmax
             'M':   0.35,         # Momentum — yönlü z-score+sigmoid
