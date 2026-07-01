@@ -4,7 +4,7 @@ ManualTradeDialog — paper trade'e manuel işlem ekleme dialog'u.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 import psycopg2
@@ -167,7 +167,7 @@ class ManualTradeDialog(QDialog):
         sl = self._sl.value() or None
         tp = self._tp.value() or None
         tf = self._tf.currentText()
-        now = datetime.now(timezone.utc)
+        now = datetime.now()
 
         try:
             conn = psycopg2.connect(**self._db_config)

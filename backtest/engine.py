@@ -64,7 +64,7 @@ class BacktestEngine:
             BacktestResult: Test sonuçları
         """
         logger.info(f"Backtest başlatılıyor: {strategy_name} ({start_date} - {end_date})")
-        start_time = datetime.utcnow()
+        start_time = datetime.now()
         
         # Parametreleri ayarla
         if strategy_params:
@@ -329,7 +329,7 @@ class BacktestEngine:
                 total_trades=0,
                 win_rate=Decimal('0'),
                 total_pnl=Decimal('0'),
-                test_duration_seconds=int((datetime.utcnow() - start_time).total_seconds())
+                test_duration_seconds=int((datetime.now() - start_time).total_seconds())
             )
         
         # Temel istatistikler
@@ -376,7 +376,7 @@ class BacktestEngine:
             avg_loss=Decimal(str(round(avg_loss, 2))),
             commission_rate=self.commission_rate,
             slippage_rate=self.slippage_rate,
-            test_duration_seconds=int((datetime.utcnow() - start_time).total_seconds())
+            test_duration_seconds=int((datetime.now() - start_time).total_seconds())
         )
     
     async def _save_results(self, result: BacktestResult, strategy_params: Optional[Dict]):

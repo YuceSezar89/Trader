@@ -62,7 +62,7 @@ class StrategyTester:
         
         # Varsayılan değerleri ayarla
         symbols = symbols or self.default_symbols
-        end_date = end_date or datetime.utcnow()
+        end_date = end_date or datetime.now()
         start_date = start_date or (end_date - timedelta(days=30))
         test_params = test_params or self.default_test_params
         
@@ -122,7 +122,7 @@ class StrategyTester:
         
         # Varsayılan değerleri ayarla
         symbols = symbols or self.default_symbols
-        end_date = end_date or datetime.utcnow()
+        end_date = end_date or datetime.now()
         start_date = start_date or (end_date - timedelta(days=30))
         
         strategy_results = []
@@ -199,7 +199,7 @@ class StrategyTester:
         # Varsayılan değerler
         symbols = symbols or self.default_symbols
         periods = periods or [1, 3, 5, 10]  # Memory'den gelen öneriler
-        end_date = end_date or datetime.utcnow()
+        end_date = end_date or datetime.now()
         start_date = start_date or (end_date - timedelta(days=30))
         
         period_results = []
@@ -280,7 +280,7 @@ class StrategyTester:
         # Varsayılan değerler
         symbols = symbols or self.default_symbols
         thresholds = thresholds or [0.2, 0.4, 0.6, 0.8, 1.0]
-        end_date = end_date or datetime.utcnow()
+        end_date = end_date or datetime.now()
         start_date = start_date or (end_date - timedelta(days=30))
         
         threshold_results = []

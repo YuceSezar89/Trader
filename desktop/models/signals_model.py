@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Optional
 
 from PyQt6.QtCore import (
@@ -81,7 +81,9 @@ def _fmt_age(ts: Optional[datetime], interval: str = "") -> str:
     if ts is None:
         return "—"
     time_str = ts.strftime("%H:%M")
-    now = datetime.now() if ts.tzinfo is None else datetime.now(tz=timezone.utc)
+    if ts.tzinfo is not None:
+        ts = ts.replace(tzinfo=None)
+    now = datetime.now()
     secs = int((now - ts).total_seconds())
     if secs < 0:
         return time_str
@@ -521,9 +523,9 @@ class SignalsProxyModel(QSortFilterProxyModel):
             case _ if col == COL_AGE:
                 def _ts(t):
                     if t is None:
-                        return datetime.max.replace(tzinfo=timezone.utc)
-                    if t.tzinfo is None:
-                        return t.replace(tzinfo=timezone.utc)
+                        return datetime.max
+                    if t.tzinfo is not None:
+                        return t.replace(tzinfo=None)
                     return t
                 return _ts(l_row.timestamp) > _ts(r_row.timestamp)
             case _:

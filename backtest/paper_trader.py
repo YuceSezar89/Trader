@@ -39,7 +39,7 @@ class PaperTrader:
         self.is_active = False
         self.positions: Dict[str, Dict] = {}  # Açık pozisyonlar {symbol: position_data}
         self.session_id: Optional[int] = None
-        self.last_signal_check = datetime.utcnow()
+        self.last_signal_check = datetime.now()
         
         # Callback fonksiyonları
         self.on_trade_opened: Optional[Callable] = None
@@ -98,7 +98,7 @@ class PaperTrader:
                 trading_session = await session.get(PaperTradingSession, self.session_id)
                 if trading_session:
                     trading_session.is_active = False
-                    trading_session.end_time = datetime.utcnow()
+                    trading_session.end_time = datetime.now()
                     trading_session.current_balance = self.current_balance
                     await session.commit()
             
@@ -145,7 +145,7 @@ class PaperTrader:
                 for signal in signals:
                     await self._process_signal(signal)
                 
-                self.last_signal_check = datetime.utcnow()
+                self.last_signal_check = datetime.now()
                 
         except Exception as e:
             logger.error(f"Sinyal kontrol hatası: {e}")
@@ -162,7 +162,7 @@ class PaperTrader:
                 return
             
             # Sinyal yaşı kontrolü
-            signal_age = (datetime.utcnow() - signal.timestamp).total_seconds()
+            signal_age = (datetime.now() - signal.timestamp).total_seconds()
             if signal_age > self.max_signal_age:
                 logger.debug(f"Sinyal çok eski: {symbol} ({signal_age:.0f}s)")
                 return
@@ -322,7 +322,7 @@ class PaperTrader:
                 paper_trade = await session.get(PaperTrade, trade_id)
                 if paper_trade:
                     paper_trade.exit_price = Decimal(str(exit_price))
-                    paper_trade.exit_time = datetime.utcnow()
+                    paper_trade.exit_time = datetime.now()
                     paper_trade.pnl = Decimal(str(pnl))
                     paper_trade.pnl_percentage = Decimal(str(pnl_percentage))
                     paper_trade.status = 'CLOSED'

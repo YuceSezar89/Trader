@@ -216,8 +216,8 @@ class TestTimeframeAggregator:
         test_data = TimeframeAggregator.create_test_data(bars=bars, start_time=start_time)
         
         assert len(test_data) == bars
-        first_timestamp = pd.to_datetime(test_data['open_time'].iloc[0], unit='ms')
-        assert first_timestamp.replace(tzinfo=None) == start_time
+        first_timestamp = datetime.fromtimestamp(test_data['open_time'].iloc[0] / 1000)
+        assert first_timestamp == start_time
 
 
 class TestConvenienceFunctions:

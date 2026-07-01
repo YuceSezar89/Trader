@@ -480,12 +480,7 @@ class MTFBackfillEngine:
         # VPM skoru hesapla
         vpm_score = self._calculate_vpm_score(row, timeframe)
 
-        # Timestamp'i datetime'a çevir (UTC)
-        from datetime import timezone
-
-        timestamp = datetime.fromtimestamp(
-            row["open_time"] / 1000, tz=timezone.utc
-        ).replace(tzinfo=None)
+        timestamp = datetime.fromtimestamp(row["open_time"] / 1000)
 
         return {
             "symbol": symbol,

@@ -36,7 +36,7 @@ class PaperTrade(Base):
     signal_strength: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     
     # Zaman bilgileri
-    entry_time: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    entry_time: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     exit_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     timeframe: Mapped[str] = mapped_column(String(10), nullable=False)
     
@@ -85,7 +85,7 @@ class BacktestResult(Base):
     slippage_rate: Mapped[Decimal] = mapped_column(DECIMAL(5, 4), default=0.0005)   # %0.05
     
     # Zaman bilgileri
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     test_duration_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     
     # İlişkiler
@@ -145,7 +145,7 @@ class StrategyParameter(Base):
     # Test sonucu referansı
     backtest_result_id = Column(Integer, ForeignKey('backtest_results.id'), nullable=True)
     
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.now)
     
     def __repr__(self):
         return f"<StrategyParameter({self.parameter_name}={self.parameter_value})>"
@@ -162,7 +162,7 @@ class PaperTradingSession(Base):
     
     # Durum
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    start_time: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    start_time: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     end_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     
     # Risk parametreleri

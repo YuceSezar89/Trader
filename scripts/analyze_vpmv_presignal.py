@@ -13,7 +13,7 @@ Her sembol için son 24 saatteki sinyalleri alır ve şunları hesaplar:
 
 import asyncio
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 import pandas as pd
 
@@ -59,7 +59,7 @@ def _compute_vpmv_series(df: pd.DataFrame, signal_type: str) -> pd.Series:
 
 
 async def fetch_signals(symbols: list[str]) -> list[dict]:
-    since = (datetime.now(timezone.utc) - timedelta(hours=72)).replace(tzinfo=None)
+    since = datetime.now() - timedelta(hours=72)
     async with get_session() as s:
         rows = await s.execute(text("""
             SELECT symbol, signal_type, interval, opened_at, open_price, vpms_score, indicators
@@ -99,11 +99,11 @@ async def analyze(symbols: list[str]) -> None:
             print(f"  {symbol} kline hatası: {e}")
             continue
 
-        df["dt"] = pd.to_datetime(df["open_time"], unit="ms", utc=True)
+        df["dt"] = pd.to_datetime(df["open_time"], unit="ms", utc=True).dt.tz_convert(Config.TIMEZONE).dt.tz_localize(None)
 
         # Sinyal barını bul
-        if opened_at.tzinfo is None:
-            opened_at = opened_at.replace(tzinfo=timezone.utc)
+        if opened_at.tzinfo is not None:
+            opened_at = opened_at.replace(tzinfo=None)
 
         # opened_at = bar kapanış zamanı → bar open_time = opened_at - interval
         interval_map = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240}
@@ -190,9 +190,9 @@ async def filter_test(symbols: list[str]) -> None:
             df = await BinanceClientManager.fetch_klines(symbol, interval, limit=tf_limit[interval] + POST_BARS + 10)
         except Exception:
             continue
-        df["dt"] = pd.to_datetime(df["open_time"], unit="ms", utc=True)
-        if opened_at.tzinfo is None:
-            opened_at = opened_at.replace(tzinfo=timezone.utc)
+        df["dt"] = pd.to_datetime(df["open_time"], unit="ms", utc=True).dt.tz_convert(Config.TIMEZONE).dt.tz_localize(None)
+        if opened_at.tzinfo is not None:
+            opened_at = opened_at.replace(tzinfo=None)
         interval_map = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240}
         bar_open = opened_at - timedelta(minutes=interval_map[interval])
         df["diff"] = (df["dt"] - bar_open).abs()
@@ -299,9 +299,9 @@ async def timeline(symbols: list[str]) -> None:
             df = await BinanceClientManager.fetch_klines(symbol, interval, limit=tf_limit[interval] + POST_BARS + 10)
         except Exception:
             continue
-        df["dt"] = pd.to_datetime(df["open_time"], unit="ms", utc=True)
-        if opened_at.tzinfo is None:
-            opened_at = opened_at.replace(tzinfo=timezone.utc)
+        df["dt"] = pd.to_datetime(df["open_time"], unit="ms", utc=True).dt.tz_convert(Config.TIMEZONE).dt.tz_localize(None)
+        if opened_at.tzinfo is not None:
+            opened_at = opened_at.replace(tzinfo=None)
         bar_open = opened_at - timedelta(minutes=interval_map[interval])
         df["diff"] = (df["dt"] - bar_open).abs()
         pos = df.index.get_loc(df["diff"].idxmin())

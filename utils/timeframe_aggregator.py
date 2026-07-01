@@ -15,7 +15,7 @@ Aggregation Kuralları:
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Optional, Tuple
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 import logging
 from config import Config
 
@@ -321,16 +321,15 @@ class TimeframeAggregator:
             low_price = min_price - low_offset
             
             bar_time = start_time + timedelta(minutes=i)
-            bar_time_utc = bar_time.replace(tzinfo=timezone.utc)
 
             bar_data = {
-                'open_time': int(bar_time_utc.timestamp() * 1000),
+                'open_time': int(bar_time.timestamp() * 1000),
                 'open': round(open_price, 2),
                 'high': round(high_price, 2),
                 'low': round(low_price, 2),
                 'close': round(close_price, 2),
                 'volume': round(np.random.random() * 1000000, 2),
-                'close_time': int((bar_time_utc + timedelta(minutes=1)).timestamp() * 1000),
+                'close_time': int((bar_time + timedelta(minutes=1)).timestamp() * 1000),
                 'quote_asset_volume': round(np.random.random() * 50000000, 2),
                 'number_of_trades': int(np.random.random() * 1000),
                 'taker_buy_base_asset_volume': round(np.random.random() * 500000, 2),
