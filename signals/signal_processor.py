@@ -284,7 +284,12 @@ _FVG_LOOKBACK   = 30
 
 
 def _detect_fvg_in_df(df: pd.DataFrame, sig_type: str, entry_price: float) -> bool:
-    """Entry fiyatının içinde kaldığı aktif (dolmamış) bir FVG var mı?"""
+    """Entry fiyatının içinde kaldığı aktif bir FVG var mı? (retest senaryosu)
+
+    Not: Kütüphanenin MitigatedIndex'i fiyat gap kenarına DEĞDİĞİ an dolar sayar;
+    o tanımla "dolmamış + fiyat içinde" imkânsızdır. Burada gap, fiyat içinden
+    TAMAMEN geçince (boğa: low < Bottom, ayı: high > Top) geçersiz sayılır.
+    """
     if len(df) < 3:
         return False
     try:
@@ -294,17 +299,21 @@ def _detect_fvg_in_df(df: pd.DataFrame, sig_type: str, entry_price: float) -> bo
             df_smc[col] = df_smc[col].astype(float)
         fvg_df    = _smc_lib.fvg(df_smc)
         direction = 1 if sig_type == "Long" else -1
+        lows  = df_smc["low"].to_numpy()
+        highs = df_smc["high"].to_numpy()
         for i in range(len(fvg_df)):
             fvg_val = fvg_df["FVG"].iloc[i]
             if np.isnan(fvg_val) or fvg_val != direction:
                 continue
-            mit = fvg_df["MitigatedIndex"].iloc[i]
-            if not np.isnan(mit) and mit > 0:
-                continue  # dolduruldu
             top = float(fvg_df["Top"].iloc[i])
             bot = float(fvg_df["Bottom"].iloc[i])
-            if bot <= entry_price <= top:
-                return True
+            if not bot <= entry_price <= top:
+                continue
+            if direction == 1 and np.any(lows[i + 2:] < bot):
+                continue  # boğa gap'i tamamen dolmuş
+            if direction == -1 and np.any(highs[i + 2:] > top):
+                continue  # ayı gap'i tamamen dolmuş
+            return True
         return False
     except Exception:  # pylint: disable=broad-exception-caught
         return False
@@ -312,28 +321,14 @@ def _detect_fvg_in_df(df: pd.DataFrame, sig_type: str, entry_price: float) -> bo
 
 async def _compute_fvg(symbol: str, sig_type: str, entry_price: float) -> str:
     """Tüm TF'lerde aktif FVG var mı? Sonuç: '1h,4h' veya '-'."""
-    import io as _io  # pylint: disable=import-outside-toplevel
     matched: list[str] = []
     try:
-        rc = RedisClient.get_client()
         for tf in _FVG_TIMEFRAMES:
             try:
-                raw = await rc.get(f"live_kline_data:{symbol}:{tf}")
-                if not raw:
+                df_tf = await RedisClient.get_mtf_klines(symbol, tf)
+                if df_tf is None or df_tf.empty:
                     continue
-                if isinstance(raw, bytes) and raw[:4] == b"ARDF":
-                    import pyarrow as _pa  # pylint: disable=import-outside-toplevel
-                    reader = _pa.ipc.open_stream(raw[4:])
-                    df_tf = reader.read_pandas()
-                elif isinstance(raw, (bytes, str)):
-                    raw_str = raw.decode("utf-8") if isinstance(raw, bytes) else raw
-                    df_tf = pd.read_json(_io.StringIO(raw_str), orient="split")
-                else:
-                    continue
-                if "open_time" in df_tf.columns and "timestamp" not in df_tf.columns:
-                    df_tf = df_tf.rename(columns={"open_time": "timestamp"})
-                needed = {"high", "low", "close"}
-                if not needed.issubset(df_tf.columns):
+                if not {"open", "high", "low", "close", "volume"}.issubset(df_tf.columns):
                     continue
                 if _detect_fvg_in_df(df_tf, sig_type, entry_price):
                     matched.append(tf)
