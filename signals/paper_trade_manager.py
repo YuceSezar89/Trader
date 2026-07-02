@@ -127,8 +127,8 @@ class PaperTradeManager:
                         snap = _json.loads(raw)
                         rank_map = {item["symbol"]: item["rank"] for item in snap}
                         rank_at_entry = rank_map.get(symbol)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("[PaperTrade] ranking snapshot okunamadı: %s", exc)
 
                 recent_win_rate = await self._recent_win_rate(
                     session, symbol, self.strategy

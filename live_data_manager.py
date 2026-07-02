@@ -1837,8 +1837,8 @@ class LiveDataManager:
                                 _row.vpmv_post_delta = round(post_delta, 2)
                                 await _s2.commit()
                                 updated += 1
-                    except Exception:  # pylint: disable=broad-exception-caught
-                        pass
+                    except Exception as exc:  # pylint: disable=broad-exception-caught
+                        logger.debug("[VPMVPost] sinyal %s güncellenemedi: %s", sig.id, exc)
 
                 if updated:
                     logger.info("[VPMVPost] %d sinyal post_avg güncellendi", updated)
@@ -1872,8 +1872,8 @@ class LiveDataManager:
                     if prev_raw:
                         try:
                             prev_oi = json.loads(prev_raw).get("oi", 0.0)
-                        except Exception:  # pylint: disable=broad-exception-caught
-                            pass
+                        except Exception as exc:  # pylint: disable=broad-exception-caught
+                            logger.debug("[OI] önceki değer parse edilemedi [%s]: %s", symbol, exc)
 
                     change_pct = 0.0
                     if prev_oi and prev_oi != 0:
@@ -1923,8 +1923,8 @@ class LiveDataManager:
                     await manual_manager.load_open_symbols()
                     await redis.delete("manual_trade:refresh")
                     logger.info("[ManualTrade] Cache yenilendi: %d açık sembol", len(manual_manager._open_symbols))  # noqa: SLF001
-            except Exception:  # pylint: disable=broad-exception-caught
-                pass
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.debug("[ManualTrade] refresh kontrolü başarısız: %s", exc)
 
     async def _health_loop(self):
         """Her 15 dakikada price_data tazeliğini kontrol eder; gap tespit ederse doldurur."""

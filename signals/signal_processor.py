@@ -35,8 +35,8 @@ async def _get_pt_flag() -> str:
         val = await RedisClient.get_client().get("settings:paper_trade_enabled")
         _PT_FLAG_CACHE["value"] = str(val) if val is not None else "1"
         _PT_FLAG_CACHE["ts"] = now
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("paper_trade_enabled bayrağı okunamadı, önbellek kullanılıyor: %s", exc)
     return _PT_FLAG_CACHE["value"]
 
 _MIN_BARS: dict[str, int] = {
@@ -87,8 +87,8 @@ async def _count_htf_ha_bullish(
             ha_bull = float(last["ha_close"]) > float(last["ha_open"])
             if (signal_type == "Long" and ha_bull) or (signal_type == "Short" and not ha_bull):
                 count += 1
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("HA HTF sayımı [%s %s] atlandı: %s", symbol, tf, exc)
     return count
 
 
@@ -126,8 +126,8 @@ async def _compute_mtf_score(
             if (signal_type == "Long" and st_bullish) or \
                (signal_type == "Short" and not st_bullish):
                 confirmed += 1
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("MTF ST konfirmasyonu [%s %s] atlandı: %s", symbol, tf, exc)
 
     if checked == 0:
         return 100.0
@@ -339,8 +339,8 @@ async def _compute_fvg(symbol: str, sig_type: str, entry_price: float) -> str:
                     matched.append(tf)
             except Exception:  # pylint: disable=broad-exception-caught
                 continue
-    except Exception:  # pylint: disable=broad-exception-caught
-        pass
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.debug("FVG hesabı [%s] atlandı: %s", symbol, exc)
     return ",".join(matched) if matched else "-"
 
 
@@ -558,8 +558,8 @@ async def process_and_enrich_signals(
                         z_score_entry = round(
                             float((closes.iloc[-1] - ema200.iloc[-1]) / (std200.iloc[-1] + 1e-12)), 3
                         )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("z_score_entry hesaplanamadı [%s]: %s", symbol, exc)
 
                 if z_score_entry is not None:
                     _is_long = sig_type == "Long"
@@ -585,8 +585,8 @@ async def process_and_enrich_signals(
                         atr_series = calculate_atr(df, period=Config.ATR_PERIOD)
                         atr_pct = float(normalize_volatility_0_100(atr_series).iloc[-1])
                         volatility_regime = "high" if atr_pct > 70 else "low" if atr_pct < 30 else "normal"
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("volatility_regime hesaplanamadı [%s]: %s", symbol, exc)
 
                 # 6.5. BTC trend (confluence filtresi için önceden hesapla)
                 btc_z: Optional[float] = None
@@ -601,8 +601,8 @@ async def process_and_enrich_signals(
                             (btc_closes.iloc[-1] - btc_ema.iloc[-1]) / (btc_std.iloc[-1] + 1e-12)
                         ), 3)
                         btc_trend_str = "bullish" if btc_z > 0.5 else "bearish" if btc_z < -0.5 else "neutral"
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("BTC trend hesaplanamadı: %s", exc)
 
                 indicators_name = signal_data.get("indicators", "")
 
@@ -727,8 +727,8 @@ async def process_and_enrich_signals(
                             if ticker_raw:
                                 ticker_d = _json.loads(ticker_raw)
                                 funding = ticker_d.get("funding_rate")
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.debug("funding_rate okunamadı [%s]: %s", symbol, exc)
 
                         _pt_kwargs = dict(
                             signal_data=enriched_signal,
