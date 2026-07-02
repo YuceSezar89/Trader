@@ -1,7 +1,7 @@
 """
 SignalsModel — aktif sinyaller için QAbstractTableModel.
 
-Sütunlar: Sembol | Tip | TF | VPM | MTF | α | β | Z-Score% | P&L% | Süre
+Sütunlar: Sembol | Tip | TF | VPM | MTF | α | β | Z | P&L% | Süre
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from PyQt6.QtGui import QColor
 from config import Config
 from desktop.theme import COLORS
 
-COLUMNS = ["Sembol", "Tip", "TF", "İndikatör", "VPMV", "MTF", "α", "β", "Z-Score%", "P&L%", "SL", "TP", "P/D", "Yapı", "FVG", "Pattern", "Süre", "Güv"]
+COLUMNS = ["Sembol", "Tip", "TF", "İndikatör", "VPMV", "MTF", "α", "β", "Z", "P&L%", "SL", "TP", "P/D", "Yapı", "FVG", "Pattern", "Süre", "Güv"]
 
 COL_SYMBOL    = 0
 COL_TYPE      = 1
@@ -204,7 +204,7 @@ class SignalsModel(QAbstractTableModel):
             case _ if col == COL_MTF:       return f"{int(row.mtf)}" if row.mtf is not None else "—"
             case _ if col == COL_ALPHA:     return _fmt_ratio(row.alpha)
             case _ if col == COL_BETA:      return _fmt_ratio(row.beta)
-            case _ if col == COL_ZSCORE:    return _fmt_score(row.zscore)
+            case _ if col == COL_ZSCORE:    return f"{row.zscore:+.2f}" if row.zscore is not None else "—"
             case _ if col == COL_PNL:       return _fmt_pnl(row.pnl_pct)
             case _ if col == COL_SL:        return _fmt_price(row.stop_loss_price)
             case _ if col == COL_TP:        return _fmt_price(row.take_profit_price)
@@ -294,6 +294,10 @@ class SignalsModel(QAbstractTableModel):
             return QColor(COLORS["text_muted"])
         if col == COL_ALPHA and row.alpha is not None:
             return QColor(COLORS["green"] if row.alpha > 0 else COLORS["red"])
+        if col == COL_ZSCORE and row.zscore is not None:
+            if abs(row.zscore) >= 2.0:
+                return QColor(COLORS["yellow"])
+            return QColor(COLORS["text_muted"])
         if col == COL_SL:
             return QColor(COLORS["red"])
         if col == COL_TP:
@@ -379,7 +383,7 @@ class SignalsModel(QAbstractTableModel):
             mtf=s.get("mtf_score"),
             alpha=s.get("alpha"),
             beta=s.get("beta"),
-            zscore=None,
+            zscore=s.get("z_score_entry"),
             timestamp=ts,
             indicators=s.get("indicators") or "",
             status=s.get("status", "active"),
