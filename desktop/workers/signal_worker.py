@@ -7,6 +7,7 @@ from typing import Any, Optional
 
 import psycopg2
 import psycopg2.extras
+import redis
 from PyQt6.QtCore import QThread, pyqtSignal
 
 _SIGNAL_COLUMNS = """id, symbol, signal_type, opened_at,
@@ -39,11 +40,13 @@ class SignalWorker(QThread):
         self,
         db_config: dict[str, Any],
         interval_ms: int = 5000,
+        redis_url: str = "",
         parent=None,
     ):
         super().__init__(parent)
         self._db_config = db_config
         self._interval_ms = interval_ms
+        self._redis_url = redis_url
         self._running = False
         self._last_signal_id: int = 0
         self._active_ids: set[int] = set()
@@ -54,6 +57,8 @@ class SignalWorker(QThread):
 
     def run(self) -> None:
         self._running = True
+        if self._redis_url:
+            threading.Thread(target=self._subscribe_loop, daemon=True).start()
         while self._running:
             if not self._loaded:
                 self._load_all()
@@ -61,6 +66,33 @@ class SignalWorker(QThread):
                 self._check_new()
             self._wake.wait(timeout=self._interval_ms / 1000)
             self._wake.clear()
+
+    def _subscribe_loop(self) -> None:
+        """signal_opened kanalını dinler; mesaj gelince poll döngüsünü hemen uyandırır."""
+        while self._running:
+            sub = None
+            pubsub = None
+            try:
+                sub = redis.Redis.from_url(self._redis_url, decode_responses=True,
+                                           socket_connect_timeout=3)
+                pubsub = sub.pubsub()
+                pubsub.subscribe("signal_opened")
+                for message in pubsub.listen():
+                    if not self._running:
+                        return
+                    if message.get("type") == "message":
+                        self._wake.set()
+            except Exception:
+                if self._running:
+                    self._wake.wait(timeout=5)
+            finally:
+                try:
+                    if pubsub:
+                        pubsub.unsubscribe()
+                    if sub:
+                        sub.close()
+                except Exception:
+                    pass
 
     def _get_conn(self) -> psycopg2.extensions.connection:
         if self._conn is None or self._conn.closed:

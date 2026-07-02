@@ -1873,7 +1873,7 @@ class LiveDataManager:
                         try:
                             prev_oi = json.loads(prev_raw).get("oi", 0.0)
                         except Exception as exc:  # pylint: disable=broad-exception-caught
-                            logger.debug("[OI] önceki değer parse edilemedi [%s]: %s", symbol, exc)
+                            logger.debug("[OI] önceki değer parse edilemedi [%s]: %s", sym, exc)
 
                     change_pct = 0.0
                     if prev_oi and prev_oi != 0:
@@ -1901,6 +1901,18 @@ class LiveDataManager:
             await ha_cross_manager.check_all_prices(prices)
             await rsi_15m_manager.check_all_prices(prices)
             await manual_manager.check_all_prices(prices)
+
+    async def _price_publish_loop(self) -> None:
+        """Her 2 saniyede _last_prices'ı tek Redis key'ine yazar (panel canlı PnL için)."""
+        redis = RedisClient.get_client()
+        while True:
+            await asyncio.sleep(2)
+            if not self._last_prices:
+                continue
+            try:
+                await redis.set("prices:live", json.dumps(self._last_prices), ex=15)
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.debug("[PricePublish] prices:live yazılamadı: %s", exc)
 
     async def _filter_save_loop(self) -> None:
         """Her 30s'de SignalFilter state'ini Redis'e kaydeder (restart-proof)."""
@@ -2066,6 +2078,7 @@ class LiveDataManager:
                 asyncio.create_task(self._ticker_refresh_loop()),
                 asyncio.create_task(self._oi_refresh_loop()),
                 asyncio.create_task(self._risk_check_loop()),
+                asyncio.create_task(self._price_publish_loop()),
                 asyncio.create_task(self._vpmv_post_loop()),
                 asyncio.create_task(self._manual_refresh_loop()),
                 asyncio.create_task(self._filter_save_loop()),

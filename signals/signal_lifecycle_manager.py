@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database.engine import get_session
 from database.models import Signal
 from signals.risk_policy import default_policy
+from utils.redis_client import RedisClient
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +172,12 @@ class SignalLifecycleManager:
                         "[%s] %s %s sinyal açıldı (id=%s, %s)",
                         symbol, interval, sig_type, new_sig.id, indicators,
                     )
+                    try:
+                        await RedisClient.get_client().publish(
+                            "signal_opened", f"{symbol}:{interval}"
+                        )
+                    except Exception as exc:  # pylint: disable=broad-exception-caught
+                        logger.debug("signal_opened publish hatası: %s", exc)
                     return new_sig.id
 
                 except Exception as exc:

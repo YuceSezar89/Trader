@@ -307,6 +307,9 @@ class ActiveSignalsPanel(QWidget):
     def on_price_updated(self, symbol: str, price: float, change_pct: float, _volume: float = 0.0, _funding: float = 0.0) -> None:
         self._model.on_price_updated(symbol, price, change_pct)
 
+    def on_prices_updated(self, prices: dict) -> None:
+        self._model.on_prices_updated(prices)
+
     # ── Seçim ─────────────────────────────────────────────────────────────────
 
     @pyqtSlot()

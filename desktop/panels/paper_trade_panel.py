@@ -420,6 +420,14 @@ class PaperTradePanel(QWidget):
         self._open_prices[symbol] = price
         self._refresh_price_cells(symbol, price)
 
+    def on_prices_updated(self, prices: dict) -> None:
+        open_syms = {r["symbol"] for r in self._open_rows}
+        for sym in open_syms:
+            p = prices.get(sym)
+            if p is not None:
+                self._open_prices[sym] = float(p)
+                self._refresh_price_cells(sym, float(p))
+
     def _poll_prices(self) -> None:
         if not self._redis or not self._open_rows:
             return

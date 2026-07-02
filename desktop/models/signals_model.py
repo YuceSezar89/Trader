@@ -433,6 +433,21 @@ class SignalsModel(QAbstractTableModel):
                 self._coincident[key] = self._coincident.get(key, 0) + 1
 
     @pyqtSlot(str, float, float)
+    def on_prices_updated(self, prices: dict) -> None:
+        """Tüm satırları tek seferde günceller — 1 dataChanged, 1 resort."""
+        changed = False
+        for sym, indices in self._sym_rows.items():
+            p = prices.get(sym)
+            if p is None:
+                continue
+            for idx in indices:
+                self._rows[idx].update_price(float(p))
+                changed = True
+        if changed and self._rows:
+            tl = self.index(0, COL_PNL)
+            br = self.index(len(self._rows) - 1, COL_GUV)
+            self.dataChanged.emit(tl, br, [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ForegroundRole])
+
     def on_price_updated(self, symbol: str, price: float, _change_pct: float) -> None:
         indices = self._sym_rows.get(symbol, [])
         for idx in indices:

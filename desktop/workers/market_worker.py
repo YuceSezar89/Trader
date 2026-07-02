@@ -23,6 +23,7 @@ class MarketWorker(QThread):  # pylint: disable=too-many-instance-attributes
     """Redis pub/sub ile anlık fiyat ve kline güncellemelerini yayınlar."""
 
     price_updated = pyqtSignal(str, float, float, float, float)  # symbol, price, change_pct, volume, funding_rate
+    prices_updated = pyqtSignal(dict)                       # {symbol: canlı fiyat} — tek toplu güncelleme
     klines_updated = pyqtSignal(str, str, object)           # symbol, timeframe, DataFrame
     connection_changed = pyqtSignal(bool, str)              # connected, message
 
@@ -136,9 +137,30 @@ class MarketWorker(QThread):  # pylint: disable=too-many-instance-attributes
             chart_sym = self._chart_symbol
             chart_tf = self._chart_tf
 
-        for symbol in symbols:
-            ticker = self._fetch_ticker(symbol)
-            if ticker:
+        # Canlı tick fiyatları (backend 2s'de bir yazar) — tek GET, tek toplu emit
+        try:
+            raw = self._redis.get("prices:live")
+            if raw:
+                self.prices_updated.emit(json.loads(raw))
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
+
+        # Ticker verisi (24h change/volume/funding) — tek pipeline'da oku
+        if symbols:
+            try:
+                pipe = self._redis.pipeline(transaction=False)
+                for symbol in symbols:
+                    pipe.get(f"ticker:{symbol}")
+                results = pipe.execute()
+            except Exception:  # pylint: disable=broad-exception-caught
+                results = [None] * len(symbols)
+            for symbol, raw in zip(symbols, results):
+                if not raw:
+                    continue
+                try:
+                    ticker = json.loads(raw)
+                except Exception:  # pylint: disable=broad-exception-caught
+                    continue
                 self.price_updated.emit(
                     symbol,
                     float(ticker.get("price", 0.0)),

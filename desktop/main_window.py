@@ -389,7 +389,7 @@ class MainWindow(QMainWindow):
         self._market_worker.connection_changed.connect(self._on_market_connection)
         self._market_worker.price_updated.connect(self._watchlist_panel.on_price_updated)
         self._market_worker.price_updated.connect(self._on_price_updated)
-        self._market_worker.price_updated.connect(self._paper_trade_panel.on_price_updated)
+        self._market_worker.prices_updated.connect(self._paper_trade_panel.on_prices_updated)
         self._market_worker.klines_updated.connect(self._chart_panel.on_klines_updated)
         self._chart_panel.symbol_changed.connect(self._market_worker.set_chart_watch)
         self._market_worker.set_chart_watch(
@@ -405,12 +405,14 @@ class MainWindow(QMainWindow):
         self._watchlist_panel.symbols_changed.connect(self._market_worker.set_symbols)
 
         # Signal worker — watchlist + aktif sinyaller paneline bağlı
-        self._signal_worker = SignalWorker(db_cfg, parent=self)
+        self._signal_worker = SignalWorker(
+            db_cfg, redis_url=self._config.get("redis_url", ""), parent=self
+        )
         self._signal_worker.connection_changed.connect(self._on_signal_connection)
         self._signal_worker.signals_loaded.connect(self._active_signals_panel.on_signals_loaded)
         self._signal_worker.new_signal.connect(self._active_signals_panel.on_new_signal)
         self._signal_worker.signals_closed.connect(self._active_signals_panel.on_signals_closed)
-        self._market_worker.price_updated.connect(self._active_signals_panel.on_price_updated)
+        self._market_worker.prices_updated.connect(self._active_signals_panel.on_prices_updated)
         self._signal_worker.start()
         self._workers.append(self._signal_worker)
 
