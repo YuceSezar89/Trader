@@ -5,6 +5,14 @@ MTF LiveDataManager Test Script
 Bu script yeni MTF özelliklerini test eder.
 """
 
+import pytest
+
+pytest.skip(
+    "Manuel entegrasyon scripti - pytest testi degil; calistirmak icin: python %s" % __file__,
+    allow_module_level=True,
+)
+
+
 import sys
 import os
 import asyncio

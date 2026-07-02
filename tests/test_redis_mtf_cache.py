@@ -35,12 +35,12 @@ class TestRedisMTFCache:
     def test_ttl_for_timeframes(self, test_timeframes):
         """Test TTL values for all timeframes."""
         expected_ttls = {
-            '1m': 3600,      # 1 hour
-            '5m': 14400,     # 4 hours
-            '15m': 86400,    # 24 hours
-            '1h': 172800,    # 48 hours
-            '4h': 604800,    # 7 days
-            '1d': 2592000,   # 30 days
+            '1m': 86400,     # 24 saat
+            '5m': 259200,    # 3 gün
+            '15m': 604800,   # 7 gün
+            '1h': 604800,    # 7 gün
+            '4h': 1209600,   # 14 gün
+            '1d': 2592000,   # 30 gün
         }
         
         for tf in test_timeframes:
@@ -418,10 +418,10 @@ class TestRedisMTFCacheErrorHandling:
     @pytest.mark.asyncio
     async def test_redis_connection_error(self, test_symbol, sample_5m_data):
         """Test handling of Redis connection errors."""
-        # set_df fonksiyonunu mock et çünkü set_mtf_klines içinde set_df çağrılıyor
-        with patch.object(RedisClient, 'set_df') as mock_set_df:
-            mock_set_df.side_effect = Exception("Redis connection failed")
-            
+        # Batch tasarımda enqueue Redis'e dokunmaz; gerçek hata yolu arrow serileştirme
+        with patch.object(RedisClient, '_df_to_arrow_bytes') as mock_arrow:
+            mock_arrow.side_effect = Exception("serialization failed")
+
             success = await RedisClient.set_mtf_klines(test_symbol, '5m', sample_5m_data)
             assert success == False, "Should return False on Redis error"
     
@@ -430,11 +430,9 @@ class TestRedisMTFCacheErrorHandling:
     @pytest.mark.asyncio
     async def test_redis_timeout_error(self, test_symbol, sample_5m_data):
         """Test handling of Redis timeout errors."""
-        with patch.object(RedisClient, 'get_client') as mock_get_client:
-            mock_client = AsyncMock()
-            mock_client.get.side_effect = asyncio.TimeoutError("Redis timeout")
-            mock_get_client.return_value = mock_client
-            
+        with patch.object(RedisClient, 'get_df', new_callable=AsyncMock) as mock_get_df:
+            mock_get_df.side_effect = asyncio.TimeoutError("Redis timeout")
+
             cached_df = await RedisClient.get_mtf_klines(test_symbol, '5m')
             assert cached_df is None, "Should return None on timeout"
     

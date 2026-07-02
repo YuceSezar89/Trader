@@ -5,6 +5,14 @@ Live MTF System Test
 Bu script canlı MTF sistemini test eder.
 """
 
+import pytest
+
+pytest.skip(
+    "Manuel entegrasyon scripti - pytest testi degil; calistirmak icin: python %s" % __file__,
+    allow_module_level=True,
+)
+
+
 import asyncio
 import sys
 import os

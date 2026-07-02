@@ -5,6 +5,14 @@ MTF Redis Cache Test Scripti
 Bu script yeni MTF Redis cache fonksiyonlarını test eder.
 """
 
+import pytest
+
+pytest.skip(
+    "Manuel entegrasyon scripti - pytest testi degil; calistirmak icin: python %s" % __file__,
+    allow_module_level=True,
+)
+
+
 import sys
 import os
 import asyncio

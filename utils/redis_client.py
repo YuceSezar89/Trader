@@ -32,6 +32,7 @@ class RedisClient:
 
     # Batch flush state — asyncio single-threaded, race condition yok
     _pending_klines: Dict[str, Tuple[bytes, int]] = {}  # key → (arrow_bytes, ttl)
+    _flush_immediately: bool = False  # test dikişi: True ise set anında flush eder
     _pending_publishes: Set[str] = set()                # "symbol:tf"
     _flusher_task: Optional[asyncio.Task] = None
 
@@ -281,7 +282,10 @@ class RedisClient:
             arrow_bytes = await loop.run_in_executor(_ARROW_EXECUTOR, cls._df_to_arrow_bytes, df)
             cls._pending_klines[key] = (arrow_bytes, ttl)
             cls._pending_publishes.add(f"{symbol}:{timeframe}")
-            cls._ensure_flusher()
+            if cls._flush_immediately:
+                await cls.flush_pending_klines()
+            else:
+                cls._ensure_flusher()
             return True
         except Exception as e:
             logger.error("MTF klines batch hatası [%s:%s]: %s", symbol, timeframe, e)
@@ -296,29 +300,36 @@ class RedisClient:
             )
 
     @classmethod
+    async def flush_pending_klines(cls) -> int:
+        """Pending kline'ları tek pipeline ile Redis'e iter. Yazılan SET sayısını döndürür."""
+        if not cls._pending_klines:
+            return 0
+        # Swap: yeni yazmaları boş dict'e yönlendir, eskiyi flush et
+        pending = cls._pending_klines
+        publishes = cls._pending_publishes
+        cls._pending_klines = {}
+        cls._pending_publishes = set()
+        try:
+            r = cls._get_binary_client()
+            async with r.pipeline(transaction=False) as pipe:
+                for k, (data, ttl) in pending.items():
+                    pipe.set(k, data, ex=ttl)
+                for msg in publishes:
+                    pipe.publish("kline_updated", msg)
+                await pipe.execute()
+            logger.debug("Batch flush: %d SET, %d PUBLISH", len(pending), len(publishes))
+            return len(pending)
+        except Exception as e:
+            logger.error("Batch flush hatası: %s", e)
+            return 0
+
+    @classmethod
     async def _batch_flush_loop(cls) -> None:
-        """Her 500ms'de pending kline'ları tek pipeline ile Redis'e iter."""
+        """Her 500ms'de pending kline'ları Redis'e iter."""
         logger.info("Redis batch flusher başlatıldı (500ms)")
         while True:
             await asyncio.sleep(0.5)
-            if not cls._pending_klines:
-                continue
-            # Swap: yeni yazmaları boş dict'e yönlendir, eskiyi flush et
-            pending = cls._pending_klines
-            publishes = cls._pending_publishes
-            cls._pending_klines = {}
-            cls._pending_publishes = set()
-            try:
-                r = cls._get_binary_client()
-                async with r.pipeline(transaction=False) as pipe:
-                    for k, (data, ttl) in pending.items():
-                        pipe.set(k, data, ex=ttl)
-                    for msg in publishes:
-                        pipe.publish("kline_updated", msg)
-                    await pipe.execute()
-                logger.debug("Batch flush: %d SET, %d PUBLISH", len(pending), len(publishes))
-            except Exception as e:
-                logger.error("Batch flush hatası: %s", e)
+            await cls.flush_pending_klines()
 
     @classmethod
     async def publish_kline_update(cls, symbol: str, timeframe: str) -> None:

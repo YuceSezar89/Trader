@@ -125,7 +125,7 @@ class TestMTFIntegration:
     @pytest.mark.asyncio
     async def test_mtf_multiple_symbols(self, clean_redis_state):
         """Test MTF system with multiple symbols."""
-        symbols = ['BTCUSDT', 'ETHUSDT', 'ADAUSDT']
+        symbols = ['TESTBTCUSDT', 'TESTETHUSDT', 'TESTADAUSDT']
         timeframes = ['1m', '5m']
         
         # Create and cache data for multiple symbols

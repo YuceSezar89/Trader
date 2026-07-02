@@ -1,5 +1,9 @@
 """
-VPM Calculator Unit Tests
+VPMCalculator testleri — güncel API: normalize bileşenlerden ağırlıklı ortalama.
+
+Bileşen hesaplama (volume/momentum/volatilite/fiyat skorları) artık
+utils/vpmv.py ve signals/signal_processor._compute_vpmv_scores içinde;
+bu dosya yalnızca birleştirme katmanını test eder.
 """
 
 import pytest
@@ -11,143 +15,49 @@ from signals.vpm_calculator import VPMCalculator, calculate_vpm
 
 
 class TestVPMCalculator:
-    """VPM Calculator test suite"""
-    
-    def test_basic_calculation(self):
-        """Temel VPM hesaplama testi"""
-        score = VPMCalculator.calculate(
-            volume=1000,
-            volume_sma=500,
-            price_change_pct=2.0,
-            rsi_delta=10.0,
-            interval='1m',
-            signal_type='Long'
-        )
-        
-        assert 0 <= score <= 100
-        assert score > 0  # Pozitif değerler için skor > 0 olmalı
-    
-    def test_timeframe_weights(self):
-        """Timeframe ağırlıkları testi"""
-        base_params = {
-            'volume': 1000,
-            'volume_sma': 500,
-            'price_change_pct': 2.0,
-            'rsi_delta': 10.0,
-            'signal_type': 'Long'
-        }
-        
-        score_1m = VPMCalculator.calculate(**base_params, interval='1m')
-        score_5m = VPMCalculator.calculate(**base_params, interval='5m')
-        score_1h = VPMCalculator.calculate(**base_params, interval='1h')
-        
-        # Daha yüksek TF = daha yüksek skor
-        assert score_1m < score_5m < score_1h
-    
-    def test_signal_type_direction(self):
-        """Long vs Short yön testi"""
-        params = {
-            'volume': 1000,
-            'volume_sma': 500,
-            'price_change_pct': 2.0,  # Pozitif değişim
-            'rsi_delta': 10.0,
-            'interval': '1m'
-        }
-        
-        score_long = VPMCalculator.calculate(**params, signal_type='Long')
-        score_short = VPMCalculator.calculate(**params, signal_type='Short')
-        
-        # Pozitif değişimde Long > Short
-        assert score_long > score_short
-    
-    def test_volume_score(self):
-        """Volume skor hesaplama testi (sigmoid 0-100)"""
-        # Normal volume (1x SMA) -> 50
-        score1 = VPMCalculator._calculate_volume_score(100, 100)
-        assert 45 < score1 < 55
-        
-        # 2x volume -> ~88
-        score2 = VPMCalculator._calculate_volume_score(200, 100)
-        assert 85 < score2 < 90
-        
-        # 3x volume -> ~98
-        score3 = VPMCalculator._calculate_volume_score(300, 100)
-        assert 95 < score3 < 99
-        
-        # Düşük volume (0.5x) -> ~27
-        score4 = VPMCalculator._calculate_volume_score(50, 100)
-        assert 25 < score4 < 30
-    
-    def test_price_score(self):
-        """Price skor hesaplama testi (sigmoid 0-100)"""
-        # Long pozitif değişim (+2%) -> ~88
-        score1 = VPMCalculator._calculate_price_score(2.0, 'Long')
-        assert 85 < score1 < 92
-        
-        # Short pozitif değişim (ters yön) -> ~12
-        score2 = VPMCalculator._calculate_price_score(2.0, 'Short')
-        assert 10 < score2 < 15
-        
-        # Long negatif değişim (-2%) -> ~12
-        score3 = VPMCalculator._calculate_price_score(-2.0, 'Long')
-        assert 10 < score3 < 15
-        
-        # Nötr (0%) -> 50
-        score4 = VPMCalculator._calculate_price_score(0.0, 'Long')
-        assert 48 < score4 < 52
-    
-    def test_momentum_score(self):
-        """Momentum skor hesaplama testi (sigmoid 0-100)"""
-        # Long pozitif RSI delta (+10) -> ~73
-        score1 = VPMCalculator._calculate_momentum_score(10.0, 'Long')
-        assert 70 < score1 < 75
-        
-        # Short pozitif RSI delta (ters yön) -> ~27
-        score2 = VPMCalculator._calculate_momentum_score(10.0, 'Short')
-        assert 25 < score2 < 30
-        
-        # Nötr (0) -> 50
-        score3 = VPMCalculator._calculate_momentum_score(0.0, 'Long')
-        assert 48 < score3 < 52
-    
-    def test_validation(self):
-        """Input validation testi"""
-        # Geçerli inputs
-        assert VPMCalculator.validate_inputs(100, 50, 2.0, 10.0) is True
-        
-        # None değer
-        assert VPMCalculator.validate_inputs(None, 50, 2.0, 10.0) is False
-        
-        # Negatif volume
-        assert VPMCalculator.validate_inputs(-100, 50, 2.0, 10.0) is False
-    
+
+    def test_equal_components(self):
+        """Tüm bileşenler aynıysa skor da aynı olmalı (ağırlıklardan bağımsız)."""
+        assert VPMCalculator.calculate(70.0, 70.0, 70.0, 70.0) == pytest.approx(70.0)
+
+    def test_weighted_average(self):
+        """Varsayılan ağırlıklar: V=0.35, M=0.35, Vlt=0.20, P=0.10."""
+        assert VPMCalculator.calculate(100.0, 0.0, 0.0, 0.0) == pytest.approx(35.0)
+        assert VPMCalculator.calculate(0.0, 100.0, 0.0, 0.0) == pytest.approx(35.0)
+        assert VPMCalculator.calculate(0.0, 0.0, 100.0, 0.0) == pytest.approx(20.0)
+        assert VPMCalculator.calculate(0.0, 0.0, 0.0, 100.0) == pytest.approx(10.0)
+
+    def test_custom_weights(self):
+        """Özel ağırlıklar toplamı normalize edilmeli."""
+        weights = {"V": 1.0, "M": 1.0, "Vlt": 1.0, "P": 1.0}
+        score = VPMCalculator.calculate(80.0, 40.0, 60.0, 20.0, weights=weights)
+        assert score == pytest.approx(50.0)
+
+    def test_zero_weights_returns_zero(self):
+        """Ağırlık toplamı 0 ise güvenli 0.0 dönmeli (sıfıra bölme yok)."""
+        weights = {"V": 0.0, "M": 0.0, "Vlt": 0.0, "P": 0.0}
+        assert VPMCalculator.calculate(80.0, 80.0, 80.0, 80.0, weights=weights) == 0.0
+
+    def test_clamped_to_0_100(self):
+        """Skor 0-100 aralığına sıkıştırılmalı."""
+        assert VPMCalculator.calculate(150.0, 150.0, 150.0, 150.0) == 100.0
+        assert VPMCalculator.calculate(-50.0, -50.0, -50.0, -50.0) == 0.0
+
+    def test_boundaries(self):
+        assert VPMCalculator.calculate(0.0, 0.0, 0.0, 0.0) == 0.0
+        assert VPMCalculator.calculate(100.0, 100.0, 100.0, 100.0) == pytest.approx(100.0)
+
+    def test_config_weights_match_default(self):
+        """Config.VPM WEIGHTS ile sınıfın varsayılanı senkron kalmalı."""
+        from config import Config
+        assert VPMCalculator.DEFAULT_WEIGHTS == Config.VPM["WEIGHTS"]
+
     def test_convenience_function(self):
-        """Convenience function testi"""
-        score = calculate_vpm(
-            volume=1000,
-            volume_sma=500,
-            price_change_pct=2.0,
-            rsi_delta=10.0,
-            interval='5m',
-            signal_type='Long'
-        )
-        
-        assert 0 <= score <= 100
-    
-    def test_edge_cases(self):
-        """Edge case'ler testi"""
-        # Zero volume SMA
-        score1 = VPMCalculator.calculate(100, 0, 2.0, 10.0)
-        assert score1 >= 0
-        
-        # Çok yüksek price change
-        score2 = VPMCalculator.calculate(100, 50, 50.0, 10.0)
-        assert 0 <= score2 <= 100
-        
-        # Çok yüksek RSI delta
-        score3 = VPMCalculator.calculate(100, 50, 2.0, 100.0)
-        assert 0 <= score3 <= 100
+        """calculate_vpm sınıf metoduyla aynı sonucu vermeli."""
+        args = (75.0, 60.0, 40.0, 55.0)
+        assert calculate_vpm(*args) == VPMCalculator.calculate(*args)
 
-
-if __name__ == '__main__':
-    pytest.main([__file__, '-v'])
+    def test_incomplete_weights_raise(self):
+        """Eksik anahtarlı ağırlık dict'i KeyError fırlatır (mevcut sözleşme)."""
+        with pytest.raises(KeyError):
+            VPMCalculator.calculate(50.0, 50.0, 50.0, 50.0, weights={"V": 1.0})
