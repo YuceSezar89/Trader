@@ -196,10 +196,11 @@ def _compute_smc(df: pd.DataFrame, sig_type: str, lookback: int = 50) -> tuple[O
     pd_zone: (close - low_N) / (high_N - low_N) * 100
       0-25  → Deep Discount | 25-50 → Discount | 50-75 → Premium | 75-100 → Deep Premium
 
-    market_structure: pivot tabanlı tespit (smartmoneyconcepts kütüphanesi).
-      BOS↑  / BOS↓  — sinyal mevcut yapıyla aynı yönde (trend devamı)
-      CHoCH↑ / CHoCH↓ — sinyal yapıya karşı (dönüş sinyali)
-      -             — yapı belirlenemedi
+    market_structure: sinyal-yapı uyumu (son yapısal olayın YÖNÜ baz alınır;
+    kütüphanenin BOS/CHoCH olay ayrımı kullanılmaz — ok sinyal yönünü gösterir).
+      Uyum↑  / Uyum↓  — sinyal mevcut yapıyla aynı yönde (trend devamı)
+      Karşı↑ / Karşı↓ — sinyal yapıya karşı (dönüş denemesi)
+      -               — yapı belirlenemedi
     """
     try:
         if len(df) < lookback + 5:
@@ -241,9 +242,9 @@ def _compute_smc(df: pd.DataFrame, sig_type: str, lookback: int = 50) -> tuple[O
 
         structure = "-"
         if structure_dir == 1:
-            structure = "BOS↑" if sig_type == "Long" else "CHoCH↓"
+            structure = "Uyum↑" if sig_type == "Long" else "Karşı↓"
         elif structure_dir == -1:
-            structure = "BOS↓" if sig_type == "Short" else "CHoCH↑"
+            structure = "Uyum↓" if sig_type == "Short" else "Karşı↑"
 
         return pd_zone, structure
     except Exception:  # pylint: disable=broad-exception-caught

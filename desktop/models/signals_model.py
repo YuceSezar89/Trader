@@ -308,9 +308,9 @@ class SignalsModel(QAbstractTableModel):
             return QColor(COLORS["green"] if aligned else COLORS["red"])
         if col == COL_STRUCT:
             s = row.market_structure or "-"
-            if s.startswith("BOS"):
+            if s.startswith(("Uyum", "BOS")):
                 return QColor(COLORS["green"])
-            if s.startswith("CHoCH"):
+            if s.startswith(("Karşı", "CHoCH")):
                 return QColor(COLORS["yellow"])
             return QColor(COLORS["text_muted"])
         if col == COL_FVG:
