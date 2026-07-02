@@ -31,7 +31,8 @@ from database.engine import get_session
 from sqlalchemy import text
 from signals.signal_processor import process_and_enrich_signals
 from signals.risk_manager import risk_manager
-from signals.paper_trade_manager import paper_trade_manager, ha_cross_manager, rsi_15m_manager, manual_manager
+from signals.paper_trade_manager import paper_trade_manager, ha_cross_manager, rsi_15m_manager, manual_manager, do_kirilimi_manager
+from signals.do_kirilimi import do_kirilimi_detector, btc_day_context
 from utils.exceptions import BinanceAPIError, DatabaseError
 from config import Config
 from utils.redis_client import RedisClient
@@ -1012,6 +1013,27 @@ class LiveDataManager:
 
         return False
     
+    async def _check_do_kirilimi(self, symbol: str, df_5m) -> None:
+        """DO Kırılımı dedektörü — 5m bar kapanışında 6 kapı + BTC rejim/ayrışma."""
+        try:
+            btc_map = self.mtf_buffers.get("BTCUSDT", {})
+            btc_df = btc_map.get("5m") if isinstance(btc_map, dict) else None
+            btc_ctx = btc_day_context(btc_df) if btc_df is not None else None
+            entry = do_kirilimi_detector.check(symbol, df_5m, btc_ctx)
+            if entry:
+                await do_kirilimi_manager.open_direct(
+                    symbol=symbol,
+                    signal_type="Long",
+                    interval="5m",
+                    price=entry["price"],
+                    atr=entry["atr"],
+                    sl_price=entry["sl_price"],
+                    tp_price=entry["tp_price"],
+                    note=f"{entry['pattern']} {entry['ayrisma']:+.1f}%",
+                )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.debug("[DOKirilimi] %s kanca hatası: %s", symbol, exc)
+
     async def _generate_mtf_signal_live(self, symbol: str, timeframe: str):
         """
         Canlı MTF sinyal üretimi - bar kapanışında çalışır
@@ -1030,6 +1052,9 @@ class LiveDataManager:
             if len(df_mtf) < 200:  # Yeterli veri yok
                 logger.debug(f"[{symbol}] {timeframe} yetersiz veri: {len(df_mtf)} < 200")
                 return
+
+            if timeframe == "5m":
+                await self._check_do_kirilimi(symbol, df_mtf)
             
             # Son bar için sinyal kontrol et (mtf_backfill mantığını kullan)
             last_row = df_mtf.iloc[-1]
@@ -1901,6 +1926,7 @@ class LiveDataManager:
             await ha_cross_manager.check_all_prices(prices)
             await rsi_15m_manager.check_all_prices(prices)
             await manual_manager.check_all_prices(prices)
+            await do_kirilimi_manager.check_all_prices(prices)
 
     async def _price_publish_loop(self) -> None:
         """Her 2 saniyede _last_prices'ı tek Redis key'ine yazar (panel canlı PnL için)."""
@@ -2297,6 +2323,7 @@ async def main():
     await ha_cross_manager.load_open_symbols()
     await rsi_15m_manager.load_open_symbols()
     await manual_manager.load_open_symbols()
+    await do_kirilimi_manager.load_open_symbols()
 
     logger.info("En yüksek hacimli semboller Binance'ten çekiliyor...")
     symbols_to_track = await BinanceClientManager.get_top_volume_symbols_async(

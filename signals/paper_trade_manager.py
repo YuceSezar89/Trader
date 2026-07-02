@@ -15,6 +15,7 @@ from typing import Callable, Optional
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from config import Config
 from database.engine import get_session
 from database.models import PaperTrade, PaperPortfolio, Signal
 from signals.risk_policy import default_policy
@@ -63,6 +64,8 @@ class PaperTradeManager:
         regime_trend: Optional[str] = None,
         volatility_regime: Optional[str] = None,
     ) -> None:
+        if self.strategy not in Config.PAPER.get("ENABLED_STRATEGIES", []):
+            return
         trigger = _STRATEGY_TRIGGERS.get(self.strategy, lambda _: False)
         if not trigger(signal_data) or signal_id is None:
             return
@@ -183,6 +186,71 @@ class PaperTradeManager:
             except Exception as exc:
                 await session.rollback()
                 logger.error("[PaperTrade][%s] Açma hatası: %s", self.strategy, exc, exc_info=True)
+
+    async def open_direct(
+        self,
+        symbol: str,
+        signal_type: str,
+        interval: str,
+        price: float,
+        atr: float,
+        sl_price: float,
+        tp_price: float,
+        note: str = "",
+    ) -> bool:
+        """Sinyal tablosundan bağımsız pozisyon açar (dedektör tabanlı stratejiler)."""
+        if self.strategy not in Config.PAPER.get("ENABLED_STRATEGIES", []):
+            return False
+        async with get_session() as session:
+            try:
+                existing = await session.execute(
+                    select(PaperTrade.id).where(
+                        PaperTrade.strategy == self.strategy,
+                        PaperTrade.symbol == symbol,
+                        PaperTrade.status == "open",
+                    )
+                )
+                if existing.scalars().first() is not None:
+                    return False
+
+                open_count = await session.execute(
+                    select(func.count()).where(
+                        PaperTrade.strategy == self.strategy,
+                        PaperTrade.status == "open",
+                    )
+                )
+                if open_count.scalar() >= MAX_OPEN:
+                    logger.debug("[PaperTrade][%s] MAX_OPEN dolu, %s atlandı", self.strategy, symbol)
+                    return False
+
+                trade = PaperTrade(
+                    signal_id=None,
+                    strategy=self.strategy,
+                    source=note or None,
+                    symbol=symbol,
+                    signal_type=signal_type,
+                    interval=interval,
+                    position_usd=POSITION_USD,
+                    entry_price=price,
+                    stop_loss_price=sl_price,
+                    take_profit_price=tp_price,
+                    status="open",
+                    opened_at=datetime.now(),
+                    atr=atr,
+                )
+                session.add(trade)
+                await session.commit()
+                self._open_symbols.add(symbol)
+                logger.info(
+                    "[PaperTrade][%s] ★ AÇILDI %s %s %s @ %.6f | SL=%.6f TP=%.6f %s",
+                    self.strategy, symbol, signal_type, interval, price,
+                    sl_price, tp_price, note,
+                )
+                return True
+            except Exception as exc:
+                await session.rollback()
+                logger.error("[PaperTrade][%s] open_direct hatası: %s", self.strategy, exc, exc_info=True)
+                return False
 
     async def check_all_prices(self, prices: dict[str, float]) -> None:
         if not self._open_symbols:
@@ -315,3 +383,4 @@ paper_trade_manager = PaperTradeManager("conf_100")
 ha_cross_manager    = PaperTradeManager("ha_cross")
 rsi_15m_manager     = PaperTradeManager("rsi_15m")
 manual_manager      = PaperTradeManager("manual")
+do_kirilimi_manager = PaperTradeManager("do_kirilimi")

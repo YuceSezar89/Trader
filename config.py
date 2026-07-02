@@ -141,6 +141,17 @@ class Config:
     DYNAMIC_RR_BONUS_INTERVALS = ("15m",)  # Bu TF'lerde → +0.5 TP bonus
     DYNAMIC_RR_TP_MAX         = 4.5    # Maksimum TP çarpanı
 
+    # Paper Trading stratejileri
+    PAPER = {
+        'ENABLED_STRATEGIES': ['do_kirilimi'],  # otomatik pozisyon açabilen stratejiler
+        'DO_KIRILIMI': {
+            'SL_ATR': 3.0,             # backtest: 1.5 verimsiz, 3.0 en iyi (PF 1.75)
+            'TP_ATR': 6.0,             # R:R 1:2 korunur, TP'de trailing devralır
+            'AYRISMA_MIN': 0.0,        # coin gün getirisi - BTC gün getirisi > bu
+            'REQUIRE_BTC_DAY_UP': True,
+        },
+    }
+
     # Konfluans Filtresi
     CONFLUENCE_VPMV_MIN = 75.0
     CONFLUENCE_Z_MIN    = 2.0
