@@ -160,6 +160,7 @@ class SignalLifecycleManager:
                         pd_zone           = signal_data.get("pd_zone"),
                         market_structure  = signal_data.get("market_structure"),
                         fvg_tfs           = signal_data.get("fvg_tfs"),
+                        candle_pattern    = signal_data.get("candle_pattern"),
                     )
                     session.add(new_sig)
                     await session.flush()
