@@ -17,7 +17,7 @@ from utils.preprocessing import (
     normalize_price_0_100,
 )
 from utils.redis_client import RedisClient
-from utils.vpmv import compute_pre
+from utils.vpmv import compute_pre, directional_volume
 from signals.paper_trade_manager import paper_trade_manager, ha_cross_manager, rsi_15m_manager
 from signals.risk_manager import risk_manager
 
@@ -144,8 +144,8 @@ def _compute_vpmv_scores(df: pd.DataFrame, signal_type: str) -> tuple[float, flo
     """
     side = 1.0 if signal_type == "Long" else -1.0
 
-    # Volume: log + rolling min-max (yönsüz)
-    vol_score = float(normalize_volume_0_100(df["volume"]).iloc[-1])
+    # Volume: log + rolling min-max — yönlü (Long→buy, Short→sell; 3 Tem 2026)
+    vol_score = float(normalize_volume_0_100(directional_volume(df, side)).iloc[-1])
 
     # Momentum: yönlü RSI delta + z-score sigmoid
     rsi_series = calculate_rsi(df, period=14)
