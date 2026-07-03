@@ -149,6 +149,7 @@ class LiveDataManager:
         
         self.processing_tasks: set[asyncio.Task] = set()
         self._last_prices: Dict[str, float] = {}
+        self._ticker_prices: Dict[str, float] = {}
         self._tick_last_sent: Dict[str, float] = {}
 
         # Batch insert için buffer sistemi
@@ -1781,11 +1782,15 @@ class LiveDataManager:
                     BinanceClientManager.get_funding_rates(),
                 )
                 funding_map = {f["symbol"]: float(f.get("lastFundingRate", 0)) for f in funding_stats}
+                ticker_prices: Dict[str, float] = {}
                 pipe = redis_conn.pipeline()
                 for t in stats:
                     sym = t.get("symbol", "")
                     if not sym.endswith("USDT"):
                         continue
+                    last_price = float(t.get("lastPrice", 0))
+                    if last_price > 0:
+                        ticker_prices[sym] = last_price
                     change_pct = round(float(t.get("priceChangePercent", 0)), 2)
                     pipe.set(
                         f"ticker:{sym}",
@@ -1800,6 +1805,7 @@ class LiveDataManager:
                         ex=_TTL,
                     )
                 await pipe.execute()
+                self._ticker_prices = ticker_prices
                 ticker_logger.info("Ticker güncellendi: %d sembol", len(stats))
             except Exception as exc:
                 ticker_logger.warning("Ticker güncelleme hatası: %s", exc)
@@ -1920,9 +1926,9 @@ class LiveDataManager:
         """Her 5 saniyede tüm aktif pozisyonları tek sorguda kontrol eder."""
         while True:
             await asyncio.sleep(5)
-            if not self._last_prices:
+            prices = {**self._ticker_prices, **self._last_prices}
+            if not prices:
                 continue
-            prices = dict(self._last_prices)
             await risk_manager.check_all_prices(prices)
             await paper_trade_manager.check_all_prices(prices)
             await ha_cross_manager.check_all_prices(prices)
@@ -1931,16 +1937,18 @@ class LiveDataManager:
             await do_kirilimi_manager.check_all_prices(prices)
 
     async def _price_publish_loop(self) -> None:
-        """Her 2 saniyede _last_prices'ı tek Redis key'ine yazar (panel canlı PnL için)."""
+        """Her 2 saniyede canlı fiyatları tek Redis key'ine yazar (panel canlı PnL için).
+        Ticker (REST, 628 sembol) taban; WS tick fiyatları daha taze olduğundan üzerine yazar."""
         redis = RedisClient.get_client()
         while True:
             await asyncio.sleep(2)
-            if not self._last_prices:
+            prices = {**self._ticker_prices, **self._last_prices}
+            if not prices:
                 continue
             try:
-                await redis.set("prices:live", json.dumps(self._last_prices), ex=15)
+                await redis.set("prices:live", json.dumps(prices), ex=15)
             except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.debug("[PricePublish] prices:live yazılamadı: %s", exc)
+                logger.warning("[PricePublish] prices:live yazılamadı: %s", exc)
 
     async def _filter_save_loop(self) -> None:
         """Her 30s'de SignalFilter state'ini Redis'e kaydeder (restart-proof)."""
