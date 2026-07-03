@@ -1923,13 +1923,14 @@ class LiveDataManager:
             await asyncio.sleep(_INTERVAL)
 
     async def _risk_check_loop(self) -> None:
-        """Her 5 saniyede tüm aktif pozisyonları tek sorguda kontrol eder."""
+        """Her 5 saniyede paper trade pozisyonlarını kontrol eder.
+        Sinyaller fiyatla kapanmaz (SL/TP bilgi amaçlı) — kapanış yalnızca
+        ters sinyal / timeout / manuel (signal_lifecycle_manager)."""
         while True:
             await asyncio.sleep(5)
             prices = {**self._ticker_prices, **self._last_prices}
             if not prices:
                 continue
-            await risk_manager.check_all_prices(prices)
             await paper_trade_manager.check_all_prices(prices)
             await ha_cross_manager.check_all_prices(prices)
             await rsi_15m_manager.check_all_prices(prices)
