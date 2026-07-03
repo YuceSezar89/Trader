@@ -3,6 +3,7 @@ import concurrent.futures
 import json
 import logging
 import os
+import sys
 import time
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
@@ -64,15 +65,16 @@ def setup_logging():
         maxBytes=Config.LOG_FILE_MAX_SIZE,
         backupCount=Config.LOG_FILE_BACKUP_COUNT,
     )
-    # Konsol Handler'ı
-    stream_handler = logging.StreamHandler()
-
     formatter = logging.Formatter(Config.LOG_FORMAT, datefmt=Config.LOG_DATE_FORMAT)
     file_handler.setFormatter(formatter)
-    stream_handler.setFormatter(formatter)
-
     logger.addHandler(file_handler)
-    logger.addHandler(stream_handler)
+
+    # Konsol Handler'ı — sadece terminale bağlıyken (nohup'ta stdout
+    # services.log'a yönlendirilir, kopya akış dosyayı sınırsız büyütür)
+    if sys.stdout.isatty():
+        stream_handler = logging.StreamHandler()
+        stream_handler.setFormatter(formatter)
+        logger.addHandler(stream_handler)
 
     return logger
 

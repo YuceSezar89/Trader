@@ -5,6 +5,7 @@ Tüm modüller için standardize edilmiş logging yapısı
 
 import logging
 import os
+import sys
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from typing import Dict, Optional
@@ -35,15 +36,18 @@ class TRaderLogger:
         for handler in root_logger.handlers[:]:
             root_logger.removeHandler(handler)
         
-        # Console handler
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(Config.LOG_LEVEL)
-        console_formatter = logging.Formatter(
-            '%(asctime)s [%(levelname)s] [%(name)s] %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-        )
-        console_handler.setFormatter(console_formatter)
-        
+        # Console handler — sadece terminale bağlıyken (nohup/servis modunda
+        # stdout services.log'a yönlendirilir, kopya akış dosyayı sınırsız büyütür)
+        console_handler = None
+        if sys.stdout.isatty():
+            console_handler = logging.StreamHandler()
+            console_handler.setLevel(Config.LOG_LEVEL)
+            console_formatter = logging.Formatter(
+                '%(asctime)s [%(levelname)s] [%(name)s] %(message)s',
+                datefmt='%Y-%m-%d %H:%M:%S'
+            )
+            console_handler.setFormatter(console_formatter)
+
         # File handler (rotating)
         file_handler = RotatingFileHandler(
             os.path.join(Config.LOG_DIR, 'trader_panel.log'),
@@ -59,7 +63,8 @@ class TRaderLogger:
         file_handler.setFormatter(file_formatter)
         
         # Handler'ları ekle
-        root_logger.addHandler(console_handler)
+        if console_handler is not None:
+            root_logger.addHandler(console_handler)
         root_logger.addHandler(file_handler)
         
         # Also set python-binance websocket client logger to DEBUG to capture CLOSE frames and details
