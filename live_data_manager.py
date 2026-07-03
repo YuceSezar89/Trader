@@ -1938,17 +1938,32 @@ class LiveDataManager:
 
     async def _price_publish_loop(self) -> None:
         """Her 2 saniyede canlı fiyatları tek Redis key'ine yazar (panel canlı PnL için).
-        Ticker (REST, 628 sembol) taban; WS tick fiyatları daha taze olduğundan üzerine yazar."""
-        redis = RedisClient.get_client()
+        Ticker (REST, 628 sembol) taban; WS tick fiyatları daha taze olduğundan üzerine yazar.
+        Paylaşımlı havuz kullanılmaz: iptal ortasında zehirlenen havuz bağlantısı
+        timeout'suz set()'i sonsuza dek askıda bırakabiliyor (3 Tem vakası)."""
+        redis_conn = None
         while True:
             await asyncio.sleep(2)
             prices = {**self._ticker_prices, **self._last_prices}
             if not prices:
                 continue
             try:
-                await redis.set("prices:live", json.dumps(prices), ex=15)
+                if redis_conn is None:
+                    redis_conn = aioredis.from_url(
+                        Config.REDIS_URL, decode_responses=True,
+                        socket_timeout=5, socket_connect_timeout=5,
+                    )
+                await asyncio.wait_for(
+                    redis_conn.set("prices:live", json.dumps(prices), ex=15), timeout=5
+                )
             except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.warning("[PricePublish] prices:live yazılamadı: %s", exc)
+                logger.warning("[PricePublish] prices:live yazılamadı, bağlantı yenilenecek: %s", exc)
+                try:
+                    if redis_conn is not None:
+                        await redis_conn.aclose()
+                except Exception:  # pylint: disable=broad-exception-caught
+                    pass
+                redis_conn = None
 
     async def _filter_save_loop(self) -> None:
         """Her 30s'de SignalFilter state'ini Redis'e kaydeder (restart-proof)."""
