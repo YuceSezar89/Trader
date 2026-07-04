@@ -8,7 +8,6 @@ Katman B: tüm evren × CORPUS_DAYS × 5m close (cagg_5m — sıralama/ayrışma
 Zaman ekseni: proje geleneği, naif İstanbul zamanı ("ts" kolonu).
 Çapa (anchor): kurulum anında bir kez dondurulur, meta.json'a yazılır.
 """
-import asyncio
 import json
 import os
 import random
@@ -99,38 +98,41 @@ def select_groups(stats: pd.DataFrame) -> tuple[list[str], list[tuple[str, str]]
     return cases["symbol"].tolist(), pairs
 
 
-async def fetch_layer_a(symbols: list[str], anchor: datetime) -> pd.DataFrame:
-    """40 sembol × CORPUS_DAYS × 5m OHLCV+taker — REST, 1 çağrı/sn."""
-    from binance_client import BinanceClientManager
-
+def fetch_layer_a(symbols: list[str], anchor: datetime) -> pd.DataFrame:
+    """40 sembol × CORPUS_DAYS × 5m OHLCV+taker — DB'den (price_data 1m → 5m resample).
+    REST'e HİÇ gitmez: OHLCV price_data'da aylarca geriye gidiyor, buy_volume ise
+    şema düzeltmesinden beri (~9 gün) mevcut — bu, t0'ların 48h bağlam penceresinin
+    çoğunu zaten kapsıyor (4 Tem gece dersi: REST gereksizdi, bkz. memory)."""
     t_start = anchor - timedelta(days=C.CORPUS_DAYS)
-    start_ms = int(t_start.timestamp() * 1000)
+    with _conn() as conn:
+        q = """
+            SELECT symbol, timestamp AS ts, open, high, low, close, volume, buy_volume, sell_volume
+            FROM price_data
+            WHERE interval = '1m' AND symbol = ANY(%s)
+              AND timestamp >= %s AND timestamp < %s
+            ORDER BY symbol, timestamp
+        """
+        raw = pd.read_sql(q, conn, params=(symbols, t_start, anchor))
+
+    def _sum_or_nan(s: pd.Series) -> float:
+        return float(s.sum()) if s.notna().any() else float("nan")
+
     frames = []
-    for i, sym in enumerate(symbols):
-        cursor = start_ms
-        parts = []
-        while True:
-            df = await BinanceClientManager.fetch_klines(sym, "5m", limit=1500, startTime=cursor)
-            await asyncio.sleep(1.0)
-            if df.empty:
-                break
-            parts.append(df)
-            last_ot = int(df["open_time"].iloc[-1])
-            if len(df) < 1500 or last_ot >= int(anchor.timestamp() * 1000):
-                break
-            cursor = last_ot + 1
-        if not parts:
-            print(f"  UYARI: {sym} REST'ten boş döndü")
-            continue
-        full = pd.concat(parts, ignore_index=True).drop_duplicates(subset="open_time")
-        full["symbol"] = sym
-        frames.append(full)
-        print(f"  [{i+1}/{len(symbols)}] {sym}: {len(full)} bar")
+    for sym, g in raw.groupby("symbol"):
+        g = g.set_index("ts").sort_index()
+        agg = g.resample("5min").agg(
+            open=("open", "first"), high=("high", "max"),
+            low=("low", "min"), close=("close", "last"),
+            volume=("volume", "sum"),
+            buy_volume=("buy_volume", _sum_or_nan),
+            sell_volume=("sell_volume", _sum_or_nan),
+        ).dropna(subset=["open"])
+        agg["symbol"] = sym
+        frames.append(agg.reset_index())
+        print(f"  {sym}: {len(agg)} bar (DB)")
+
     out = pd.concat(frames, ignore_index=True)
-    out["ts"] = pd.to_datetime(out["open_time"], unit="ms") + pd.Timedelta(hours=3)
-    out = out[out["ts"] < anchor]
     cols = ["symbol", "ts", "open", "high", "low", "close", "volume", "buy_volume", "sell_volume"]
-    out[["open", "high", "low", "close", "volume"]] = out[["open", "high", "low", "close", "volume"]].astype(float)
     return out[cols].sort_values(["symbol", "ts"]).reset_index(drop=True)
 
 
@@ -163,7 +165,7 @@ def build() -> None:
     layer_b.to_parquet(f"{C.CORPUS_DIR}/layer_b_universe.parquet", index=False)
     print(f"Katman B: {len(layer_b):,} satır ({layer_b['symbol'].nunique()} sembol) → parquet")
 
-    layer_a = asyncio.run(fetch_layer_a(cases + controls, anchor))
+    layer_a = fetch_layer_a(cases + controls, anchor)
     layer_a.to_parquet(f"{C.CORPUS_DIR}/layer_a_detail.parquet", index=False)
     taker_cov = layer_a["buy_volume"].notna().mean()
     print(f"Katman A: {len(layer_a):,} satır, taker kapsamı {taker_cov:.1%} → parquet")

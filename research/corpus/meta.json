@@ -1,108 +1,108 @@
 {
-  "anchor": "2026-07-04T17:55:00",
-  "built_at": "2026-07-04T17:58:11.548235",
+  "anchor": "2026-07-04T23:30:00",
+  "built_at": "2026-07-04T23:30:45.023289",
   "cases": [
     "TLMUSDT",
     "HMSTRUSDT",
     "TAIKOUSDT",
     "BEATUSDT",
-    "TACUSDT",
     "EPICUSDT",
-    "UBUSDT",
-    "1000000BOBUSDT",
     "VANRYUSDT",
-    "LITUSDT",
-    "MAVIAUSDT",
-    "MAGMAUSDT",
+    "TACUSDT",
+    "1000000BOBUSDT",
+    "UBUSDT",
     "KAITOUSDT",
-    "NAORISUSDT",
-    "SLXUSDT",
-    "XPLUSDT",
     "PRLUSDT",
+    "MAGMAUSDT",
+    "ADAUSDT",
+    "LITUSDT",
+    "BBXUSDT",
+    "SYRUPUSDT",
+    "FARTCOINUSDT",
+    "龙虾USDT",
     "NOMUSDT",
-    "RIFUSDT",
-    "SYRUPUSDT"
+    "SUSDT"
   ],
   "pairs": [
     [
       "TLMUSDT",
-      "ASRUSDT"
+      "CLANKERUSDT"
     ],
     [
       "HMSTRUSDT",
-      "ZENUSDT"
+      "CFGUSDT"
     ],
     [
       "TAIKOUSDT",
-      "OPENAIUSDT"
+      "BRUSDT"
     ],
     [
       "BEATUSDT",
-      "DOTUSDT"
-    ],
-    [
-      "TACUSDT",
-      "RAVEUSDT"
+      "DOGEUSDT"
     ],
     [
       "EPICUSDT",
-      "PIEVERSEUSDT"
-    ],
-    [
-      "UBUSDT",
-      "TSLAUSDT"
-    ],
-    [
-      "1000000BOBUSDT",
-      "2ZUSDT"
+      "HYPERUSDT"
     ],
     [
       "VANRYUSDT",
-      "LYNUSDT"
+      "WCTUSDT"
     ],
     [
-      "LITUSDT",
-      "FILUSDT"
+      "TACUSDT",
+      "WLFIUSDT"
     ],
     [
-      "MAVIAUSDT",
-      "TSTUSDT"
+      "1000000BOBUSDT",
+      "ASRUSDT"
     ],
     [
-      "MAGMAUSDT",
-      "VIRTUALUSDT"
+      "UBUSDT",
+      "AMDUSDT"
     ],
     [
       "KAITOUSDT",
-      "CRVUSDT"
-    ],
-    [
-      "NAORISUSDT",
-      "PROMUSDT"
-    ],
-    [
-      "SLXUSDT",
-      "BNBUSDT"
-    ],
-    [
-      "XPLUSDT",
-      "TRUMPUSDT"
+      "LDOUSDT"
     ],
     [
       "PRLUSDT",
-      "VICUSDT"
+      "SENTUSDT"
     ],
     [
-      "NOMUSDT",
-      "KATUSDT"
+      "MAGMAUSDT",
+      "ICPUSDT"
     ],
     [
-      "RIFUSDT",
-      "SPYUSDT"
+      "ADAUSDT",
+      "XAGUSDT"
+    ],
+    [
+      "LITUSDT",
+      "DOTUSDT"
+    ],
+    [
+      "BBXUSDT",
+      "POLUSDT"
     ],
     [
       "SYRUPUSDT",
-      "BERAUSDT"
+      "ALICEUSDT"
+    ],
+    [
+      "FARTCOINUSDT",
+      "TSLAUSDT"
+    ],
+    [
+      "龙虾USDT",
+      "GMTUSDT"
+    ],
+    [
+      "NOMUSDT",
+      "BANANAS31USDT"
+    ],
+    [
+      "SUSDT",
+      "AXSUSDT"
     ]
   ],
   "universe_size": 361,
