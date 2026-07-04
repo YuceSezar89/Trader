@@ -34,6 +34,12 @@ class Config:
     DB_USER = os.getenv('DB_USER', 'postgres')
     DB_PASSWORD = os.getenv('DB_PASSWORD', '')
     DB_TIMEOUT = 30  # saniye
+
+    # =============================================================================
+    # TELEGRAM BİLDİRİMLERİ
+    # =============================================================================
+    TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
+    TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
     
     # Legacy SQLite (deprecated)
     DB_PATH = 'trader_signals.db'

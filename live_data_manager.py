@@ -38,6 +38,7 @@ from utils.exceptions import BinanceAPIError, DatabaseError
 from config import Config
 from utils.kline_schema import check_kline_schema
 from utils.redis_client import RedisClient
+from utils.telegram_notify import send_telegram_message
 
 # MTF init/refresh için ayrı thread pool — default executor'ı (WS sinyalleri) bloklamaz
 _MTF_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=12, thread_name_prefix="mtf_init")
@@ -1026,7 +1027,7 @@ class LiveDataManager:
             btc_ctx = btc_day_context(btc_df) if btc_df is not None else None
             entry = do_kirilimi_detector.check(symbol, df_5m, btc_ctx)
             if entry:
-                await do_kirilimi_manager.open_direct(
+                opened = await do_kirilimi_manager.open_direct(
                     symbol=symbol,
                     signal_type="Long",
                     interval="5m",
@@ -1036,6 +1037,13 @@ class LiveDataManager:
                     tp_price=entry["tp_price"],
                     note=f"{entry['pattern']} {entry['ayrisma']:+.1f}%",
                 )
+                if opened:
+                    await send_telegram_message(
+                        f"🎯 DO Kırılımı — {symbol}\n"
+                        f"Giriş: {entry['price']:.6g}\n"
+                        f"SL: {entry['sl_price']:.6g} · TP: {entry['tp_price']:.6g}\n"
+                        f"Pattern: {entry['pattern']} · Ayrışma: {entry['ayrisma']:+.1f}%"
+                    )
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.debug("[DOKirilimi] %s kanca hatası: %s", symbol, exc)
 
