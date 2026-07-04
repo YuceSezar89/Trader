@@ -1,0 +1,135 @@
+{
+  "anchor": "2026-07-04T17:55:00",
+  "built_at": "2026-07-04T17:58:11.548235",
+  "cases": [
+    "TLMUSDT",
+    "HMSTRUSDT",
+    "TAIKOUSDT",
+    "BEATUSDT",
+    "TACUSDT",
+    "EPICUSDT",
+    "UBUSDT",
+    "1000000BOBUSDT",
+    "VANRYUSDT",
+    "LITUSDT",
+    "MAVIAUSDT",
+    "MAGMAUSDT",
+    "KAITOUSDT",
+    "NAORISUSDT",
+    "SLXUSDT",
+    "XPLUSDT",
+    "PRLUSDT",
+    "NOMUSDT",
+    "RIFUSDT",
+    "SYRUPUSDT"
+  ],
+  "pairs": [
+    [
+      "TLMUSDT",
+      "ASRUSDT"
+    ],
+    [
+      "HMSTRUSDT",
+      "ZENUSDT"
+    ],
+    [
+      "TAIKOUSDT",
+      "OPENAIUSDT"
+    ],
+    [
+      "BEATUSDT",
+      "DOTUSDT"
+    ],
+    [
+      "TACUSDT",
+      "RAVEUSDT"
+    ],
+    [
+      "EPICUSDT",
+      "PIEVERSEUSDT"
+    ],
+    [
+      "UBUSDT",
+      "TSLAUSDT"
+    ],
+    [
+      "1000000BOBUSDT",
+      "2ZUSDT"
+    ],
+    [
+      "VANRYUSDT",
+      "LYNUSDT"
+    ],
+    [
+      "LITUSDT",
+      "FILUSDT"
+    ],
+    [
+      "MAVIAUSDT",
+      "TSTUSDT"
+    ],
+    [
+      "MAGMAUSDT",
+      "VIRTUALUSDT"
+    ],
+    [
+      "KAITOUSDT",
+      "CRVUSDT"
+    ],
+    [
+      "NAORISUSDT",
+      "PROMUSDT"
+    ],
+    [
+      "SLXUSDT",
+      "BNBUSDT"
+    ],
+    [
+      "XPLUSDT",
+      "TRUMPUSDT"
+    ],
+    [
+      "PRLUSDT",
+      "VICUSDT"
+    ],
+    [
+      "NOMUSDT",
+      "KATUSDT"
+    ],
+    [
+      "RIFUSDT",
+      "SPYUSDT"
+    ],
+    [
+      "SYRUPUSDT",
+      "BERAUSDT"
+    ]
+  ],
+  "universe_size": 361,
+  "config": {
+    "BARS_PER_DAY_5M": 288,
+    "BREAKOUT_FWD_H": 24,
+    "CORPUS_DAYS": 14,
+    "CORPUS_DIR": "research/corpus",
+    "EFFECT_THRESHOLD": 0.3,
+    "FEAT_LONG_H": 48,
+    "FEAT_SHORT_H": 6,
+    "MID_QUANTILE": [
+      0.25,
+      0.75
+    ],
+    "MIN_BAR_COVERAGE": 0.95,
+    "N_CASES": 20,
+    "N_CONTROLS": 20,
+    "RANK_WINDOWS_BARS": {
+      "30m": 6,
+      "1h": 12,
+      "4h": 48,
+      "24h": 288
+    },
+    "REPORT_DIR": "research/reports",
+    "SEED": 42,
+    "SELECTION_DAYS": 10,
+    "VOL_DECILES": 10
+  }
+}
