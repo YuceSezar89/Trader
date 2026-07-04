@@ -34,11 +34,28 @@ def directional_volume(df: pd.DataFrame, side: float) -> pd.Series:
     return df["volume"]
 
 
-def compute_series(df: pd.DataFrame, signal_type: str) -> pd.Series:
-    """Tüm df için bar bazlı VPMV serisi döner (0-100)."""
+def proxy_volume(df: pd.DataFrame, side: float) -> pd.Series:
+    """Pine vekili: mumun kapanış konumundan alıcı/satıcı hacmi tahmini."""
+    hl = (df["high"] - df["low"]).clip(lower=1e-8)
+    if side > 0:
+        return df["volume"] * (df["close"] - df["low"]) / hl
+    return df["volume"] * (df["high"] - df["close"]) / hl
+
+
+def _volume_by_mode(df: pd.DataFrame, side: float, volume_mode: str) -> pd.Series:
+    if volume_mode == "proxy":
+        return proxy_volume(df, side)
+    if volume_mode == "total":
+        return df["volume"]
+    return directional_volume(df, side)
+
+
+def compute_series(df: pd.DataFrame, signal_type: str, volume_mode: str = "real") -> pd.Series:
+    """Tüm df için bar bazlı VPMV serisi döner (0-100).
+    volume_mode: 'real' (taker) | 'proxy' (Pine vekili) | 'total' (yönsüz)."""
     side = 1.0 if signal_type == "Long" else -1.0
 
-    vol = normalize_volume_0_100(directional_volume(df, side))
+    vol = normalize_volume_0_100(_volume_by_mode(df, side, volume_mode))
     rsi = calculate_rsi(df, period=14)
     mom = normalize_momentum_0_100(rsi.diff().fillna(0.0) * side)
     atr = calculate_atr(df, period=Config.ATR_PERIOD)
@@ -52,6 +69,7 @@ def compute_pre(
     df: pd.DataFrame,
     signal_type: str,
     pre_bars: int = PRE_BARS,
+    volume_mode: str = "real",
 ) -> Tuple[Optional[float], Optional[float], Optional[float]]:
     """
     Sinyal barı df'nin son satırı kabul edilir.
@@ -61,7 +79,7 @@ def compute_pre(
     if len(df) < pre_bars + 1:
         return None, None, None
 
-    scores = compute_series(df, signal_type)
+    scores = compute_series(df, signal_type, volume_mode)
     vpmv_signal = float(scores.iloc[-1])
     pre_slice   = scores.iloc[-(pre_bars + 1):-1]
     pre_avg     = float(pre_slice.mean())

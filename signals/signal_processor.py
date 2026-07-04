@@ -340,12 +340,15 @@ async def _compute_fvg(symbol: str, sig_type: str, entry_price: float) -> str:
     return ",".join(matched) if matched else "-"
 
 
-def _compute_vp_score(df: pd.DataFrame, lookback: int = 500) -> tuple[float, float]:
+def _compute_vp_score(df: pd.DataFrame, lookback: int = 500, use_real_volume: bool = False) -> tuple[float, float]:
     """
     %VP Normalized Lines — PineScript birebir çeviri.
 
     PineScript ta.cum() → Python cumsum() (DataFrame başından itibaren)
     Normalize: rolling(lookback).min/max — PineScript ta.lowest/highest(lookback)
+
+    use_real_volume=True: bv/sv vekil formül yerine gerçek taker verisinden
+    (buy_volume/sell_volume); kolonlar yoksa (nan, nan) döner.
 
     Returns: (buy_positive_avg, sell_negative_avg) — her ikisi 0-100 arası
     vp_score = buy_positive_avg - sell_negative_avg  →  pozitif: alıcı baskısı
@@ -358,9 +361,15 @@ def _compute_vp_score(df: pd.DataFrame, lookback: int = 500) -> tuple[float, flo
         positive_pct = (cum_positive / total_move * 100).fillna(50.0)
         negative_pct = (cum_negative / total_move * 100).fillna(50.0)
 
-        hl_range = (df["high"] - df["low"]).clip(lower=1e-8)
-        bv = df["volume"] * (df["close"] - df["low"]) / hl_range
-        sv = df["volume"] * (df["high"] - df["close"]) / hl_range
+        if use_real_volume:
+            if "buy_volume" not in df.columns or not df["buy_volume"].notna().any():
+                return float("nan"), float("nan")
+            bv = df["buy_volume"].fillna(0.0)
+            sv = df["sell_volume"].fillna(0.0)
+        else:
+            hl_range = (df["high"] - df["low"]).clip(lower=1e-8)
+            bv = df["volume"] * (df["close"] - df["low"]) / hl_range
+            sv = df["volume"] * (df["high"] - df["close"]) / hl_range
         cum_buy  = bv.cumsum()
         cum_sell = sv.cumsum()
         total_vol = (cum_buy + cum_sell).replace(0, np.nan)
@@ -665,6 +674,18 @@ async def process_and_enrich_signals(
                 enriched_signal["vpmv_slope"]   = _vpmv_slope
                 enriched_signal["vpmv_ratio"]   = _vpmv_ratio
 
+                # A/B/C deneyi: aynı skor vekil ve yönsüz hacimle (analiz için, panelde yok)
+                _vpmv_proxy = _vpmv_total = None
+                try:
+                    _p, _, _ = compute_pre(df, sig_type, volume_mode="proxy")
+                    _t, _, _ = compute_pre(df, sig_type, volume_mode="total")
+                    _vpmv_proxy = round(_p, 2) if _p is not None else None
+                    _vpmv_total = round(_t, 2) if _t is not None else None
+                except Exception as _vve:
+                    logger.debug("[%s] VPMV varyant hesabı atlandı: %s", symbol, _vve)
+                enriched_signal["vpmv_pre_proxy"] = _vpmv_proxy
+                enriched_signal["vpmv_pre_total"] = _vpmv_total
+
                 min_ratio = float(Config.VPM.get("MIN_RATIO", 1.3))
                 if _vpmv_ratio is not None and _vpmv_ratio < min_ratio:
                     logger.info(
@@ -686,6 +707,10 @@ async def process_and_enrich_signals(
                 enriched_signal["vp_buy_avg"]  = _vp_buy
                 enriched_signal["vp_sell_avg"] = _vp_sell
                 enriched_signal["vp_score"]    = _vp_score
+
+                _vpr_buy, _vpr_sell = _compute_vp_score(df, use_real_volume=True)
+                _vp_score_real = None if np.isnan(_vpr_buy) else round(_vpr_buy - _vpr_sell, 2)
+                enriched_signal["vp_score_real"] = _vp_score_real
                 logger.info(
                     "VP | %s | %s | %s | buy=%.1f sell=%.1f score=%.1f",
                     symbol, sig_type, interval, _vp_buy, _vp_sell, _vp_score,
