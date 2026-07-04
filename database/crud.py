@@ -6,6 +6,7 @@ from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from .engine import get_session, init_db
 from .models import PriceData, Signal
 from datetime import datetime
+from utils.kline_schema import check_kline_schema
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -38,7 +39,7 @@ async def get_cagg_klines(symbol: str, interval: str, limit: int) -> pd.DataFram
         return pd.DataFrame()
 
     rows = sorted(rows, key=lambda r: r[0])
-    return pd.DataFrame({
+    df = pd.DataFrame({
         "open_time": [int(r[0].timestamp() * 1000) for r in rows],
         "open":      [r[1] for r in rows],
         "high":      [r[2] for r in rows],
@@ -46,6 +47,8 @@ async def get_cagg_klines(symbol: str, interval: str, limit: int) -> pd.DataFram
         "close":     [r[4] for r in rows],
         "volume":    [r[5] for r in rows],
     })
+    # CA view'ları yönlü hacim taşımıyor (bilinen sınır — 1h/4h'yi WS doldurur)
+    return check_kline_schema(df, "CA.get_cagg_klines", expect_directional=False)
 
 async def initialize_database():
     """Veritabanını ve tabloları oluşturur."""
@@ -109,14 +112,17 @@ async def get_recent_klines(symbol: str, interval: str, limit: int) -> pd.DataFr
         return pd.DataFrame()
 
     rows = sorted(rows, key=lambda r: r.timestamp)
-    return pd.DataFrame({
-        "open_time": [int(r.timestamp.timestamp() * 1000) for r in rows],
-        "open":      [r.open   for r in rows],
-        "high":      [r.high   for r in rows],
-        "low":       [r.low    for r in rows],
-        "close":     [r.close  for r in rows],
-        "volume":    [r.volume for r in rows],
+    df = pd.DataFrame({
+        "open_time":   [int(r.timestamp.timestamp() * 1000) for r in rows],
+        "open":        [r.open        for r in rows],
+        "high":        [r.high        for r in rows],
+        "low":         [r.low         for r in rows],
+        "close":       [r.close       for r in rows],
+        "volume":      [r.volume      for r in rows],
+        "buy_volume":  [r.buy_volume  for r in rows],
+        "sell_volume": [r.sell_volume for r in rows],
     })
+    return check_kline_schema(df, "DB.get_recent_klines")
 
 
 async def bulk_insert_price_data(symbol: str, df: pd.DataFrame, interval: Optional[str] = None):

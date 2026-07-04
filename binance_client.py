@@ -14,6 +14,7 @@ from utils.exceptions import (
     raise_api_timeout,
     ErrorCodes
 )
+from utils.kline_schema import check_kline_schema
 from utils.logger import get_logger, log_error_with_context
 
 # Logger
@@ -108,7 +109,9 @@ class BinanceClientManager:
             ])
             df = df.astype({"open": float, "high": float, "low": float, "close": float, "volume": float,
                             "taker_buy_base_asset_volume": float, "taker_buy_quote_asset_volume": float})
-            return df
+            df["buy_volume"] = df["taker_buy_base_asset_volume"]
+            df["sell_volume"] = df["volume"] - df["buy_volume"]
+            return check_kline_schema(df, "REST.fetch_klines")
         except aiohttp.ClientError as e:
             # Ağ/bağlantı sorunları için
             logger.error(f"[{symbol}] Kline verisi çekilirken ağ hatası: {e}", exc_info=True)

@@ -36,6 +36,7 @@ from signals.paper_trade_manager import paper_trade_manager, ha_cross_manager, r
 from signals.do_kirilimi import do_kirilimi_detector, btc_day_context
 from utils.exceptions import BinanceAPIError, DatabaseError
 from config import Config
+from utils.kline_schema import check_kline_schema
 from utils.redis_client import RedisClient
 
 # MTF init/refresh için ayrı thread pool — default executor'ı (WS sinyalleri) bloklamaz
@@ -901,6 +902,7 @@ class LiveDataManager:
             for ws_tf in ['5m', '15m', '30m', '6h', '8h', '12h']:
                 limit = self.mtf_buffer_limits.get(ws_tf, 250)
                 cached = await RedisClient.get_mtf_klines(symbol, ws_tf, limit=limit)
+                check_kline_schema(cached, f"RedisCache.{ws_tf}")
                 if cached is not None and len(cached) >= limit // 2:
                     df_ind = await loop.run_in_executor(_MTF_EXECUTOR, add_all_indicators, cached)
                     self.mtf_buffers[symbol][ws_tf] = df_ind.tail(limit)
