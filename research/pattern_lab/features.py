@@ -18,6 +18,13 @@ LONG_BARS = (C.FEAT_LONG_H - C.FEAT_SHORT_H) * 12
 DO_HOUR = 3
 
 
+def _vol_percentile_rank(volume: pd.Series, length: int = 100, smoothing: int = 3) -> pd.Series:
+    """Volume Heatmap Oscillator formülü (Pine v6 portu): SMA(3) hacim,
+    son `length` bara göre percentile rank (0-100, mavi=soğuk kırmızı=sıcak)."""
+    smooth = volume.rolling(smoothing).mean()
+    return smooth.rolling(length).apply(lambda w: (w < w[-1]).mean() * 100, raw=True)
+
+
 def _atr(df: pd.DataFrame, n: int = 14) -> pd.Series:
     hl = df["high"] - df["low"]
     hc = (df["high"] - df["close"].shift(1)).abs()
@@ -161,6 +168,21 @@ def extract_features(sym_df: pd.DataFrame, btc_close: pd.Series, t0) -> dict:
 
     # 8 — HTF HA merdiveni
     out["htf_ha_yesil"] = _htf_ha_count(df)
+
+    # 9 — Hacim sönmesi ("satıcı kalmayınca ne olur" — toplam hacim percentile rank,
+    # yönlü ayrım YOK, sadece büyüklük; Pine'ın da erişebildiği veri)
+    vrank = _vol_percentile_rank(df["volume"])
+    win48 = vrank.tail(576)  # son 48h (5m barlarda)
+    if win48.notna().sum() >= 50:
+        peak = float(win48.max())
+        at_t0 = float(vrank.iloc[-1])
+        out["hacim_tepe_48h"] = peak
+        out["hacim_simdi"] = at_t0
+        out["hacim_sonme_derinligi"] = peak - at_t0
+        out["hacim_tam_sonme"] = int(peak >= 75 and at_t0 <= 20)
+    else:
+        out["hacim_tepe_48h"] = out["hacim_simdi"] = out["hacim_sonme_derinligi"] = np.nan
+        out["hacim_tam_sonme"] = np.nan
 
     # 10 — Yönlü akış: gerçek + vekil + sapma (emilim)
     if "buy_volume" in df.columns and df["buy_volume"].notna().any():
