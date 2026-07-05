@@ -1020,7 +1020,7 @@ class LiveDataManager:
         return False
     
     async def _check_do_kirilimi(self, symbol: str, df_5m) -> None:
-        """DO Kırılımı dedektörü — 5m bar kapanışında 6 kapı + BTC rejim/ayrışma."""
+        """DO Kırılımı dedektörü — 5m bar kapanışında 6 kapı + ADX + ST."""
         try:
             btc_map = self.mtf_buffers.get("BTCUSDT", {})
             btc_df = btc_map.get("5m") if isinstance(btc_map, dict) else None
@@ -1045,7 +1045,7 @@ class LiveDataManager:
                         f"Pattern: {entry['pattern']} · Ayrışma: {entry['ayrisma']:+.1f}%"
                     )
         except Exception as exc:  # pylint: disable=broad-exception-caught
-            logger.debug("[DOKirilimi] %s kanca hatası: %s", symbol, exc)
+            logger.error("[DOKirilimi] %s kanca hatası: %s", symbol, exc, exc_info=True)
 
     async def _generate_mtf_signal_live(self, symbol: str, timeframe: str):
         """

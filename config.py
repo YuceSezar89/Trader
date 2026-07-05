@@ -153,8 +153,6 @@ class Config:
         'DO_KIRILIMI': {
             'SL_ATR': 3.0,             # backtest: 1.5 verimsiz, 3.0 en iyi (PF 1.75)
             'TP_ATR': 6.0,             # R:R 1:2 korunur, TP'de trailing devralır
-            'AYRISMA_MIN': 0.0,        # coin gün getirisi - BTC gün getirisi > bu
-            'REQUIRE_BTC_DAY_UP': True,
         },
     }
 

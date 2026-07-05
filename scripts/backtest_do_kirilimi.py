@@ -31,7 +31,7 @@ from config import Config
 
 # ── Strateji parametreleri (Pine default'ları) ───────────────────────────────
 DO_HOUR          = 3          # Daily Open saati (İstanbul)
-SESSION_HOURS    = 12
+SESSION_HOURS    = 24
 HTF_MINUTES      = [90, 180, 360, 540, 720]
 MIN_ONAY         = 3          # HTF HA bullish eşiği
 MARKOV_KEEP      = 0.7

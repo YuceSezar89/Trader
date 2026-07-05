@@ -5,9 +5,8 @@ DO Kırılımı dedektörü — "Güçlü DO Kırılımı + FVG + Marubozu" (Pin
 temas) · C (C10/C20 log-RSI delta cross) · F (3 yeşil mum FVG, DO üstü) ·
 B (Marubozu/Engulfing) + ADX(14) >= 25. Entry: setup ile aynı bar.
 
-Paper-trade filtreleri (backtest 2 Tem 2026, PF 1.75 hücresi):
-  BTC günü pozitif (BTC close > BTC DO) ve ayrışma > 0
-  (coin gün-içi getirisi − BTC gün-içi getirisi, DO'ya göre).
+BTC'ye göre ayrışma bilgi amaçlı hesaplanır (return sözlüğünde "ayrisma"),
+ama artık giriş şartı değil — filtre 5 Tem 2026'da kaldırıldı.
 
 Her çağrıda pencerenin tamamı replay edilir — kalıcı state yok
 (restart/gap-proof). 300 barlık 5m penceresinde HTF 540/720 HA recursion'ı
@@ -26,7 +25,7 @@ from config import Config
 logger = logging.getLogger(__name__)
 
 DO_HOUR       = 3
-SESSION_HOURS = 12
+SESSION_HOURS = 24
 HTF_MINUTES   = [90, 180, 360, 540, 720]
 MIN_ONAY      = 3
 MARKOV_KEEP, MARKOV_ADD = 0.7, 0.3
@@ -226,20 +225,10 @@ class DOKirilimiDetector:
             if not entry_at_last:
                 return None
 
-            # ── Paper filtreleri: BTC rejimi + ayrışma ──
+            # ── Bilgi amaçlı: BTC'ye göre ayrışma (artık giriş şartı değil) ──
             cfg = Config.PAPER["DO_KIRILIMI"]
-            if btc_ctx is None:
-                logger.debug("[DOKirilimi] %s: BTC bağlamı yok, atlandı", symbol)
-                return None
-            if cfg.get("REQUIRE_BTC_DAY_UP", True) and not btc_ctx["day_up"]:
-                logger.info("[DOKirilimi] %s: setup var ama BTC günü negatif — atlandı", symbol)
-                return None
             coin_day_ret = (c[-1] / dailyOpen[-1] - 1) * 100
-            ayrisma = coin_day_ret - btc_ctx["day_ret"]
-            if ayrisma <= cfg.get("AYRISMA_MIN", 0.0):
-                logger.info("[DOKirilimi] %s: setup var ama ayrışma %.2f%% <= eşik — atlandı",
-                            symbol, ayrisma)
-                return None
+            ayrisma = (coin_day_ret - btc_ctx["day_ret"]) if btc_ctx is not None else 0.0
 
             atr_val = float(atr[-1])
             if not np.isfinite(atr_val) or atr_val <= 0:
@@ -255,7 +244,7 @@ class DOKirilimiDetector:
                 "z_hint": round(coin_day_ret, 2),
             }
         except Exception as exc:  # pylint: disable=broad-exception-caught
-            logger.debug("[DOKirilimi] %s dedektör hatası: %s", symbol, exc)
+            logger.error("[DOKirilimi] %s dedektör hatası: %s", symbol, exc, exc_info=True)
             return None
 
 
