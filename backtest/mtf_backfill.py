@@ -60,7 +60,7 @@ class MTFBackfillEngine:
         logger.info(f"🚀 MTF Backfill başlatılıyor - {days_back} gün geriye")
 
         try:
-            conn = await asyncpg.connect(self.db_url)
+            conn = await asyncpg.connect(self.db_url, statement_cache_size=0)
 
             # Sembolleri al
             if not symbols:

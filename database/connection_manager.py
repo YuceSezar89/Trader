@@ -30,7 +30,7 @@ class StreamlitSafeConnectionManager:
         try:
             # PgBouncer URL'sini asyncpg formatına çevir
             url = self.database_url.replace("postgresql+asyncpg://", "postgresql://")
-            conn = await asyncpg.connect(url, command_timeout=30)
+            conn = await asyncpg.connect(url, command_timeout=30, statement_cache_size=0)
             logger.info(f"Yeni connection oluşturuldu: {self._get_thread_id()}")
             return conn
         except Exception as e:

@@ -32,6 +32,7 @@ async_engine = create_async_engine(
             "timezone": "UTC",
         },
         "command_timeout": 30,
+        "statement_cache_size": 0,
     },
     pool_reset_on_return="rollback",
 )
