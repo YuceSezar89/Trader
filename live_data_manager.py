@@ -47,6 +47,29 @@ _TICK_THROTTLE_SECS = {'1m': 2, '5m': 2, '15m': 2, '30m': 2,
                        '1h': 30, '4h': 60, '6h': 60, '8h': 60, '12h': 120, '1d': 120}
 
 
+def _merge_tick_row(buf: pd.DataFrame, tick_row: dict, limit: int) -> pd.DataFrame:
+    """Forming bar satırını buffer'a ekler — CPU-ağır pandas işlemi, event loop'u
+    bloklamaması için executor'da çalıştırılır (bkz. _handle_tick)."""
+    tick_open_time = tick_row["open_time"]
+    base = buf[buf["open_time"] != tick_open_time] if "open_time" in buf.columns else buf
+    return pd.concat([base, pd.DataFrame([tick_row])], ignore_index=True).tail(limit)
+
+
+def _merge_closed_bar_and_index(
+    existing: pd.DataFrame, new_row: dict, limit: int
+) -> pd.DataFrame:
+    """Kapanan bar'ı buffer'a ekler + indikatörleri hesaplar — CPU-ağır pandas/numpy
+    işlemi, event loop'u bloklamaması için executor'da çalıştırılır
+    (bkz. _update_and_process_symbol_mtf)."""
+    new_df = pd.DataFrame([new_row])
+    if "open_time" in existing.columns:
+        existing = existing[existing["open_time"] != new_row["open_time"]]
+    merged = pd.concat([existing, new_df], ignore_index=True).drop_duplicates(
+        subset=["open_time"], keep="last"
+    ).tail(limit)
+    return add_all_indicators(merged)
+
+
 def setup_logging():
     """live_data_manager için özel loglama ayarlarını yapar."""
     log_dir = Config.LOG_DIR
@@ -468,11 +491,10 @@ class LiveDataManager:
                 "sell_volume": float(kline_data["v"]) - _tbv,
             }
             limit = self.mtf_buffer_limits.get(interval, 100)
-            tick_open_time = tick_row["open_time"]
-            base = buf[buf["open_time"] != tick_open_time] if "open_time" in buf.columns else buf
-            merged = pd.concat(
-                [base, pd.DataFrame([tick_row])], ignore_index=True
-            ).tail(limit)
+            loop = asyncio.get_event_loop()
+            merged = await loop.run_in_executor(
+                _MTF_EXECUTOR, _merge_tick_row, buf, tick_row, limit
+            )
             await RedisClient.set_mtf_klines(symbol, interval, merged)
             logger.debug("[%s] %s tick Redis'e yazıldı", symbol, interval)
 
@@ -507,23 +529,16 @@ class LiveDataManager:
                 "sell_volume": float(kline_data["v"]) - _tbv,
             }
 
-            # MTF buffer'a ekle (her timeframe için ayrı buffer)
+            # MTF buffer'a ekle (her timeframe için ayrı buffer) + indikatörler
             if self.mtf_enabled and symbol in self.mtf_buffers:
-                new_df = pd.DataFrame([new_row])
-                existing = self.mtf_buffers[symbol][interval]
-                if "open_time" in existing.columns:
-                    existing = existing[existing["open_time"] != new_row["open_time"]]
-                self.mtf_buffers[symbol][interval] = pd.concat(
-                    [existing, new_df], ignore_index=True
-                ).drop_duplicates(subset=["open_time"], keep="last")
-
-                # Apply buffer limit
                 limit = self.mtf_buffer_limits.get(interval, 100)
-                self.mtf_buffers[symbol][interval] = self.mtf_buffers[symbol][interval].tail(limit)
-
-                # Add indicators
-                self.mtf_buffers[symbol][interval] = await asyncio.to_thread(
-                    add_all_indicators, self.mtf_buffers[symbol][interval]
+                loop = asyncio.get_event_loop()
+                self.mtf_buffers[symbol][interval] = await loop.run_in_executor(
+                    _MTF_EXECUTOR,
+                    _merge_closed_bar_and_index,
+                    self.mtf_buffers[symbol][interval],
+                    new_row,
+                    limit,
                 )
 
                 # Cache to Redis
