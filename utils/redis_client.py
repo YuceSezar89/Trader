@@ -34,6 +34,7 @@ class RedisClient:
     _pending_klines: Dict[str, Tuple[bytes, int]] = {}  # key → (arrow_bytes, ttl)
     _flush_immediately: bool = False  # test dikişi: True ise set anında flush eder
     _pending_publishes: Set[str] = set()                # "symbol:tf"
+    _pending_kline_closed: List[Dict[str, Any]] = []     # XADD kline_closed için birikmiş event'ler
     _flusher_task: Optional[asyncio.Task] = None
 
     @classmethod
@@ -113,6 +114,12 @@ class RedisClient:
         """Binary veri için bağlantı havuzundan istemci döndürür."""
         pool = cls._get_binary_pool_for_current_loop()
         return redis.Redis(connection_pool=pool)
+
+    @staticmethod
+    def _dedupe_and_to_arrow_bytes(df: pd.DataFrame) -> bytes:
+        if "open_time" in df.columns and df["open_time"].duplicated().any():
+            df = df.drop_duplicates(subset=["open_time"], keep="last")
+        return RedisClient._df_to_arrow_bytes(df)
 
     @staticmethod
     def _df_to_arrow_bytes(df: pd.DataFrame) -> bytes:
@@ -276,10 +283,8 @@ class RedisClient:
         try:
             key = cls._get_mtf_key(symbol, timeframe, "live_kline_data")
             ttl = cls._get_ttl_for_timeframe(timeframe)
-            if "open_time" in df.columns and df["open_time"].duplicated().any():
-                df = df.drop_duplicates(subset=["open_time"], keep="last")
             loop = asyncio.get_running_loop()
-            arrow_bytes = await loop.run_in_executor(_ARROW_EXECUTOR, cls._df_to_arrow_bytes, df)
+            arrow_bytes = await loop.run_in_executor(_ARROW_EXECUTOR, cls._dedupe_and_to_arrow_bytes, df)
             cls._pending_klines[key] = (arrow_bytes, ttl)
             cls._pending_publishes.add(f"{symbol}:{timeframe}")
             if cls._flush_immediately:
@@ -302,13 +307,15 @@ class RedisClient:
     @classmethod
     async def flush_pending_klines(cls) -> int:
         """Pending kline'ları tek pipeline ile Redis'e iter. Yazılan SET sayısını döndürür."""
-        if not cls._pending_klines:
+        if not cls._pending_klines and not cls._pending_kline_closed:
             return 0
-        # Swap: yeni yazmaları boş dict'e yönlendir, eskiyi flush et
+        # Swap: yeni yazmaları boş dict/list'e yönlendir, eskiyi flush et
         pending = cls._pending_klines
         publishes = cls._pending_publishes
+        closed_events = cls._pending_kline_closed
         cls._pending_klines = {}
         cls._pending_publishes = set()
+        cls._pending_kline_closed = []
         try:
             r = cls._get_binary_client()
             async with r.pipeline(transaction=False) as pipe:
@@ -316,8 +323,13 @@ class RedisClient:
                     pipe.set(k, data, ex=ttl)
                 for msg in publishes:
                     pipe.publish("kline_updated", msg)
+                for event in closed_events:
+                    pipe.xadd("kline_closed", event, maxlen=100_000, approximate=True)
                 await pipe.execute()
-            logger.debug("Batch flush: %d SET, %d PUBLISH", len(pending), len(publishes))
+            logger.debug(
+                "Batch flush: %d SET, %d PUBLISH, %d XADD",
+                len(pending), len(publishes), len(closed_events),
+            )
             return len(pending)
         except Exception as e:
             logger.error("Batch flush hatası: %s", e)
@@ -326,10 +338,13 @@ class RedisClient:
     @classmethod
     async def _batch_flush_loop(cls) -> None:
         """Her 500ms'de pending kline'ları Redis'e iter."""
+        from utils.heartbeat import beat  # döngüsel import'u önlemek için burada
+
         logger.info("Redis batch flusher başlatıldı (500ms)")
         while True:
             await asyncio.sleep(0.5)
             await cls.flush_pending_klines()
+            await beat("redis_batch_flush")
 
     @classmethod
     async def publish_kline_update(cls, symbol: str, timeframe: str) -> None:
@@ -339,6 +354,17 @@ class RedisClient:
             await client.publish("kline_updated", f"{symbol}:{timeframe}")
         except Exception as e:  # pylint: disable=broad-exception-caught
             logger.debug("kline_updated publish hatası: %s", e)
+
+    @classmethod
+    async def publish_kline_closed_event(cls, symbol: str, timeframe: str, open_time: int) -> None:
+        """
+        Bar kapanışını kline_closed stream'ine yazmak üzere pending listeye ekler —
+        Redis'e gerçek yazım _batch_flush_loop'ta tek pipeline ile olur (burst sorunu
+        yaşamamak için set_mtf_klines ile aynı desen). Faz 1: henüz tüketici yok.
+        """
+        cls._pending_kline_closed.append(
+            {"v": 1, "symbol": symbol, "interval": timeframe, "open_time": open_time}
+        )
 
     @classmethod
     async def get_mtf_klines(cls, symbol: str, timeframe: str, limit: Optional[int] = None) -> Optional[pd.DataFrame]:

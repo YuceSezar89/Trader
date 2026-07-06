@@ -20,6 +20,7 @@ _ARROW_MAGIC = b"ARDF"
 _EMA_PERIOD = 200
 _MIN_BARS = 30
 _SERIES_LEN = 100
+_OFFSETS_KEY = "divergence_offsets"  # Redis hash: sembol -> z-score offset
 
 
 def _direction(signal_type: str) -> str:
@@ -129,6 +130,8 @@ class DivergenceWorker(QThread):  # pylint: disable=too-many-instance-attributes
             self.status_updated.emit(f"Redis bağlanamadı: {exc}")
             return
 
+        self._load_offsets()
+
         sub_thread = threading.Thread(target=self._subscribe_loop, daemon=True)
         sub_thread.start()
 
@@ -169,6 +172,17 @@ class DivergenceWorker(QThread):  # pylint: disable=too-many-instance-attributes
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.error("Divergence hesaplama hatası: %s", exc, exc_info=True)
 
+    def _load_offsets(self) -> None:
+        """Panel/worker yeniden başlayınca offset'leri Redis'ten geri yükler."""
+        try:
+            raw = self._redis.hgetall(_OFFSETS_KEY)
+            with self._lock:
+                self._offsets = {k.decode(): float(v) for k, v in raw.items()}
+            if self._offsets:
+                logger.info("%d sembol için offset Redis'ten yüklendi", len(self._offsets))
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning("Offset yükleme hatası: %s", exc)
+
     def _compute(self, symbols: set, pending_resets: set) -> Optional[dict]:
         series: dict = {}
         current: dict = {}
@@ -190,6 +204,10 @@ class DivergenceWorker(QThread):  # pylint: disable=too-many-instance-attributes
             if symbol in pending_resets:
                 with self._lock:
                     self._offsets[symbol] = z_now
+                try:
+                    self._redis.hset(_OFFSETS_KEY, symbol, z_now)
+                except Exception as exc:  # pylint: disable=broad-exception-caught
+                    logger.warning("Offset kaydedilemedi [%s]: %s", symbol, exc)
 
             offset = self._offsets.get(symbol, 0.0)
             z_adj = z - offset

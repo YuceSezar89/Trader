@@ -13,6 +13,7 @@ from utils.logger import get_logger
 from live_data_manager import main as live_data_main
 from signals.signal_performance_analyzer import SignalPerformanceAnalyzer
 from signals.signal_lifecycle_manager import signal_lifecycle_manager
+from utils.heartbeat import watchdog_loop as heartbeat_watchdog_loop
 
 logger = get_logger("ServiceRunner")
 
@@ -339,7 +340,15 @@ async def run_all_services():
 
     sweep_task = asyncio.create_task(_sweep_loop(), name="signal_sweeper")
 
-    tasks = {live_task, perf_task, gap_task, sweep_task}
+    # 7. Heartbeat watchdog: bileşenler bayatlarsa Telegram'a bildirir
+    heartbeat_task = asyncio.create_task(
+        heartbeat_watchdog_loop(
+            max_age_seconds={"redis_batch_flush": 60, "ws_ingestion": 120}
+        ),
+        name="heartbeat_watchdog",
+    )
+
+    tasks = {live_task, perf_task, gap_task, sweep_task, heartbeat_task}
 
     # Sinyal yakalayıcı: görevleri iptal et ve shutdown akışını başlat
     def _signal_handler(sig_name: str):

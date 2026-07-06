@@ -77,6 +77,8 @@ def get_live_binance(
         return pd.DataFrame()
 
 import asyncio
+import re
+import time
 import aiohttp
 
 # --- Central Asynchronous Client Manager ---
@@ -87,9 +89,18 @@ class BinanceClientManager:
     This approach is more compatible with Streamlit's script execution model.
     """
 
+    # IP ban/rate-limit cooldown — 418/429 alınca dolduruluyor, kalkana kadar
+    # YENİ istek ağa hiç çıkmaz (ban sırasında istek atmak süreyi uzatıyor — 4 Tem dersi).
+    _banned_until: float = 0.0
+
     @classmethod
     async def fetch_klines(cls, symbol: str, interval: str, limit: int = 500, startTime: Optional[int] = None) -> pd.DataFrame:
         """Fetches historical klines for a single symbol."""
+        if time.time() < cls._banned_until:
+            remaining = cls._banned_until - time.time()
+            logger.warning(f"[{symbol}] IP ban cooldown aktif, istek atlanıyor ({remaining:.0f}s kaldı)")
+            return pd.DataFrame()
+
         url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}"
         if startTime:
             url += f"&startTime={startTime}"
@@ -97,9 +108,17 @@ class BinanceClientManager:
             async def request():
                 async with aiohttp.ClientSession() as session:
                     async with session.get(url) as resp:
-                        return await resp.json()
-            data = await asyncio.wait_for(request(), timeout=30)
+                        return resp.status, resp.headers, await resp.json()
+            status, headers, data = await asyncio.wait_for(request(), timeout=30)
+
+            if status in (418, 429):
+                cls._set_ban_cooldown(status, headers, data)
+                logger.warning(f"[{symbol}] Binance {status} yanıtı: {data}")
+                return pd.DataFrame()
+
             if isinstance(data, dict) and data.get("code"):
+                if data.get("code") == -1003:
+                    cls._set_ban_cooldown(status, headers, data)
                 logger.warning(f"[{symbol}] Binance API Error: {data}")
                 return pd.DataFrame()
             df = pd.DataFrame(data, columns=[
@@ -124,6 +143,30 @@ class BinanceClientManager:
             # JSON'da döndürülen API düzeyindeki hatalar da dahil olmak üzere diğer beklenmedik hatalar için
             logger.error(f"[{symbol}] Kline verisi çekilirken beklenmedik hata: {e}", exc_info=True)
             raise BinanceAPIError(f"Failed to fetch klines for {symbol}: {e}", endpoint=url) from e
+
+    @classmethod
+    def _set_ban_cooldown(cls, status: int, headers: Any, data: Any) -> None:
+        """418/429 yanıtından cooldown süresini çıkarır: önce Binance'in "banned until"
+        epoch-ms mesajı, yoksa Retry-After header'ı, o da yoksa sabit varsayılan."""
+        cooldown_until = None
+        msg = data.get("msg", "") if isinstance(data, dict) else ""
+        match = re.search(r"banned until (\d+)", msg)
+        if match:
+            cooldown_until = int(match.group(1)) / 1000
+        elif headers and headers.get("Retry-After"):
+            try:
+                cooldown_until = time.time() + float(headers["Retry-After"])
+            except ValueError:
+                pass
+        if cooldown_until is None:
+            cooldown_until = time.time() + (120 if status == 418 else 60)
+
+        if cooldown_until > cls._banned_until:
+            cls._banned_until = cooldown_until
+            logger.error(
+                "🚫 Binance %s — IP cooldown %.0f saniye (kadar: %s)",
+                status, cooldown_until - time.time(), msg or "detay yok",
+            )
 
     @classmethod
     async def fetch_all_klines(cls, symbols: List[str], interval: str, limit: int = 500) -> List[Tuple[str, pd.DataFrame]]:

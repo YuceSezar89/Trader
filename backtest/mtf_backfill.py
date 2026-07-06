@@ -17,6 +17,7 @@ import pandas as pd
 # Local imports
 import indicators.core as indicators
 from signals.vpm_calculator import VPMCalculator
+from signals.signal_processor import _compute_vpmv_scores
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -209,7 +210,7 @@ class MTFBackfillEngine:
 
             # Sinyal koşullarını kontrol et
             signal_data = self._check_signal_conditions(
-                row, symbol, timeframe, prev_row
+                row, symbol, timeframe, prev_row, df_mtf, i
             )
 
             if signal_data:
@@ -456,6 +457,8 @@ class MTFBackfillEngine:
         symbol: str,
         timeframe: str,
         prev_row: Optional[pd.Series] = None,
+        df_mtf: Optional[pd.DataFrame] = None,
+        idx: Optional[int] = None,
     ) -> Optional[Dict]:
         """Sinyal koşullarını kontrol et"""
 
@@ -477,8 +480,8 @@ class MTFBackfillEngine:
         # Sinyal türünü belirle (AL/SAT)
         signal_type = self._determine_signal_type(row)
 
-        # VPM skoru hesapla
-        vpm_score = self._calculate_vpm_score(row, timeframe)
+        # VPMV skoru hesapla (canlı sistemle aynı yöntem — rolling normalize için tam dilim gerekir)
+        vpm_score = self._calculate_vpmv_score(df_mtf, idx)
 
         timestamp = datetime.fromtimestamp(row["open_time"] / 1000)
 
@@ -572,29 +575,30 @@ class MTFBackfillEngine:
         else:
             return "AL"  # Varsayılan
 
-    def _calculate_vpm_score(self, row: pd.Series, timeframe: str) -> float:
-        """VPM skoru hesapla (standardize VPMCalculator kullan)"""
+    def _calculate_vpmv_score(self, df: pd.DataFrame, idx: int) -> float:
+        """VPMV (Volume-Price-Momentum-Volatility) skoru hesapla.
 
+        Canlı sistemle (signals/signal_processor.py:_compute_vpmv_scores) BİREBİR
+        AYNI yöntemi kullanır — rolling normalize için idx'e kadar olan tüm dilim
+        (df.iloc[:idx+1]) geçilir, tek satırdan basit bir yaklaşıklık yapılmaz."""
         try:
-            # Sinyal türünü belirle
+            row = df.iloc[idx]
             signal_type = (
                 "Long" if row.get("close", 0) > row.get("ma200", 0) else "Short"
             )
-
-            # VPMCalculator ile hesapla
-            vpm_score = VPMCalculator.calculate(
-                volume=float(row.get("volume", 0)),
-                volume_sma=float(row.get("volume_sma_20", 1)),
-                price_change_pct=float(row.get("momentum", 0) * 100),  # momentum -> %
-                rsi_delta=float(row.get("rsi_14", 50) - 50),  # RSI delta from neutral
-                interval=timeframe,
-                signal_type=signal_type,
+            df_slice = df.iloc[: idx + 1]
+            vol_score, momentum_score, vlt_score, price_score = _compute_vpmv_scores(
+                df_slice, signal_type
+            )
+            return VPMCalculator.calculate(
+                vol_score=vol_score,
+                momentum_score=momentum_score,
+                vlt_score=vlt_score,
+                price_score=price_score,
             )
 
-            return vpm_score
-
         except Exception as e:
-            logger.warning(f"VPM hesaplama hatası: {e}")
+            logger.warning(f"VPMV hesaplama hatası: {e}")
             return 0.0
 
     async def _bulk_insert_signals(self, conn, signals: List[Dict]):

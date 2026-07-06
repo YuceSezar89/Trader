@@ -1,5 +1,5 @@
 """
-Devisso score backfill — cagg_5m / cagg_15m kullanarak.
+Devisso score backfill — 5m/15m/1h/4h için cagg view'ları, 1m için price_data.
 
 29 Haz 2026 23:50 (commit 88af9e7) öncesi sinyaller ters formülle (ΔRSI/ΔPrice%)
 hesaplanmıştı. Bu script hem NULL kayıtları hem de o tarihten önceki (dolu ama
@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 DB = dict(host="127.0.0.1", port=6432, dbname="trader_panel", user="yusuf", password="123")
 
-_CAGG = {"5m": "cagg_5m", "15m": "cagg_15m"}
+_CAGG = {"5m": "cagg_5m", "15m": "cagg_15m", "1h": "cagg_1h", "4h": "cagg_4h"}
 _BARS_NEEDED = 130
 
 
@@ -56,16 +56,26 @@ def _compute_devisso(df: pd.DataFrame) -> float | None:
 
 
 def _fetch_bars(cur, symbol: str, interval: str, opened_at: datetime) -> pd.DataFrame | None:
-    cagg = _CAGG.get(interval)
-    if not cagg:
-        return None
-    cur.execute(f"""
-        SELECT bucket AS open_time, open, high, low, close, volume
-        FROM {cagg}
-        WHERE symbol = %s AND bucket <= %s
-        ORDER BY bucket DESC
-        LIMIT %s
-    """, (symbol, opened_at, _BARS_NEEDED))
+    if interval == "1m":
+        # 1m zaten ham granülerlik — cagg değil, doğrudan price_data'dan
+        cur.execute("""
+            SELECT timestamp AS open_time, open, high, low, close, volume
+            FROM price_data
+            WHERE symbol = %s AND interval = '1m' AND timestamp <= %s
+            ORDER BY timestamp DESC
+            LIMIT %s
+        """, (symbol, opened_at, _BARS_NEEDED))
+    else:
+        cagg = _CAGG.get(interval)
+        if not cagg:
+            return None
+        cur.execute(f"""
+            SELECT bucket AS open_time, open, high, low, close, volume
+            FROM {cagg}
+            WHERE symbol = %s AND bucket <= %s
+            ORDER BY bucket DESC
+            LIMIT %s
+        """, (symbol, opened_at, _BARS_NEEDED))
     rows = cur.fetchall()
     if not rows:
         return None
@@ -84,7 +94,7 @@ def run(dry_run: bool = False) -> None:
         SELECT id, symbol, interval, opened_at, signal_type
         FROM signals
         WHERE (devisso_score IS NULL OR opened_at < '2026-06-29 23:50:35')
-          AND interval IN ('5m', '15m')
+          AND interval IN ('5m', '15m', '1h', '4h', '1m')
         ORDER BY symbol, interval, opened_at
     """)
     signals = cur.fetchall()
