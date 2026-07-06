@@ -1,6 +1,10 @@
 """
 Devisso score backfill — cagg_5m / cagg_15m kullanarak.
 
+29 Haz 2026 23:50 (commit 88af9e7) öncesi sinyaller ters formülle (ΔRSI/ΔPrice%)
+hesaplanmıştı. Bu script hem NULL kayıtları hem de o tarihten önceki (dolu ama
+yanlış formüllü) kayıtları düzeltilmiş formülle yeniden hesaplayıp üzerine yazar.
+
 Kullanım:
     python scripts/backfill_devisso.py [--dry-run]
 """
@@ -79,7 +83,7 @@ def run(dry_run: bool = False) -> None:
     cur.execute("""
         SELECT id, symbol, interval, opened_at, signal_type
         FROM signals
-        WHERE devisso_score IS NULL
+        WHERE (devisso_score IS NULL OR opened_at < '2026-06-29 23:50:35')
           AND interval IN ('5m', '15m')
         ORDER BY symbol, interval, opened_at
     """)
