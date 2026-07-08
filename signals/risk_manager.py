@@ -16,7 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import Config
-from database.engine import get_session
+from database.engine import get_session, run_with_db_timeout
 from database.models import Signal
 from signals.signal_lifecycle_manager import _calc_pnl
 from signals.trailing import update_trailing
@@ -31,14 +31,21 @@ class RiskManager:
 
     async def load_active_symbols(self) -> None:
         """Startup'ta aktif sinyallerin sembollerini bellekte önbelleğe al."""
-        async with get_session() as session:
-            result = await session.execute(
-                select(Signal.symbol).where(
-                    Signal.status == "active",
-                    Signal.stop_loss_price.isnot(None),
+        async def _do_load() -> set[str]:
+            async with get_session() as session:
+                result = await session.execute(
+                    select(Signal.symbol).where(
+                        Signal.status == "active",
+                        Signal.stop_loss_price.isnot(None),
+                    )
                 )
-            )
-            self._active_symbols = {row[0] for row in result.all()}
+                return {row[0] for row in result.all()}
+
+        try:
+            self._active_symbols = await run_with_db_timeout(_do_load())
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.error("[RiskManager] aktif sembol yükleme zaman aşımı: %s", exc)
+            self._active_symbols = set()
         logger.info("[RiskManager] %d aktif sembol yüklendi", len(self._active_symbols))
 
     def register(self, symbol: str) -> None:
@@ -52,49 +59,56 @@ class RiskManager:
         symbols_to_check = [s for s in self._active_symbols if s in prices]
         if not symbols_to_check:
             return
-        async with get_session() as session:
-            try:
-                result = await session.execute(
-                    select(Signal).where(
-                        Signal.status == "active",
-                        Signal.stop_loss_price.isnot(None),
-                        Signal.symbol.in_(symbols_to_check),
-                    )
-                )
-                actives = result.scalars().all()
-                if not actives:
-                    return
 
-                changed = False
-                closed_symbols: set[str] = set()
-                for sig in actives:
-                    price = prices.get(sig.symbol)
-                    if price is None:
-                        continue
-                    old_trail = sig.trailing_stop_price
-                    reason = self._update_trailing(sig, price)
-                    if reason:
-                        await self._close(session, sig, price, reason)
-                        closed_symbols.add(sig.symbol)
-                        logger.info(
-                            "[%s] %s id=%d %s @ %.6f",
-                            sig.symbol, sig.signal_type, sig.id, reason, price,
+        async def _do_check() -> None:
+            async with get_session() as session:
+                try:
+                    result = await session.execute(
+                        select(Signal).where(
+                            Signal.status == "active",
+                            Signal.stop_loss_price.isnot(None),
+                            Signal.symbol.in_(symbols_to_check),
                         )
-                        changed = True
-                    elif sig.trailing_stop_price != old_trail:
-                        changed = True
+                    )
+                    actives = result.scalars().all()
+                    if not actives:
+                        return
 
-                if changed:
-                    await session.commit()
+                    changed = False
+                    closed_symbols: set[str] = set()
+                    for sig in actives:
+                        price = prices.get(sig.symbol)
+                        if price is None:
+                            continue
+                        old_trail = sig.trailing_stop_price
+                        reason = self._update_trailing(sig, price)
+                        if reason:
+                            await self._close(session, sig, price, reason)
+                            closed_symbols.add(sig.symbol)
+                            logger.info(
+                                "[%s] %s id=%d %s @ %.6f",
+                                sig.symbol, sig.signal_type, sig.id, reason, price,
+                            )
+                            changed = True
+                        elif sig.trailing_stop_price != old_trail:
+                            changed = True
 
-                active_syms = {s.symbol for s in actives if s.status == "active"}
-                for sym in closed_symbols:
-                    if sym not in active_syms:
-                        self._active_symbols.discard(sym)
+                    if changed:
+                        await session.commit()
 
-            except Exception as exc:
-                await session.rollback()
-                logger.error("RiskManager batch hatası: %s", exc, exc_info=True)
+                    active_syms = {s.symbol for s in actives if s.status == "active"}
+                    for sym in closed_symbols:
+                        if sym not in active_syms:
+                            self._active_symbols.discard(sym)
+
+                except Exception as exc:
+                    await session.rollback()
+                    logger.error("RiskManager batch hatası: %s", exc, exc_info=True)
+
+        try:
+            await run_with_db_timeout(_do_check())
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.error("RiskManager batch zaman aşımı: %s", exc)
 
     @staticmethod
     def _trail_distance(sig: Signal) -> float:
