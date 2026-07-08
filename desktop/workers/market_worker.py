@@ -6,6 +6,7 @@ QThread içinde çalışır, Qt sinyalleriyle ana pencereye veri gönderir.
 import json
 import logging
 import threading
+import time
 from io import StringIO
 from typing import Optional
 
@@ -17,6 +18,8 @@ logger = logging.getLogger(__name__)
 
 _ARROW_MAGIC = b"ARDF"
 _FALLBACK_MS = 3_000
+_SYMBOL_DISCOVERY_INTERVAL = 60  # saniye — sembol evreni (yeni listing/delisting) bu kadar seyrek değişir
+_FALLBACK_SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"]
 
 
 class MarketWorker(QThread):  # pylint: disable=too-many-instance-attributes
@@ -26,6 +29,7 @@ class MarketWorker(QThread):  # pylint: disable=too-many-instance-attributes
     prices_updated = pyqtSignal(dict)                       # {symbol: canlı fiyat} — tek toplu güncelleme
     klines_updated = pyqtSignal(str, str, object)           # symbol, timeframe, DataFrame
     connection_changed = pyqtSignal(bool, str)              # connected, message
+    symbols_discovered = pyqtSignal(list)                   # sembol evreni (yeniden) keşfedildiğinde
 
     def __init__(self, redis_url: str, interval_ms: int = _FALLBACK_MS, parent=None):
         super().__init__(parent)
@@ -38,11 +42,12 @@ class MarketWorker(QThread):  # pylint: disable=too-many-instance-attributes
         self._watched_symbols: list[str] = []
         self._chart_symbol: str = ""
         self._chart_tf: str = ""
+        self._last_symbol_discovery: float = 0.0
 
-    def set_symbols(self, symbols: list[str]) -> None:
-        """İzlenecek sembol listesini günceller."""
-        with self._lock:
-            self._watched_symbols = list(symbols)
+    def request_symbol_refresh(self) -> None:
+        """Manuel yenile — sıradaki poll döngüsünde sembol evrenini yeniden keşfeder."""
+        self._last_symbol_discovery = 0.0
+        self._wake.set()
 
     def set_chart_watch(self, symbol: str, tf: str) -> None:
         """Grafik için takip edilecek sembol ve zaman dilimini ayarlar."""
@@ -58,6 +63,7 @@ class MarketWorker(QThread):  # pylint: disable=too-many-instance-attributes
                 self._redis_url,
                 decode_responses=False,
                 socket_connect_timeout=3,
+                socket_timeout=5,
             )
             self._redis.ping()
             self.connection_changed.emit(True, "Redis bağlantısı kuruldu")
@@ -119,6 +125,40 @@ class MarketWorker(QThread):  # pylint: disable=too-many-instance-attributes
         except Exception:  # pylint: disable=broad-exception-caught
             return None
 
+    # ── Sembol keşfi ──────────────────────────────────────────────────────
+
+    def _discover_symbols(self) -> None:
+        """Sembol evrenini periyodik olarak keşfeder (KEYS değil SCAN — tek seferde
+        tüm keyspace'i taramaz, Redis'i bloklamaz). Önceden watchlist_panel.py bunu
+        GUI thread'de, timeout'suz bir KEYS çağrısıyla yapıyordu — Redis ara sıra
+        yavaşladığında bu, süresiz olarak tüm tıklamaları dondurabiliyordu. Artık
+        bu thread'de, zaten var olan bağlantı üzerinden çalışıyor."""
+        now = time.time()
+        if now - self._last_symbol_discovery < _SYMBOL_DISCOVERY_INTERVAL:
+            return
+        self._last_symbol_discovery = now
+
+        symbols: list[str] = []
+        try:
+            keys = [k.decode() for k in self._redis.scan_iter(match="ticker:*", count=500)]
+            symbols = sorted(k.split(":", 1)[1] for k in keys)
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
+
+        if not symbols:
+            try:
+                keys = [k.decode() for k in self._redis.scan_iter(match="live_kline_data:*:1m", count=500)]
+                symbols = sorted(k.split(":")[1] for k in keys if k.count(":") == 2)
+            except Exception:  # pylint: disable=broad-exception-caught
+                pass
+
+        if not symbols:
+            symbols = _FALLBACK_SYMBOLS
+
+        with self._lock:
+            self._watched_symbols = symbols
+        self.symbols_discovered.emit(symbols)
+
     # ── Update / poll ─────────────────────────────────────────────────────
 
     def _handle_update(self, symbol: str, tf: str) -> None:
@@ -132,6 +172,8 @@ class MarketWorker(QThread):  # pylint: disable=too-many-instance-attributes
                 self.klines_updated.emit(symbol, tf, df)
 
     def _poll(self) -> None:
+        self._discover_symbols()
+
         with self._lock:
             symbols = list(self._watched_symbols)
             chart_sym = self._chart_symbol

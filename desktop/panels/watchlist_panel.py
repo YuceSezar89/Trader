@@ -1,14 +1,13 @@
 """
 WatchlistPanel — 200 sembol, canlı fiyat, değişim %, VPM skoru.
 
-MarketWorker'dan gelen Qt sinyalleriyle her saniye güncellenir.
-Sembol seçiminde `symbol_selected` sinyali yayınlanır.
+MarketWorker'dan gelen Qt sinyalleriyle her saniye güncellenir. Sembol evrenini
+kendisi keşfetmez — MarketWorker (arka plan thread'i) keşfedip `symbols_discovered`
+ile bildirir; bu panel sadece görüntüler. Sembol seçiminde `symbol_selected`
+sinyali yayınlanır.
 """
 
-import json
-
-import redis
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import QHeaderView
 from PyQt6.QtWidgets import (
     QHBoxLayout,
@@ -20,11 +19,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from desktop.models.watchlist_model import (
-    COL_SYMBOL,
-    WatchlistModel,
-    WatchlistProxyModel,
-)
+from desktop.models.watchlist_model import WatchlistModel, WatchlistProxyModel
 from desktop.theme import COLORS
 
 
@@ -34,26 +29,21 @@ class WatchlistPanel(QWidget):
 
     Sinyaller:
         symbol_selected(str): Kullanıcı bir sembole tıkladığında.
+        refresh_requested(): Kullanıcı "↺" butonuna bastığında — MarketWorker'ın
+            sembol evrenini yeniden keşfetmesini ister.
     """
 
     symbol_selected = pyqtSignal(str)
-    symbols_changed = pyqtSignal(list)   # yeni sembol listesi yüklendiğinde
+    refresh_requested = pyqtSignal()
 
-    def __init__(self, redis_url: str, parent=None):
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self._redis_url = redis_url
 
         self._model = WatchlistModel(self)
         self._proxy = WatchlistProxyModel(self)
         self._proxy.setSourceModel(self._model)
 
         self._setup_ui()
-        self._load_symbols()
-
-        self._refresh_timer = QTimer(self)
-        self._refresh_timer.setInterval(60_000)
-        self._refresh_timer.timeout.connect(self._auto_refresh)
-        self._refresh_timer.start()
 
     # ── UI ────────────────────────────────────────────────────────────────
 
@@ -84,7 +74,7 @@ class WatchlistPanel(QWidget):
         refresh_btn = QPushButton("↺")
         refresh_btn.setFixedWidth(32)
         refresh_btn.setToolTip("Sembolleri yenile")
-        refresh_btn.clicked.connect(self._load_symbols)
+        refresh_btn.clicked.connect(self.refresh_requested)
         search_row.addWidget(refresh_btn)
         root.addLayout(search_row)
 
@@ -120,64 +110,19 @@ class WatchlistPanel(QWidget):
         self._stats_label.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 10px; padding: 2px;")
         root.addWidget(self._stats_label)
 
-    # ── Sembol Yükleme ────────────────────────────────────────────────────
+    # ── Worker Sinyalleri ─────────────────────────────────────────────────
 
-    def _load_symbols(self) -> None:
-        """Redis'ten sembol listesini ve mevcut ticker verisini yükler."""
-        ticker_data: dict[str, dict] = {}
-        symbols: list[str] = []
-        try:
-            r = redis.Redis.from_url(self._redis_url, decode_responses=True, socket_connect_timeout=2)
-            keys = r.keys("ticker:*")
-            if keys:
-                pipe = r.pipeline()
-                for k in keys:
-                    pipe.get(k)
-                values = pipe.execute()
-                for k, v in zip(keys, values):
-                    sym = k.split(":", 1)[1]
-                    if v:
-                        try:
-                            ticker_data[sym] = json.loads(v)
-                        except Exception:  # pylint: disable=broad-exception-caught
-                            pass
-                symbols = sorted(ticker_data.keys())
-            if not symbols:
-                kline_keys = r.keys("live_kline_data:*:1m")
-                symbols = sorted(
-                    k.split(":")[1] for k in kline_keys if k.count(":") == 2
-                )
-        except Exception:  # pylint: disable=broad-exception-caught
-            pass
-
-        if not symbols:
-            symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"]
-
+    @pyqtSlot(list)
+    def on_symbols_discovered(self, symbols: list) -> None:
+        """MarketWorker sembol evrenini (yeniden) keşfettiğinde çağrılır."""
         self._model.load_symbols(symbols)
-
-        for sym, d in ticker_data.items():
-            self._model.on_price_updated(
-                sym,
-                float(d.get("price", 0)),
-                float(d.get("change_pct", 0)),
-                float(d.get("volume", 0)),
-                float(d.get("funding_rate", 0)),
-            )
-
         self._count_label.setText(f"{len(symbols)} sembol")
         self._update_stats()
-        self.symbols_changed.emit(symbols)
         hdr = self._table.horizontalHeader()
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         hdr.setStretchLastSection(True)
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         hdr.setStretchLastSection(True)
-
-    def _auto_refresh(self) -> None:
-        """Her 60s'de bir sembol listesini ve fiyatları yeniler."""
-        self._load_symbols()
-
-    # ── Worker Sinyalleri ─────────────────────────────────────────────────
 
     @pyqtSlot(str, float, float, float, float)
     def on_price_updated(self, symbol: str, price: float, change_pct: float, volume: float = 0.0, funding_rate: float = 0.0) -> None:

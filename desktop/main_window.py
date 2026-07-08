@@ -229,7 +229,7 @@ class MainWindow(QMainWindow):
         }
 
         # ── Watchlist (sol, gerçek panel) ─────────────────────────────────
-        self._watchlist_panel = WatchlistPanel(redis_url, self)
+        self._watchlist_panel = WatchlistPanel(self)
         watchlist_dock = QDockWidget("Watchlist", self)
         watchlist_dock.setObjectName("dock_watchlist")
         watchlist_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
@@ -391,18 +391,14 @@ class MainWindow(QMainWindow):
         self._market_worker.price_updated.connect(self._on_price_updated)
         self._market_worker.prices_updated.connect(self._paper_trade_panel.on_prices_updated)
         self._market_worker.klines_updated.connect(self._chart_panel.on_klines_updated)
+        self._market_worker.symbols_discovered.connect(self._watchlist_panel.on_symbols_discovered)
+        self._watchlist_panel.refresh_requested.connect(self._market_worker.request_symbol_refresh)
         self._chart_panel.symbol_changed.connect(self._market_worker.set_chart_watch)
         self._market_worker.set_chart_watch(
             self._chart_panel.current_symbol(), self._chart_panel.current_tf()
         )
         self._market_worker.start()
         self._workers.append(self._market_worker)
-
-        # Watchlist yüklendikten sonra market worker'a sembolleri gönder
-        symbols = [r.symbol for r in self._watchlist_panel.model()._rows]  # noqa: SLF001
-        if symbols:
-            self._market_worker.set_symbols(symbols)
-        self._watchlist_panel.symbols_changed.connect(self._market_worker.set_symbols)
 
         # Signal worker — watchlist + aktif sinyaller paneline bağlı
         self._signal_worker = SignalWorker(
