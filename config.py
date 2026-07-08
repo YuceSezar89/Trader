@@ -247,7 +247,17 @@ class Config:
     # RSI Log Change Ayarları
     RSI_LOG_WINDOW = 14
     RSI_LOG_THRESHOLD = 20
-    
+
+    # =============================================================================
+    # SİNYAL KAYNAĞI (Faz 4 cutover feature flag)
+    # =============================================================================
+    # "eski": live_data_manager.py gerçek yazar (dry_run=False), signal_service.py
+    #         gölge/dry-run kalır — şu anki (gözlem) durumu.
+    # "yeni": signal_service.py gerçek yazar, live_data_manager.py'nin eski yolu
+    #         dry_run'a döner — kesme anı. Kod silinmez, geri dönüş bu değeri
+    #         "eski"ye çevirip iki servisi restart etmekten ibarettir.
+    SIGNAL_SOURCE = os.getenv('SIGNAL_SOURCE', 'eski')
+
     # =============================================================================
     # LOGGING AYARLARI
     # =============================================================================

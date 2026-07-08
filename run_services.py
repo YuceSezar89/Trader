@@ -301,6 +301,17 @@ async def periodic_gap_scan_task():
         await asyncio.sleep(_SCAN_INTERVAL_HOURS * 3600)
 
 
+async def _supervised(coro, name: str):
+    """Bir görev beklenmedik şekilde patlarsa diğer görevleri etkilememesi için izole eder —
+    yoksa asyncio.wait(..., FIRST_EXCEPTION) tek bir görevin hatasında tüm sistemi kapatır."""
+    try:
+        await coro
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        logger.error(f"[{name}] görev beklenmedik şekilde sonlandı, izole edildi: {e}", exc_info=True)
+
+
 async def run_all_services():
     """Tüm servisleri doğru sırada başlatır ve yönetir."""
     logger.info("Tüm servisler başlatılıyor...")
@@ -314,16 +325,16 @@ async def run_all_services():
     loop = asyncio.get_running_loop()
     shutdown_event = asyncio.Event()
 
-    live_task = asyncio.create_task(live_data_main(), name="live_data_manager")
+    live_task = asyncio.create_task(_supervised(live_data_main(), "live_data_manager"), name="live_data_manager")
 
     # 4. Daily Performance Update Task
     perf_task = asyncio.create_task(
-        daily_performance_update_task(), name="performance_updater"
+        _supervised(daily_performance_update_task(), "performance_updater"), name="performance_updater"
     )
 
     # 5. Periyodik Gap Scanner (her 6 saatte bir)
     gap_task = asyncio.create_task(
-        periodic_gap_scan_task(), name="gap_scanner"
+        _supervised(periodic_gap_scan_task(), "gap_scanner"), name="gap_scanner"
     )
 
     # 6. Sinyal timeout sweeper (her 5 dakikada bir)
@@ -338,12 +349,15 @@ async def run_all_services():
             except Exception as exc:
                 sweep_logger.error(f"Sweep hatası: {exc}", exc_info=True)
 
-    sweep_task = asyncio.create_task(_sweep_loop(), name="signal_sweeper")
+    sweep_task = asyncio.create_task(_supervised(_sweep_loop(), "signal_sweeper"), name="signal_sweeper")
 
     # 7. Heartbeat watchdog: bileşenler bayatlarsa Telegram'a bildirir
     heartbeat_task = asyncio.create_task(
-        heartbeat_watchdog_loop(
-            max_age_seconds={"redis_batch_flush": 60, "ws_ingestion": 120}
+        _supervised(
+            heartbeat_watchdog_loop(
+                max_age_seconds={"redis_batch_flush": 60, "ws_ingestion": 120}
+            ),
+            "heartbeat_watchdog",
         ),
         name="heartbeat_watchdog",
     )

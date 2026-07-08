@@ -7,6 +7,7 @@ Kullanım:
 """
 
 import argparse
+import asyncio
 import sys
 from pathlib import Path
 
@@ -127,27 +128,38 @@ def fetch(symbol, interval, from_date, to_date, limit=1000):
 
 # ── Grafik ────────────────────────────────────────────────────────────────────
 
-def build_chart(df: pd.DataFrame, symbol: str, interval: str,
+async def build_chart(df: pd.DataFrame, symbol: str, interval: str,
                 atr_length: int, factor: float) -> go.Figure:
     filt = SignalFilter()
     ind  = f"Supertrend({atr_length},{factor})"
+    # Canlı sistem aynı (symbol, interval, indicator) key'ini gerçek sinyal
+    # filtrelemesi için kullanıyor — check() her denemeyi doğrudan
+    # signal_filter_events'e yazdığı için gerçek symbol adıyla çalıştırmak bu
+    # analiz verisini canlı filtre referanslarına karıştırırdı. Binance
+    # sembollerinde "_" hiç geçmediğinden bu suffix gerçek bir sembolle asla
+    # çakışmaz.
+    filter_symbol = f"{symbol}__ANALYSIS"
 
     signals = []
     for _, row in df.iterrows():
         if not row["long_signal"] and not row["short_signal"]:
             continue
         sig   = "Long" if row["long_signal"] else "Short"
-        state = filt._state.get((symbol, interval, ind))
-        ref   = state.last_short_high if sig == "Long" and state else (
-                state.last_long_low   if sig == "Short" and state else None)
-        valid = filt.check(sig, float(row["high"]), float(row["low"]),
-                           symbol, interval, ind)
+        opposite = "Short" if sig == "Long" else "Long"
+        ref_pair = await filt.last_reference(filter_symbol, interval, ind, opposite)
+        ref   = ref_pair[0] if sig == "Long" and ref_pair else (
+                ref_pair[1] if sig == "Short" and ref_pair else None)
+        bar_time = row["timestamp"].tz_localize(None) if row["timestamp"].tzinfo else row["timestamp"]
+        valid = await filt.check(sig, float(row["high"]), float(row["low"]),
+                           filter_symbol, interval, ind, bar_time)
         signals.append({
             "ts": row["timestamp"], "sig": sig,
             "high": row["high"], "low": row["low"],
             "close": row["close"],
             "ref": ref, "valid": valid,
         })
+
+    await filt.cleanup(filter_symbol, interval, ind)
 
     fig = make_subplots(rows=1, cols=1)
 
@@ -249,7 +261,7 @@ if __name__ == "__main__":
     df = supertrend(df, args.atr_length, args.factor)
     print(f"  {len(df)} mum, Supertrend hesaplandı.")
 
-    fig = build_chart(df, args.symbol, args.interval, args.atr_length, args.factor)
+    fig = asyncio.run(build_chart(df, args.symbol, args.interval, args.atr_length, args.factor))
     fig.write_html(args.out)
     print(f"Grafik kaydedildi: {args.out}")
     import webbrowser

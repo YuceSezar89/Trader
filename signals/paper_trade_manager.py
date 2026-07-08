@@ -7,6 +7,7 @@ Her strateji için ayrı instance kullanılır:
   rsi_15m   — 15m RSI_Cross sinyalleri
 """
 
+import asyncio
 import json as _json
 import logging
 from datetime import datetime
@@ -21,7 +22,7 @@ from database.models import PaperTrade, PaperPortfolio, Signal
 from signals.risk_policy import default_policy
 from signals.signal_lifecycle_manager import _calc_pnl
 from signals.trailing import update_trailing
-from utils.redis_client import RedisClient
+from utils.redis_client import RedisClient, SAFE_EXTERNAL_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +126,9 @@ class PaperTradeManager:
 
                 rank_at_entry: Optional[int] = None
                 try:
-                    raw = await RedisClient.get_client().get("ranking:snapshot")
+                    raw = await asyncio.wait_for(
+                        RedisClient.get_client().get("ranking:snapshot"), timeout=SAFE_EXTERNAL_TIMEOUT
+                    )
                     if raw:
                         snap = _json.loads(raw)
                         rank_map = {item["symbol"]: item["rank"] for item in snap}

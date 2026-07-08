@@ -13,11 +13,20 @@ Tüm fonksiyonlar asenkron olarak çalışır ve sağlam hata yönetimi içerir.
 import pandas as pd
 import asyncio
 from typing import List, Dict, Any, Optional, Callable, Coroutine
-from datetime import timedelta
+from datetime import timedelta, datetime
 from utils.logger import get_logger
 from config import Config
 from indicators.core import calculate_rsi, calculate_supertrend
 from signals.signal_filter import SignalFilter
+
+
+def _bar_time_from_open_ms(open_time_ms) -> datetime:
+    """open_time (ms epoch, UTC bazlı) değerini yerel (Europe/Istanbul) naive
+    datetime'a çevirir — signal_filter_events.bar_time için, CLAUDE.md'nin
+    datetime kuralına uygun (bkz. _create_signal_output'taki aynı desen)."""
+    ts = pd.to_datetime(open_time_ms, unit="ms", utc=True)
+    tz_name = getattr(Config, "TIMEZONE", "Europe/Istanbul")
+    return ts.tz_convert(tz_name).replace(tzinfo=None).to_pydatetime()
 
 # Eşik değerlerini merkezi yapılandırmadan al
 RSI_THRESHOLDS = Config.RSI_THRESHOLDS
@@ -241,8 +250,9 @@ class SignalEngine:
             indicator_key = f"RSI_Cross({fast_len},{slow_len})"
             high = float(df[COL_HIGH].iloc[-2])
             low  = float(df[COL_LOW].iloc[-2])
-            if symbol and interval and not self._filter.check(
-                signal_type, high, low, symbol, interval, indicator_key
+            bar_time = _bar_time_from_open_ms(df["open_time"].iloc[-2])
+            if symbol and interval and not await self._filter.check(
+                signal_type, high, low, symbol, interval, indicator_key, bar_time
             ):
                 self.logger.info(
                     f"[{symbol}] {interval} {signal_type} filtreden geçemedi ({indicator_key})"
@@ -285,8 +295,9 @@ class SignalEngine:
             indicator_key = "MA200_Cross"
             high = float(curr[COL_HIGH])
             low  = float(curr[COL_LOW])
-            if symbol and interval and not self._filter.check(
-                signal_type, high, low, symbol, interval, indicator_key
+            bar_time = _bar_time_from_open_ms(curr["open_time"])
+            if symbol and interval and not await self._filter.check(
+                signal_type, high, low, symbol, interval, indicator_key, bar_time
             ):
                 self.logger.info(
                     f"[{symbol}] {interval} {signal_type} filtreden geçemedi ({indicator_key})"
@@ -335,9 +346,10 @@ class SignalEngine:
         indicator_key = "Supertrend(10,3.0)"
         high = float(df_closed[COL_HIGH].iloc[-1])
         low  = float(df_closed[COL_LOW].iloc[-1])
+        bar_time = _bar_time_from_open_ms(df_closed["open_time"].iloc[-1])
 
         if symbol and interval:
-            if not self._filter.check(signal_type, high, low, symbol, interval, indicator_key):
+            if not await self._filter.check(signal_type, high, low, symbol, interval, indicator_key, bar_time):
                 self.logger.info(
                     f"[{symbol}] {interval} {signal_type} filtreden geçemedi ({indicator_key})"
                 )
@@ -387,9 +399,10 @@ class SignalEngine:
         indicator_key = "HA_Cross"
         high = float(curr[COL_HIGH])
         low  = float(curr[COL_LOW])
+        bar_time = _bar_time_from_open_ms(curr["open_time"])
 
-        if symbol and interval and not self._filter.check(
-            signal_type, high, low, symbol, interval, indicator_key
+        if symbol and interval and not await self._filter.check(
+            signal_type, high, low, symbol, interval, indicator_key, bar_time
         ):
             self.logger.info(
                 f"[{symbol}] {interval} {signal_type} filtreden geçemedi ({indicator_key})"
@@ -455,13 +468,42 @@ class SignalEngine:
             return {name: "ERROR" for name in tasks}
 
 
-    async def save_filter_state(self) -> None:
-        from utils.redis_client import RedisClient
-        await self._filter.save_to_redis(RedisClient)
+    async def replay_filter_state(
+        self, df: pd.DataFrame, symbol: str, interval: str, replay_from_ms: int
+    ) -> int:
+        """Bir gap sonrası (ör. PC kapalıyken kaçırılan bar'lar) SignalFilter
+        referans noktalarını (last_short_high/last_long_low) gerçek geçmiş fiyat
+        hareketiyle senkronize eder.
 
-    async def load_filter_state(self) -> None:
-        from utils.redis_client import RedisClient
-        await self._filter.load_from_redis(RedisClient)
+        df: indikatörleri zaten hesaplanmış (add_all_indicators uygulanmış), gap +
+        yeterli öncesi bağlamı içeren tam bar dizisi. replay_from_ms'den itibaren
+        her barı sırayla "az önce kapandı" gibi simüle edip calculate_all_signals'ı
+        çağırır — dönen sinyaller ATILIR (gerçek DB kaydı/paper trade tetiklenmez),
+        tek amaç bu çağrıların içindeki SignalFilter.check()'in signal_filter_events
+        tablosuna yazdığı satırlar (kabul/red fark etmez, her deneme kaydedilir).
+
+        Downtime'da kaçırılan gerçek sinyalleri GERİ GETİRMEZ (o fırsatlar kalıcı
+        olarak kaybolmuştur) — sadece bir sonraki gerçek sinyalin, günler önceki
+        donmuş bir referans yerine, doğru/güncel referansla değerlendirilmesini
+        sağlar.
+
+        Returns: replay edilen bar sayısı.
+        """
+        if df.empty or "open_time" not in df.columns:
+            return 0
+        replay_positions = df.index[df["open_time"] >= replay_from_ms]
+        if len(replay_positions) == 0:
+            return 0
+        start_pos = df.index.get_loc(replay_positions[0])
+        replayed = 0
+        for pos in range(start_pos, len(df)):
+            window = df.iloc[: pos + 1]
+            try:
+                await self.calculate_all_signals(window, symbol=symbol, interval=interval)
+                replayed += 1
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                self.logger.debug("[Replay] %s %s bar %d hata: %s", symbol, interval, pos, e)
+        return replayed
 
 
 # --- Global Signal Engine Instance ---

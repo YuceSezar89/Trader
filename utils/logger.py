@@ -4,6 +4,7 @@ Tüm modüller için standardize edilmiş logging yapısı
 """
 
 import logging
+import multiprocessing
 import os
 import sys
 from datetime import datetime
@@ -12,12 +13,30 @@ from typing import Dict, Optional
 from config import Config
 
 
+_ENTRY_LOG_FILES = {
+    "signal_service": "signal_service.log",
+}
+
+
+def _log_filename() -> str:
+    """Process'in giriş script'ine göre ayrı log dosyası seçer.
+
+    run_services.py ve signal_service.py ayrı OS process'leri — ikisi de aynı
+    dosyaya RotatingFileHandler ile yazarsa (process'ler arası koordinasyon
+    olmadığı için) rotasyonlar birbirini bozar: biri dosyayı .log.1'e çevirip
+    yeni .log açtığında, diğer process eski (artık unlink edilmiş) dosya
+    tanıtıcısına sessizce yazmaya devam eder, o satırlar kaybolur. Her process
+    kendi log dosyasına yazınca bu risk ortadan kalkar."""
+    entry = os.path.splitext(os.path.basename(sys.argv[0]))[0] if sys.argv and sys.argv[0] else ""
+    return _ENTRY_LOG_FILES.get(entry, "trader_panel.log")
+
+
 class TRaderLogger:
     """Merkezi logging sınıfı"""
-    
+
     _loggers: Dict[str, logging.Logger] = {}
     _configured = False
-    
+
     @classmethod
     def setup_logging(cls):
         """Merkezi logging yapılandırması"""
@@ -48,24 +67,32 @@ class TRaderLogger:
             )
             console_handler.setFormatter(console_formatter)
 
-        # File handler (rotating)
-        file_handler = RotatingFileHandler(
-            os.path.join(Config.LOG_DIR, 'trader_panel.log'),
-            maxBytes=Config.LOG_FILE_MAX_SIZE,
-            backupCount=Config.LOG_FILE_BACKUP_COUNT,
-            encoding='utf-8'
-        )
-        file_handler.setLevel(logging.DEBUG)
-        file_formatter = logging.Formatter(
-            Config.LOG_FORMAT,
-            datefmt=Config.LOG_DATE_FORMAT
-        )
-        file_handler.setFormatter(file_formatter)
-        
+        # File handler (rotating) — sadece ana process'te açılır. ProcessPoolExecutor
+        # worker'ları sys.argv'yi ana process'ten miras aldığı için (spawn ile bile)
+        # buradaki dosya adı aynı çıkar; her worker kendi RotatingFileHandler'ını
+        # açarsa aynı dosyaya koordinasyonsuz N process yazar, rotasyonlar birbirini
+        # ezer ve satırlar sessizce kaybolur (signal_service.py'nin metrik havuzunda
+        # canlı tespit edildi). Worker'larda dosyaya yazmak yerine sessiz kalınır.
+        if multiprocessing.current_process().name == "MainProcess":
+            file_handler = RotatingFileHandler(
+                os.path.join(Config.LOG_DIR, _log_filename()),
+                maxBytes=Config.LOG_FILE_MAX_SIZE,
+                backupCount=Config.LOG_FILE_BACKUP_COUNT,
+                encoding='utf-8'
+            )
+            file_handler.setLevel(logging.DEBUG)
+            file_formatter = logging.Formatter(
+                Config.LOG_FORMAT,
+                datefmt=Config.LOG_DATE_FORMAT
+            )
+            file_handler.setFormatter(file_formatter)
+            root_logger.addHandler(file_handler)
+        else:
+            root_logger.addHandler(logging.NullHandler())
+
         # Handler'ları ekle
         if console_handler is not None:
             root_logger.addHandler(console_handler)
-        root_logger.addHandler(file_handler)
         
         # Also set python-binance websocket client logger to DEBUG to capture CLOSE frames and details
         try:

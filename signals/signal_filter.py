@@ -6,44 +6,38 @@ Kural:
 - Short geçerli : short sinyalinin mumunun low'u  < önceki long sinyalinin low'u
 - İlk sinyal (karşı referans yok): her zaman geçersiz (PineScript na koruması)
 
-State key: (symbol, interval, indicator)
+Referans noktaları signal_filter_events tablosunda tutulur (bkz. migration 016)
+— her deneme (kabul/red fark etmeksizin) buraya loglanır. Önceki tasarım
+(in-memory dict + Redis persist) restart'ta ve iki process (live_data_manager +
+signal_service) arasında senkron/staleness sorunlarına yol açıyordu; DB tek
+kaynak olduğu için bu sorun yapısal olarak ortadan kalkar.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from datetime import datetime
+from typing import Optional
+
+from sqlalchemy import text
+
+from database.engine import get_session
 
 logger = logging.getLogger(__name__)
-
-_REDIS_KEY = "signal_filter_state"
-
-
-@dataclass
-class _FilterState:
-    last_short_high: Optional[float] = None
-    last_long_low: Optional[float] = None
 
 
 class SignalFilter:
     """
-    Sinyal filtresi — state Redis'e persist edilir, restart-proof.
+    Sinyal filtresi — referans noktaları DB'den (signal_filter_events) okunur.
 
     Kullanım:
         f = SignalFilter()
-        valid = f.check("Long", high=105.0, low=100.0,
-                        symbol="BTCUSDT", interval="1h", indicator="RSI_Cross")
+        valid = await f.check("Long", high=105.0, low=100.0,
+                              symbol="BTCUSDT", interval="1h", indicator="RSI_Cross",
+                              bar_time=datetime.now())
     """
 
-    def __init__(self) -> None:
-        self._state: dict[tuple, _FilterState] = {}
-        self._dirty: bool = False
-
-    def _key(self, symbol: str, interval: str, indicator: str) -> tuple:
-        return (symbol, interval, indicator)
-
-    def check(
+    async def check(
         self,
         signal_type: str,
         high: float,
@@ -51,77 +45,81 @@ class SignalFilter:
         symbol: str,
         interval: str,
         indicator: str,
+        bar_time: datetime,
     ) -> bool:
         """
-        Sinyalin geçerli olup olmadığını döner ve state'i günceller.
-
-        PineScript sırasını korur:
-          1. Önceki referans değerleri yakala (prev*)
-          2. State'i güncelle
-          3. Filtre koşulunu kontrol et (prev* kullanılır)
+        Sinyalin geçerli olup olmadığını DB'den sorgulayarak döner ve bu
+        denemeyi (kabul/red fark etmeksizin) signal_filter_events'e kaydeder.
         """
-        key = self._key(symbol, interval, indicator)
-        if key not in self._state:
-            self._state[key] = _FilterState()
+        if signal_type not in ("Long", "Short"):
+            return False
 
-        state = self._state[key]
+        opposite = "Long" if signal_type == "Short" else "Short"
 
-        prev_short_high = state.last_short_high
-        prev_long_low = state.last_long_low
-
-        if signal_type == "Short":
-            state.last_short_high = high
-            self._dirty = True
-            if prev_long_low is None:
-                return False
-            return low < prev_long_low
-
-        if signal_type == "Long":
-            state.last_long_low = low
-            self._dirty = True
-            if prev_short_high is None:
-                return False
-            return high > prev_short_high
-
-        return False
-
-    async def save_to_redis(self, redis_client: Any) -> None:
-        if not self._dirty:
-            return
-        data: Dict[str, Dict[str, Optional[float]]] = {
-            f"{k[0]}:{k[1]}:{k[2]}": {
-                "last_short_high": v.last_short_high,
-                "last_long_low": v.last_long_low,
-            }
-            for k, v in self._state.items()
-        }
         try:
-            await redis_client.set_json(_REDIS_KEY, data)
-            self._dirty = False
-            logger.debug("SignalFilter state Redis'e kaydedildi (%d key)", len(data))
-        except Exception as e:
-            logger.warning("SignalFilter state kaydetme hatası: %s", e)
+            async with get_session() as session:
+                result = await session.execute(
+                    text("""
+                        SELECT high, low FROM signal_filter_events
+                        WHERE symbol = :symbol AND interval = :interval
+                          AND indicator = :indicator AND signal_type = :opposite
+                        ORDER BY bar_time DESC LIMIT 1
+                    """),
+                    {"symbol": symbol, "interval": interval, "indicator": indicator, "opposite": opposite},
+                )
+                row = result.fetchone()
 
-    async def load_from_redis(self, redis_client: Any) -> None:
-        try:
-            data = await redis_client.get_json(_REDIS_KEY)
-            if not data:
-                logger.info("SignalFilter: Redis'te state yok, sıfırdan başlanıyor.")
-                return
-            for key_str, vals in data.items():
-                parts = key_str.split(":", 2)
-                if len(parts) == 3:
-                    self._state[tuple(parts)] = _FilterState(
-                        last_short_high=vals.get("last_short_high"),
-                        last_long_low=vals.get("last_long_low"),
-                    )
-            logger.info("SignalFilter state Redis'ten yüklendi (%d key)", len(self._state))
-        except Exception as e:
-            logger.warning("SignalFilter state yükleme hatası: %s", e)
+                if signal_type == "Short":
+                    passed = row is not None and low < row[1]
+                else:
+                    passed = row is not None and high > row[0]
 
-    def reset(self, symbol: str, interval: str, indicator: str) -> None:
-        """Belirli bir key'in state'ini sıfırlar."""
-        self._state.pop(self._key(symbol, interval, indicator), None)
+                await session.execute(
+                    text("""
+                        INSERT INTO signal_filter_events
+                        (symbol, interval, indicator, signal_type, high, low, passed, bar_time, created_at)
+                        VALUES (:symbol, :interval, :indicator, :signal_type, :high, :low, :passed, :bar_time, :created_at)
+                    """),
+                    {
+                        "symbol": symbol, "interval": interval, "indicator": indicator,
+                        "signal_type": signal_type, "high": high, "low": low,
+                        "passed": passed, "bar_time": bar_time, "created_at": datetime.now(),
+                    },
+                )
+            return passed
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.warning(
+                "SignalFilter DB hatası [%s:%s:%s]: %s — fail-closed (reddedildi)",
+                symbol, interval, indicator, e,
+            )
+            return False
 
-    def reset_all(self) -> None:
-        self._state.clear()
+    async def last_reference(
+        self, symbol: str, interval: str, indicator: str, signal_type: str
+    ) -> Optional[tuple[float, float]]:
+        """Diagnostik/görselleştirme amaçlı: bu key için en son (high, low) olayını döner."""
+        async with get_session() as session:
+            result = await session.execute(
+                text("""
+                    SELECT high, low FROM signal_filter_events
+                    WHERE symbol = :symbol AND interval = :interval
+                      AND indicator = :indicator AND signal_type = :signal_type
+                    ORDER BY bar_time DESC LIMIT 1
+                """),
+                {"symbol": symbol, "interval": interval, "indicator": indicator, "signal_type": signal_type},
+            )
+            row = result.fetchone()
+            return (row[0], row[1]) if row else None
+
+    async def cleanup(self, symbol: str, interval: str, indicator: str) -> None:
+        """Bir (symbol, interval, indicator) key'inin tüm olaylarını siler —
+        analiz/backtest scriptlerinin (ör. scripts/compare_filter_output.py)
+        kendi izole symbol'lerini temizlemesi için, canlı verilere dokunmaz."""
+        async with get_session() as session:
+            await session.execute(
+                text("""
+                    DELETE FROM signal_filter_events
+                    WHERE symbol = :symbol AND interval = :interval AND indicator = :indicator
+                """),
+                {"symbol": symbol, "interval": interval, "indicator": indicator},
+            )

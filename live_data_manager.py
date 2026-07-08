@@ -2,11 +2,8 @@ import asyncio
 import concurrent.futures
 import json
 import logging
-import os
-import sys
 import time
 from datetime import datetime
-from logging.handlers import RotatingFileHandler
 from typing import Any, Dict, List, Optional, Tuple
 
 import redis.asyncio as aioredis
@@ -42,6 +39,7 @@ from utils.kline_schema import check_kline_schema
 from utils.redis_client import RedisClient
 from utils.heartbeat import beat
 from utils.telegram_notify import send_telegram_message
+from utils.logger import get_logger
 
 # MTF init/refresh için ayrı thread pool — default executor'ı (WS sinyalleri) bloklamaz
 _MTF_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=12, thread_name_prefix="mtf_init")
@@ -58,8 +56,18 @@ _MIN_BOOTSTRAP_BARS = 30
 
 def _merge_tick_row(buf: pd.DataFrame, tick_row: dict, limit: int) -> pd.DataFrame:
     """Forming bar satırını buffer'a ekler — CPU-ağır pandas işlemi, event loop'u
-    bloklamaması için executor'da çalıştırılır (bkz. _handle_tick)."""
+    bloklamaması için executor'da çalıştırılır (bkz. _handle_tick).
+
+    Son satır zaten aynı open_time'a sahipse (forming bar zaten yerinde — en sık
+    görülen durum), pd.concat'in blok birleştirme maliyetinden kaçınmak için
+    yerinde satır güncellemesi yapılır; yeni bar açıldığında (nadir) concat'e
+    düşer."""
     tick_open_time = tick_row["open_time"]
+    if "open_time" in buf.columns and len(buf) and buf["open_time"].iat[-1] == tick_open_time:
+        out = buf.copy()
+        cols = list(tick_row.keys())
+        out.iloc[-1, out.columns.get_indexer(cols)] = list(tick_row.values())
+        return out
     base = buf[buf["open_time"] != tick_open_time] if "open_time" in buf.columns else buf
     return pd.concat([base, pd.DataFrame([tick_row])], ignore_index=True).tail(limit)
 
@@ -130,42 +138,12 @@ def _merge_closed_bar_and_index(
         return add_all_indicators(merged), None
 
 
-def setup_logging():
-    """live_data_manager için özel loglama ayarlarını yapar."""
-    log_dir = Config.LOG_DIR
-    if not os.path.exists(log_dir):
-        os.makedirs(log_dir)
-
-    logger = logging.getLogger(__name__)
-    logger.setLevel(Config.LOG_LEVEL)
-    logger.propagate = False  # Root logger'a logların gitmesini engelle
-
-    # Handler'ların tekrar tekrar eklenmesini önle
-    if logger.hasHandlers():
-        logger.handlers.clear()
-
-    # Dosya Handler'ı (Rotating)
-    file_handler = RotatingFileHandler(
-        os.path.join(log_dir, "live_data_manager.log"),
-        maxBytes=Config.LOG_FILE_MAX_SIZE,
-        backupCount=Config.LOG_FILE_BACKUP_COUNT,
-    )
-    formatter = logging.Formatter(Config.LOG_FORMAT, datefmt=Config.LOG_DATE_FORMAT)
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
-
-    # Konsol Handler'ı — sadece terminale bağlıyken (nohup'ta stdout
-    # services.log'a yönlendirilir, kopya akış dosyayı sınırsız büyütür)
-    if sys.stdout.isatty():
-        stream_handler = logging.StreamHandler()
-        stream_handler.setFormatter(formatter)
-        logger.addHandler(stream_handler)
-
-    return logger
-
-
 # --- Logging Kurulumu ---
-logger = setup_logging()
+# Merkezi utils.logger sistemi kullanılıyor — daha önce bu modülün kendi ayrı
+# setup_logging()'i vardı (propagate=False ile izole, logs/live_data_manager.log'a
+# yazan), bu yüzden bu modülün tetikleme logları (🎯, 🕯️) ana log dosyasında hiç
+# görünmüyordu (7 Tem'de saatler süren bir teşhis yanlışına yol açtı).
+logger = get_logger(__name__)
 
 
 class LiveDataManager:
@@ -213,6 +191,7 @@ class LiveDataManager:
         self.db_lock = asyncio.Lock()  # Veritabanı yazma işlemleri için kilit
         self._startup_lookback_days: float = 1.0
         self._startup_fill_end_ms: int = 0
+        self._gap_start_ms: Dict[str, int] = {}
         self._oi_cache: Dict[str, dict] = {}  # OI in-memory cache
 
         # Multi-WebSocket configuration
@@ -650,7 +629,9 @@ class LiveDataManager:
                 # Get reference data for this timeframe
                 ref_df = pd.DataFrame()
                 if self.ref_symbol in self.mtf_buffers and interval in self.mtf_buffers[self.ref_symbol]:
-                    ref_df = self.mtf_buffers[self.ref_symbol][interval].copy()
+                    ref_df = await loop.run_in_executor(
+                        _MTF_EXECUTOR, pd.DataFrame.copy, self.mtf_buffers[self.ref_symbol][interval]
+                    )
 
                 # Minimum bar requirements per timeframe
                 min_bars = {'1m': 200, '5m': 100, '15m': 67, '1h': 24, '4h': 12, '1d': 7}.get(interval, 100)
@@ -658,14 +639,18 @@ class LiveDataManager:
                 if not ref_df.empty and len(self.mtf_buffers[symbol][interval]) >= min_bars:
                     oi_info = self._oi_cache.get(symbol)
                     oi_data_json = json.dumps(oi_info) if oi_info else None
+                    df_copy = await loop.run_in_executor(
+                        _MTF_EXECUTOR, pd.DataFrame.copy, self.mtf_buffers[symbol][interval]
+                    )
                     task = asyncio.create_task(
                         process_and_enrich_signals(
                             symbol=symbol,
-                            df=self.mtf_buffers[symbol][interval].copy(),
+                            df=df_copy,
                             ref_df=ref_df,
                             interval=interval,
                             oi_data=oi_data_json,
                             symbol_buffers=self.mtf_buffers.get(symbol, {}),
+                            dry_run=(Config.SIGNAL_SOURCE == "yeni"),
                         )
                     )
                     self.processing_tasks.add(task)
@@ -780,6 +765,7 @@ class LiveDataManager:
                 interval=self.interval,
                 oi_data=oi_data_json,
                 symbol_buffers=self.mtf_buffers.get(symbol, {}),
+                dry_run=(Config.SIGNAL_SOURCE == "yeni"),
             )
         except Exception as e:
             logger.error(f"Sinyal işleme ana hatası - {symbol}: {e}", exc_info=True)
@@ -1230,8 +1216,14 @@ class LiveDataManager:
                         interval=timeframe,
                         oi_data=oi_data_json,
                         symbol_buffers=self.mtf_buffers.get(symbol, {}),
+                        dry_run=(Config.SIGNAL_SOURCE == "yeni"),
                     )
                     logger.info(f"🎯 [{symbol}] {timeframe} MTF sinyali üretimi tamamlandı (process_and_enrich_signals)")
+                    # _update_and_process_symbol_mtf'teki gibi kline_closed'a haber ver —
+                    # bu tetikleyici yol (1m agregasyonu + _check_mtf_signal_conditions)
+                    # olmadan signal_service.py bu sinyalleri hiç görmüyordu (7 Tem, dry-run
+                    # karşılaştırmasında HUSDT 15m MA200_Cross ile yakalandı).
+                    await RedisClient.publish_kline_closed_event(symbol, timeframe, int(last_row["open_time"]))
             else:
                 logger.debug(f"[{symbol}] {timeframe} sinyal koşulları sağlanmadı")
                 
@@ -1331,7 +1323,7 @@ class LiveDataManager:
                         continue
                     
                     # Health check - her 20 saniyede log
-                    logger.debug(
+                    logger.info(
                         f"💚 Keep-Alive Health Check: Bağlantı sağlıklı "
                         f"(son mesaj: {time_since_last_msg:.1f}s önce)"
                     )
@@ -1485,7 +1477,6 @@ class LiveDataManager:
         _deferred_sync_historical sadece kuyruktan doldurur; WebSocket başlamadan önce
         oluşan iç gap'leri (örn. PostInit penceresi) bu metot yakalar.
         """
-        import time as _time
         await asyncio.sleep(delay_seconds)
         logger.info("[DeferredGapCheck] Son 1 saatin iç gap analizi başlıyor...")
         symbols_list = list(self.symbols)
@@ -1562,8 +1553,6 @@ class LiveDataManager:
     async def _startup_gap_fill(self) -> set[str]:
         """Startup gap fill: 1m için dinamik lookback ile gap doldurur.
         Gap doldurulan sembollerin setini döndürür (MTF init optimizasyonu için)."""
-        import time as _time
-
         _INTERVAL_MS = 60_000
         _THRESHOLD_MS = _INTERVAL_MS * 2
         _MAX_LOOKBACK_DAYS = 30
@@ -1590,7 +1579,7 @@ class LiveDataManager:
             logger.warning("[Startup] Son kayıt sorgusu başarısız: %s", exc)
             last_1m_ms = None
 
-        now_ms = int(_time.time() * 1000)
+        now_ms = int(time.time() * 1000)
         if last_1m_ms:
             offline_ms = max(now_ms - last_1m_ms, 0)
             lookback_days = min(max(offline_ms / 86_400_000, 1), _MAX_LOOKBACK_DAYS)
@@ -1696,9 +1685,67 @@ class LiveDataManager:
         else:
             logger.info("[Startup] 1m: gap yok.")
 
-        self._startup_fill_end_ms = int(_time.time() * 1000)
+        self._startup_fill_end_ms = int(time.time() * 1000)
         self._startup_lookback_days = float(lookback_days)
+        # SignalFilter replay'i için her sembolün en erken gap başlangıcı saklanır
+        # (bkz. _background_startup — sinyal filtresi referans noktalarını bu
+        # zamandan itibaren geçmiş fiyat hareketiyle senkronize eder).
+        self._gap_start_ms = {sym: min(gs for gs, _ in gaps) for sym, gaps in all_gaps.items()}
         return set(all_gaps.keys())
+
+    async def _replay_filter_state_for_gaps(self, gap_starts: Dict[str, int], source: str = "") -> None:
+        """Gap'i olan semboller için SignalFilter referans noktalarını (bkz.
+        SignalEngine.replay_filter_state) downtime süresince gerçekleşen fiyat
+        hareketiyle senkronize eder. Binance'ten DOĞRUDAN gap aralığını çeker —
+        canlı MTF buffer'ının boyut sınırına (mtf_buffer_limits, 5m/15m için
+        ~16-17 saat) bağımlı değildir, bu yüzden çok günlük gap'lerde de çalışır.
+
+        gap_starts: sembol -> bu sembolün en erken gap başlangıcı (ms epoch).
+        Hem başlangıç gap doldurmasından (_background_startup) hem runtime gap
+        iyileştirmesinden (_continuous_gap_heal_loop) ortak çağrılır.
+        """
+        from signals.signal_engine import signal_engine as _se
+        from signals.signal_processor import _SIGNAL_GENERATION_TFS
+
+        _BAR_MS = {"5m": 300_000, "15m": 900_000}
+        _MAX_API_LIMIT = 1500
+        _CONTEXT_BARS = 210  # MA200 gibi indikatörlerin warm-up'ı için gap öncesi ek bağlam
+        now_ms = int(time.time() * 1000)
+        loop = asyncio.get_event_loop()
+        replay_bars = 0
+
+        for sym, gap_start in gap_starts.items():
+            if gap_start is None:
+                continue
+            for tf in _SIGNAL_GENERATION_TFS:
+                bar_ms = _BAR_MS.get(tf)
+                if bar_ms is None:
+                    continue
+                total_bars = int((now_ms - gap_start) / bar_ms) + _CONTEXT_BARS
+                try:
+                    if total_bars <= _MAX_API_LIMIT:
+                        df = await BinanceClientManager.fetch_klines(
+                            symbol=sym, interval=tf, limit=total_bars,
+                            startTime=gap_start - _CONTEXT_BARS * bar_ms,
+                        )
+                    else:
+                        # Gap API limitinden uzun — en güncel (şu ana en yakın) kısmı önceliklendir.
+                        df = await BinanceClientManager.fetch_klines(
+                            symbol=sym, interval=tf, limit=_MAX_API_LIMIT,
+                        )
+                except Exception as exc:  # pylint: disable=broad-exception-caught
+                    logger.debug("[Replay] %s %s veri çekilemedi: %s", sym, tf, exc)
+                    continue
+                if df.empty:
+                    continue
+                df_ind = await loop.run_in_executor(_MTF_EXECUTOR, add_all_indicators, df)
+                replay_bars += await _se.replay_filter_state(df_ind, sym, tf, gap_start)
+
+        logger.info(
+            "[%s] SignalFilter replay: %d sembol, %d bar "
+            "(gap sırasında kaçırılan crossover'lar referans noktalarına yansıtıldı)",
+            source or "Replay", len(gap_starts), replay_bars,
+        )
 
     async def _continuous_gap_heal_loop(self) -> None:
         """Her 5 dakikada bir son 1 saatin 1m gap'lerini ve kuyruk gap'lerini tarar ve doldurur."""
@@ -1800,6 +1847,8 @@ class LiveDataManager:
                         for sym in gaps:
                             await self._refresh_mtf_redis(sym)
                         logger.info("[GapHeal] %d sembol MTF Redis yenilendi.", len(gaps))
+                    gap_starts = {sym: min(gs for gs, _ in sym_gaps) for sym, sym_gaps in gaps.items()}
+                    await self._replay_filter_state_for_gaps(gap_starts, source="GapHeal")
 
             except Exception as exc:
                 logger.error("[GapHeal] Hata: %s", exc)
@@ -1837,12 +1886,10 @@ class LiveDataManager:
 
     async def _post_init_catchup(self) -> None:
         """MTF init sonrası startup penceresindeki 1m gap'leri doldurur ve MTF Redis'i günceller."""
-        import time as _time
-
         if not self._startup_fill_end_ms:
             return
 
-        now_ms = int(_time.time() * 1000)
+        now_ms = int(time.time() * 1000)
         window_ms = now_ms - self._startup_fill_end_ms
         if window_ms < 60_000:
             return
@@ -2018,8 +2065,6 @@ class LiveDataManager:
                         if raw is None or raw.empty or len(raw) < PRE_BARS + POST_BARS + 2:
                             continue
 
-                        from utils.vpmv import compute_series
-                        scores = compute_series(raw, sig.signal_type)
                         sig_time = sig.opened_at
                         if hasattr(raw.index, 'tz'):
                             raw_times = raw.index
@@ -2138,16 +2183,6 @@ class LiveDataManager:
                     pass
                 redis_conn = None
 
-    async def _filter_save_loop(self) -> None:
-        """Her 30s'de SignalFilter state'ini Redis'e kaydeder (restart-proof)."""
-        from signals.signal_engine import signal_engine as _se
-        while True:
-            await asyncio.sleep(30)
-            try:
-                await _se.save_filter_state()
-            except Exception as e:  # pylint: disable=broad-exception-caught
-                logger.debug("SignalFilter state kaydetme hatası: %s", e)
-
     async def _manual_refresh_loop(self) -> None:
         """UI'dan açılan manuel işlemleri algılayıp manual_manager cache'ini yeniler."""
         redis = RedisClient.get_client()
@@ -2163,31 +2198,41 @@ class LiveDataManager:
                 logger.debug("[ManualTrade] refresh kontrolü başarısız: %s", exc)
 
     async def _health_loop(self):
-        """Her 15 dakikada price_data tazeliğini kontrol eder; gap tespit ederse doldurur."""
+        """Her 15 dakikada price_data tazeliğini kontrol eder; gap tespit ederse doldurur.
+
+        Sembol başına DB sorgusu (get_last_timestamp) birbirinden bağımsız — semaphore'lu
+        asyncio.gather ile paralel çalıştırılıyor (Binance REST çağrısı değil, saf DB
+        okuma olduğu için rate-limit kısıtı yok; DB pool kapasitesiyle (20+30 overflow,
+        database/engine.py) paylaşılan bir üst sınır yeterli)."""
         _CHECK_INTERVAL = 15 * 60
         _MAX_GAP_MS = 10 * 60 * 1000  # 10 dakika (ms cinsinden)
+        _GAP_SCAN_CONCURRENCY = 15
 
         await asyncio.sleep(60)  # Başlangıç stabilizasyonu için bekle
+        semaphore = asyncio.Semaphore(_GAP_SCAN_CONCURRENCY)
 
-        while True:
-            await asyncio.sleep(_CHECK_INTERVAL)
-            stale: list[str] = []
-            now_ms = time.time() * 1000
-
-            for symbol in list(self.symbols):
+        async def _check_symbol(symbol: str, now_ms: float) -> Optional[str]:
+            async with semaphore:
                 try:
                     last_ts = await get_last_timestamp(symbol, interval="1m")
                     if last_ts is None:
-                        continue
+                        return None
                     if now_ms - last_ts > _MAX_GAP_MS:
                         gap_min = (now_ms - last_ts) / 60_000
                         logger.warning(
                             "[Health] %s — %.1f dakika gap tespit edildi, dolduruluyor",
                             symbol, gap_min,
                         )
-                        stale.append(symbol)
+                        return symbol
                 except Exception as exc:  # pylint: disable=broad-exception-caught
                     logger.debug("[Health] %s timestamp kontrolü hatası: %s", symbol, exc)
+                return None
+
+        while True:
+            await asyncio.sleep(_CHECK_INTERVAL)
+            now_ms = time.time() * 1000
+            results = await asyncio.gather(*[_check_symbol(s, now_ms) for s in list(self.symbols)])
+            stale = [s for s in results if s]
 
             for symbol in stale:
                 asyncio.create_task(self._sync_symbol_data(symbol))
@@ -2275,9 +2320,10 @@ class LiveDataManager:
         """
         try:
             logger.info("[BackgroundStartup] Başladı (WebSocket zaten aktif).")
-            from signals.signal_engine import signal_engine as _se
-            await _se.load_filter_state()
             filled_symbols = await self._startup_gap_fill()
+            if filled_symbols:
+                gap_starts = {sym: self._gap_start_ms[sym] for sym in filled_symbols if sym in self._gap_start_ms}
+                await self._replay_filter_state_for_gaps(gap_starts, source="BackgroundStartup")
             if self.mtf_enabled:
                 await self._initialize_mtf_dataframes(reload_symbols=filled_symbols)
             await self._post_init_catchup()
@@ -2307,7 +2353,6 @@ class LiveDataManager:
                 asyncio.create_task(self._price_publish_loop()),
                 asyncio.create_task(self._vpmv_post_loop()),
                 asyncio.create_task(self._manual_refresh_loop()),
-                asyncio.create_task(self._filter_save_loop()),
             ]
 
             logger.info(
@@ -2526,9 +2571,17 @@ async def main():
     await do_kirilimi_manager.load_open_symbols()
 
     logger.info("En yüksek hacimli semboller Binance'ten çekiliyor...")
-    symbols_to_track = await BinanceClientManager.get_top_volume_symbols_async(
-        limit=Config.SYMBOL_LIMIT
-    )
+    symbols_to_track: List[str] = []
+    for attempt in range(1, 4):
+        try:
+            symbols_to_track = await BinanceClientManager.get_top_volume_symbols_async(
+                limit=Config.SYMBOL_LIMIT
+            )
+            break
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.error(f"Sembol listesi çekilemedi (deneme {attempt}/3): {e}")
+            if attempt < 3:
+                await asyncio.sleep(5 * attempt)
     # Referans sembolün izleme listesinde olduğundan emin ol
     if Config.MARKET_REFERENCE_SYMBOL not in symbols_to_track:
         symbols_to_track.insert(0, Config.MARKET_REFERENCE_SYMBOL)

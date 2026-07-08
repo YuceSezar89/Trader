@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database.engine import get_session
 from database.models import Signal
 from signals.risk_policy import default_policy
-from utils.redis_client import RedisClient
+from utils.redis_client import RedisClient, SAFE_EXTERNAL_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -177,8 +177,9 @@ class SignalLifecycleManager:
                         symbol, interval, sig_type, new_sig.id, indicators,
                     )
                     try:
-                        await RedisClient.get_client().publish(
-                            "signal_opened", f"{symbol}:{interval}"
+                        await asyncio.wait_for(
+                            RedisClient.get_client().publish("signal_opened", f"{symbol}:{interval}"),
+                            timeout=SAFE_EXTERNAL_TIMEOUT,
                         )
                     except Exception as exc:  # pylint: disable=broad-exception-caught
                         logger.debug("signal_opened publish hatası: %s", exc)

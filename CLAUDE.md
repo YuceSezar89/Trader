@@ -16,6 +16,12 @@
 - Yorum satırı ekleme (gerekmedikçe)
 - Refaktör istenmedikçe çevresini temizleme
 - Her değişiklikten önce ilgili dosyayı oku
+- Çözüm/plan önermeden önce ilgili kodu/veriyi kontrol et — teoriyle konuşup sonra
+  düzeltme zaman kaybettiriyor (ör. bir tablonun hangi interval'ları kapsadığını,
+  bir Redis key'inin O AN ne içerdiğini önce sorgula, sonra planı yaz)
+- Bir yenilik/değişiklik yaparken sadece dokunduğun satırı değil, değişimin
+  etkilediği TÜM modülleri, fonksiyonları, tabloları/key'leri tara — eskisini
+  (var olan benzer mekanizmayı) kontrol etmeden yeni bir şey ekleme
 
 ## Kod Kalite Kuralları
 

@@ -4,7 +4,7 @@ import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from io import StringIO
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 import pyarrow as pa
@@ -16,6 +16,14 @@ logger = logging.getLogger(__name__)
 
 _ARROW_MAGIC = b"ARDF"
 _ARROW_EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="arrow")
+
+# Ana pool'un (BlockingConnectionPool) bağlantı-edinme timeout'u. Dıştan bu pool'a
+# karşı asyncio.wait_for ile sarılan HER çağrı, SAFE_EXTERNAL_TIMEOUT'tan kısa bir
+# süre kullanmamalı — aksi halde pool kendi temiz ConnectionError'ını fırlatamadan
+# dıştan iptal edilir, bu da bağlantının yarım kalmış edinme anında sızmasına yol
+# açabilir (7 Tem heartbeat donması kök neden analizinde tespit edilen risk).
+POOL_ACQUIRE_TIMEOUT = 3
+SAFE_EXTERNAL_TIMEOUT = POOL_ACQUIRE_TIMEOUT + 1
 
 
 class RedisClient:
@@ -75,9 +83,12 @@ class RedisClient:
                 Config.REDIS_URL,
                 decode_responses=True,
                 max_connections=300,
-                timeout=3,
+                timeout=POOL_ACQUIRE_TIMEOUT,
                 socket_keepalive=True,
                 socket_connect_timeout=5,
+                socket_timeout=10,        # komut cevabı için üst sınır — yoksa donmuş
+                                          # bağlantı havuza sonsuza dek geri dönmez
+                health_check_interval=30,  # boşta bağlantıları periyodik PING ile denetler
                 retry_on_timeout=True
             )
         return cls._pools[loop_id]
@@ -100,6 +111,10 @@ class RedisClient:
                 timeout=30,
                 socket_keepalive=True,
                 socket_connect_timeout=5,
+                socket_timeout=10,        # ana pool ile aynı gerekçe — donmuş bağlantı
+                                          # sonsuza dek havuzu kilitlemesin
+                health_check_interval=30,
+                retry_on_timeout=True,    # ana poolda vardı, burada eksikti — tutarlılık
             )
         return cls._binary_pools[loop_id]
 
@@ -342,9 +357,15 @@ class RedisClient:
 
         logger.info("Redis batch flusher başlatıldı (500ms)")
         while True:
-            await asyncio.sleep(0.5)
-            await cls.flush_pending_klines()
-            await beat("redis_batch_flush")
+            try:
+                await asyncio.sleep(0.5)
+                await cls.flush_pending_klines()
+                await beat("redis_batch_flush")
+            except asyncio.CancelledError:
+                logger.warning("Redis batch flusher iptal edildi")
+                raise
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                logger.error("Redis batch flusher döngü hatası: %s", e, exc_info=True)
 
     @classmethod
     async def publish_kline_update(cls, symbol: str, timeframe: str) -> None:

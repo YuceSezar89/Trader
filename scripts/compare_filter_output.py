@@ -13,6 +13,7 @@ PineScript parametreleri (değiştirilebilir):
 """
 
 import argparse
+import asyncio
 import sys
 from pathlib import Path
 
@@ -176,7 +177,7 @@ def fetch_ohlcv(
 
 # ── Ana akış ─────────────────────────────────────────────────────────────────
 
-def run(
+async def run(
     symbol: str, interval: str, limit: int, atr_length: int, factor: float,
     out_csv: str | None, from_date: str | None, to_date: str | None,
 ) -> None:
@@ -189,6 +190,13 @@ def run(
 
     filt = SignalFilter()
     indicator_key = f"Supertrend({atr_length},{factor})"
+    # Canlı sistem aynı (symbol, interval, indicator) key'ini gerçek sinyal
+    # filtrelemesi için kullanıyor — check() artık her denemeyi doğrudan
+    # signal_filter_events'e yazdığı için, gerçek symbol adıyla çalıştırmak bu
+    # analiz verisini canlı filtre referanslarına karıştırırdı. Binance
+    # sembollerinde "_" hiç geçmediğinden bu suffix gerçek bir sembolle asla
+    # çakışmaz.
+    filter_symbol = f"{symbol}__ANALYSIS"
 
     rows = []
     for _, row in df.iterrows():
@@ -196,23 +204,24 @@ def run(
             continue
 
         sig = "Long" if row["long_signal"] else "Short"
-        valid = filt.check(
+        opposite = "Short" if sig == "Long" else "Long"
+
+        # Referansı check()'ten ÖNCE al — check() denemeyi kaydettikten sonra
+        # bu satırın kendi high/low'u referansa karışmasın.
+        ref_pair = await filt.last_reference(filter_symbol, interval, indicator_key, opposite)
+        ref_label = "prevShortHigh" if sig == "Long" else "prevLongLow"
+        ref_val = (ref_pair[0] if sig == "Long" else ref_pair[1]) if ref_pair else None
+
+        bar_time = row["timestamp"].tz_localize(None) if row["timestamp"].tzinfo else row["timestamp"]
+        valid = await filt.check(
             sig,
             high=float(row["high"]),
             low=float(row["low"]),
-            symbol=symbol,
+            symbol=filter_symbol,
             interval=interval,
             indicator=indicator_key,
+            bar_time=bar_time,
         )
-
-        # Filtre referans değerini göster
-        state = filt._state.get((symbol, interval, indicator_key))
-        if sig == "Long":
-            ref_label = "prevShortHigh"
-            ref_val = state.last_short_high if state else None
-        else:
-            ref_label = "prevLongLow"
-            ref_val = state.last_long_low if state else None
 
         ts_str = row["timestamp"].tz_convert("Europe/Istanbul").strftime("%Y-%m-%d %H:%M")
         rows.append({
@@ -224,6 +233,8 @@ def run(
             "filter_ref_val": round(ref_val, 4) if ref_val is not None else "—",
             "valid": "✓" if valid else "✗",
         })
+
+    await filt.cleanup(filter_symbol, interval, indicator_key)
 
     result = pd.DataFrame(rows)
 
@@ -256,5 +267,5 @@ if __name__ == "__main__":
     parser.add_argument("--to",    default=None, dest="to_date",   help="Bitiş tarihi   (2025-10-02)")
     args = parser.parse_args()
 
-    run(args.symbol, args.interval, args.limit, args.atr_length, args.factor,
-        args.csv, args.from_date, args.to_date)
+    asyncio.run(run(args.symbol, args.interval, args.limit, args.atr_length, args.factor,
+        args.csv, args.from_date, args.to_date))

@@ -1,7 +1,8 @@
+import asyncio
 import time
 import numpy as np
 import pandas as pd
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
 from utils.logger import get_logger
 from signals.signal_engine import signal_engine
@@ -16,7 +17,7 @@ from utils.preprocessing import (
     normalize_volatility_0_100,
     normalize_price_0_100,
 )
-from utils.redis_client import RedisClient
+from utils.redis_client import RedisClient, SAFE_EXTERNAL_TIMEOUT
 from utils.vpmv import compute_pre, directional_volume
 from signals.paper_trade_manager import paper_trade_manager, ha_cross_manager, rsi_15m_manager
 from signals.risk_manager import risk_manager
@@ -32,7 +33,9 @@ async def _get_pt_flag() -> str:
     if now - _PT_FLAG_CACHE["ts"] < _PT_FLAG_TTL:
         return _PT_FLAG_CACHE["value"]
     try:
-        val = await RedisClient.get_client().get("settings:paper_trade_enabled")
+        val = await asyncio.wait_for(
+            RedisClient.get_client().get("settings:paper_trade_enabled"), timeout=SAFE_EXTERNAL_TIMEOUT
+        )
         _PT_FLAG_CACHE["value"] = str(val) if val is not None else "1"
         _PT_FLAG_CACHE["ts"] = now
     except Exception as exc:
@@ -396,10 +399,21 @@ async def process_and_enrich_signals(
     interval: str,
     oi_data: Optional[str] = None,
     symbol_buffers: Optional[dict] = None,
+    metrics_calculator: Optional[Callable[[pd.DataFrame, pd.DataFrame, str], Awaitable[pd.DataFrame]]] = None,
+    dry_run: bool = False,
 ) -> None:
     """
     Bir sembol için teknik sinyalleri hesaplar, finansal metriklerle zenginleştirir
     ve veritabanına kaydeder.
+
+    metrics_calculator: verilirse calculate_metrics yerine bu async çağrılır (ör.
+    signal_service.py'nin ProcessPoolExecutor sarmalayıcısı). None ise davranış
+    mevcut senkron çağrıyla birebir aynıdır — live_data_manager.py bu parametreyi
+    hiç geçmez, dolayısıyla etkilenmez.
+
+    dry_run: True ise sinyal sonuna kadar hesaplanır/loglanır ama DB'ye yazılmaz ve
+    paper trade tetiklenmez (signal_service.py'nin Faz 4 dry-run gözlem penceresi
+    için — varsayılan False, live_data_manager.py etkilenmez).
     """
     logger.info(f"[{symbol}] Sinyal işleme başlatıldı - DataFrame boyutu: {len(df)}, Ref boyutu: {len(ref_df)}")
 
@@ -427,7 +441,10 @@ async def process_and_enrich_signals(
             ref_df_prepared = ref_df.copy()
             ref_df_prepared.index = pd.Index(pd.to_datetime(ref_df_prepared["open_time"], unit="ms"))
 
-            df_with_metrics = calculate_metrics(df_prepared, ref_df_prepared, interval=interval)
+            if metrics_calculator is not None:
+                df_with_metrics = await metrics_calculator(df_prepared, ref_df_prepared, interval)
+            else:
+                df_with_metrics = calculate_metrics(df_prepared, ref_df_prepared, interval=interval)
             latest_metrics = df_with_metrics.iloc[-1].to_dict()
             alpha = latest_metrics.get("alpha")
             beta = latest_metrics.get("beta")
@@ -733,6 +750,20 @@ async def process_and_enrich_signals(
                 logger.info("CDL | %s | %s | pattern=%s", symbol, sig_type, _cdl)
 
                 logger.info(f"[{symbol}] Sinyal işleniyor: {signal_name} - {sig_type}")
+                if dry_run:
+                    logger.info(
+                        "[DRY-RUN] [%s] Sinyal işlenecekti (%s - %s) — DB'ye yazılmadı, "
+                        "paper trade tetiklenmedi", symbol, signal_name, sig_type,
+                    )
+                    try:
+                        await asyncio.wait_for(
+                            RedisClient.get_client().incr("metrics:sigsvc:dry_run_signal"),
+                            timeout=SAFE_EXTERNAL_TIMEOUT,
+                        )
+                    except Exception:  # pylint: disable=broad-exception-caught
+                        pass
+                    continue
+
                 signal_id = await signal_lifecycle_manager.process(enriched_signal, current_price=current_price)
                 logger.info(f"[{symbol}] Sinyal işlendi: ID {signal_id}")
                 if signal_id:
@@ -744,7 +775,9 @@ async def process_and_enrich_signals(
                         funding: Optional[float] = None
                         try:
                             import json as _json
-                            ticker_raw = await RedisClient.get_client().get(f"ticker:{symbol}")
+                            ticker_raw = await asyncio.wait_for(
+                                RedisClient.get_client().get(f"ticker:{symbol}"), timeout=SAFE_EXTERNAL_TIMEOUT
+                            )
                             if ticker_raw:
                                 ticker_d = _json.loads(ticker_raw)
                                 funding = ticker_d.get("funding_rate")
