@@ -101,6 +101,8 @@ class VpmvWorker(QThread):
             self.status_updated.emit(f"Redis bağlanamadı: {exc}")
             return
 
+        threading.Thread(target=self._subscribe_loop, daemon=True).start()
+
         _last_compute = 0.0
         _MIN_INTERVAL = 10.0
 
@@ -133,6 +135,48 @@ class VpmvWorker(QThread):
                     self.status_updated.emit("Veri yok")
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.error("VPMV hesaplama hatası: %s", exc, exc_info=True)
+
+    def _subscribe_loop(self) -> None:
+        """Redis pub/sub kanalını dinler; izlenen sinyallerden birinin TF'inde yeni
+        mum kapandığında _wake'i tetikler — önceden sadece 30s'lik poll vardı,
+        DivergenceWorker'daki desenle aynı (bkz. divergence_worker.py:264)."""
+        while self._running:
+            sub_redis = None
+            pubsub = None
+            try:
+                sub_redis = redis.Redis.from_url(
+                    self._redis_url, decode_responses=True, socket_connect_timeout=3
+                )
+                pubsub = sub_redis.pubsub()
+                pubsub.subscribe("kline_updated")
+                for message in pubsub.listen():
+                    if not self._running:
+                        return
+                    if message["type"] != "message":
+                        continue
+                    data = message.get("data", "")
+                    if ":" not in data:
+                        continue
+                    symbol, tf = data.rsplit(":", 1)
+                    with self._lock:
+                        relevant = any(
+                            sig.get("symbol") == symbol and sig.get("interval") == tf
+                            for sig in self._signals.values()
+                        )
+                    if relevant:
+                        self._wake.set()
+            except redis.RedisError as exc:
+                logger.warning("Pub/sub kesildi: %s — 5s sonra yeniden bağlanılıyor", exc)
+                if self._running:
+                    time.sleep(5)
+            finally:
+                try:
+                    if pubsub:
+                        pubsub.unsubscribe()
+                    if sub_redis:
+                        sub_redis.close()
+                except Exception:  # pylint: disable=broad-exception-caught
+                    pass
 
     def _compute(self, signals: dict) -> Optional[dict]:  # pylint: disable=too-many-locals
         series:         dict = {}
