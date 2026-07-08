@@ -27,7 +27,7 @@ from database.crud import (
     initialize_database,
     delete_symbol_data,
 )
-from database.engine import get_session
+from database.engine import get_session, run_with_db_timeout
 from sqlalchemy import text
 from signals.signal_processor import process_and_enrich_signals
 from signals.risk_manager import risk_manager
@@ -1762,25 +1762,28 @@ class LiveDataManager:
                 symbols_list = list(self.symbols)
 
                 # İç gap tespiti (LAG)
-                async with get_session() as session:
-                    result = await session.execute(
-                        text("""
-                            SELECT symbol, prev_ts, curr_ts
-                            FROM (
-                                SELECT symbol,
-                                       timestamp AS curr_ts,
-                                       LAG(timestamp) OVER (PARTITION BY symbol ORDER BY timestamp) AS prev_ts
-                                FROM price_data
-                                WHERE symbol = ANY(:syms) AND interval = '1m'
-                                  AND timestamp >= NOW() AT TIME ZONE 'Europe/Istanbul' - INTERVAL '1 hour'
-                            ) t
-                            WHERE prev_ts IS NOT NULL
-                              AND EXTRACT(EPOCH FROM (curr_ts - prev_ts)) * 1000 > :thresh
-                            ORDER BY symbol, prev_ts
-                        """),
-                        {"syms": symbols_list, "thresh": _THRESHOLD_MS},
-                    )
-                    rows = result.fetchall()
+                async def _fetch_lag_gaps():
+                    async with get_session() as session:
+                        result = await session.execute(
+                            text("""
+                                SELECT symbol, prev_ts, curr_ts
+                                FROM (
+                                    SELECT symbol,
+                                           timestamp AS curr_ts,
+                                           LAG(timestamp) OVER (PARTITION BY symbol ORDER BY timestamp) AS prev_ts
+                                    FROM price_data
+                                    WHERE symbol = ANY(:syms) AND interval = '1m'
+                                      AND timestamp >= NOW() AT TIME ZONE 'Europe/Istanbul' - INTERVAL '1 hour'
+                                ) t
+                                WHERE prev_ts IS NOT NULL
+                                  AND EXTRACT(EPOCH FROM (curr_ts - prev_ts)) * 1000 > :thresh
+                                ORDER BY symbol, prev_ts
+                            """),
+                            {"syms": symbols_list, "thresh": _THRESHOLD_MS},
+                        )
+                        return result.fetchall()
+
+                rows = await run_with_db_timeout(_fetch_lag_gaps())
 
                 gaps: dict[str, list[tuple[int, int]]] = {}
                 for sym, prev_dt, curr_dt in rows:
@@ -1789,17 +1792,20 @@ class LiveDataManager:
                     gaps.setdefault(sym, []).append((g_start, g_end))
 
                 # Kuyruk gap tespiti: son bar'dan şu ana kadar boşluk var mı?
-                async with get_session() as session:
-                    tail_result = await session.execute(
-                        text("""
-                            SELECT symbol, MAX(timestamp)
-                            FROM price_data
-                            WHERE symbol = ANY(:syms) AND interval = '1m'
-                            GROUP BY symbol
-                        """),
-                        {"syms": symbols_list},
-                    )
-                    tail_rows = tail_result.fetchall()
+                async def _fetch_tail_gaps():
+                    async with get_session() as session:
+                        tail_result = await session.execute(
+                            text("""
+                                SELECT symbol, MAX(timestamp)
+                                FROM price_data
+                                WHERE symbol = ANY(:syms) AND interval = '1m'
+                                GROUP BY symbol
+                            """),
+                            {"syms": symbols_list},
+                        )
+                        return tail_result.fetchall()
+
+                tail_rows = await run_with_db_timeout(_fetch_tail_gaps())
 
                 for sym, last_dt in tail_rows:
                     if last_dt is None:

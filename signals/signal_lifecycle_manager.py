@@ -18,7 +18,7 @@ from typing import Any, Dict, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database.engine import get_session
+from database.engine import get_session, run_with_db_timeout
 from database.models import Signal
 from signals.risk_policy import default_policy
 from utils.redis_client import RedisClient, SAFE_EXTERNAL_TIMEOUT
@@ -70,7 +70,7 @@ class SignalLifecycleManager:
         sig_type   = signal_data["signal_type"]
         open_price = float(signal_data["open_price"])
 
-        async with self._get_lock(symbol, interval):
+        async def _do_process() -> Optional[int]:
             async with get_session() as session:
                 try:
                     active = await self._get_active(session, symbol, interval)
@@ -190,76 +190,99 @@ class SignalLifecycleManager:
                     logger.error("[%s] sinyal işleme hatası: %s", symbol, exc, exc_info=True)
                     raise
 
+        async with self._get_lock(symbol, interval):
+            return await run_with_db_timeout(_do_process())
+
     async def sweep_timeouts(self) -> int:
         """Timeout eşiğini geçmiş aktif sinyalleri kapatır."""
-        closed = 0
-        async with get_session() as session:
-            try:
-                result = await session.execute(
-                    select(Signal).where(Signal.status == "active")
-                )
-                actives = result.scalars().all()
+        closed_holder = {"n": 0}
 
-                now = datetime.now()
-                for sig in actives:
-                    hours = TIMEOUT_HOURS.get(sig.interval, _DEFAULT_TIMEOUT)
-                    opened = sig.opened_at
-                    if isinstance(opened, datetime) and opened.tzinfo is not None:
-                        opened = opened.replace(tzinfo=None)
-                    if now - opened > timedelta(hours=hours):
-                        await self._close(session, sig, float(sig.open_price), "timeout")
-                        closed += 1
+        async def _do_sweep() -> None:
+            async with get_session() as session:
+                try:
+                    result = await session.execute(
+                        select(Signal).where(Signal.status == "active")
+                    )
+                    actives = result.scalars().all()
 
-                if closed:
-                    await session.commit()
-                    logger.info("Timeout sweep: %d sinyal kapatıldı", closed)
+                    now = datetime.now()
+                    for sig in actives:
+                        hours = TIMEOUT_HOURS.get(sig.interval, _DEFAULT_TIMEOUT)
+                        opened = sig.opened_at
+                        if isinstance(opened, datetime) and opened.tzinfo is not None:
+                            opened = opened.replace(tzinfo=None)
+                        if now - opened > timedelta(hours=hours):
+                            await self._close(session, sig, float(sig.open_price), "timeout")
+                            closed_holder["n"] += 1
 
-            except Exception as exc:
-                await session.rollback()
-                logger.error("Sweep hatası: %s", exc, exc_info=True)
+                    if closed_holder["n"]:
+                        await session.commit()
+                        logger.info("Timeout sweep: %d sinyal kapatıldı", closed_holder["n"])
 
-        return closed
+                except Exception as exc:
+                    await session.rollback()
+                    logger.error("Sweep hatası: %s", exc, exc_info=True)
+
+        try:
+            await run_with_db_timeout(_do_sweep())
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.error("Sweep hatası (dış): %s", exc)
+        return closed_holder["n"]
 
     async def close_stale(self, signal_id: int, close_price: float, reason: str = "reconciliation") -> bool:
         """Startup reconciliation veya harici tetikleyiciler için sinyal kapatır."""
-        async with get_session() as session:
-            try:
-                result = await session.execute(
-                    select(Signal).where(
-                        Signal.id == signal_id,
-                        Signal.status == "active",
+        async def _do_close() -> bool:
+            async with get_session() as session:
+                try:
+                    result = await session.execute(
+                        select(Signal).where(
+                            Signal.id == signal_id,
+                            Signal.status == "active",
+                        )
                     )
-                )
-                sig = result.scalar_one_or_none()
-                if not sig:
+                    sig = result.scalar_one_or_none()
+                    if not sig:
+                        return False
+                    await self._close(session, sig, close_price, reason)
+                    await session.commit()
+                    return True
+                except Exception as exc:
+                    await session.rollback()
+                    logger.error("Stale kapatma hatası (id=%s): %s", signal_id, exc, exc_info=True)
                     return False
-                await self._close(session, sig, close_price, reason)
-                await session.commit()
-                return True
-            except Exception as exc:
-                await session.rollback()
-                logger.error("Stale kapatma hatası (id=%s): %s", signal_id, exc, exc_info=True)
-                return False
+
+        try:
+            return await run_with_db_timeout(_do_close())
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.error("Stale kapatma zaman aşımı (id=%s): %s", signal_id, exc)
+            return False
 
     async def manual_close(self, signal_id: int, close_price: float) -> bool:
-        async with get_session() as session:
-            try:
-                result = await session.execute(
-                    select(Signal).where(
-                        Signal.id == signal_id,
-                        Signal.status == "active",
+        async def _do_manual_close() -> bool:
+            async with get_session() as session:
+                try:
+                    result = await session.execute(
+                        select(Signal).where(
+                            Signal.id == signal_id,
+                            Signal.status == "active",
+                        )
                     )
-                )
-                sig = result.scalar_one_or_none()
-                if not sig:
+                    sig = result.scalar_one_or_none()
+                    if not sig:
+                        return False
+                    await self._close(session, sig, close_price, "manual")
+                    await session.commit()
+                    return True
+                except Exception as exc:
+                    await session.rollback()
+                    logger.error("Manuel kapatma hatası: %s", exc, exc_info=True)
                     return False
-                await self._close(session, sig, close_price, "manual")
-                await session.commit()
-                return True
-            except Exception as exc:
-                await session.rollback()
-                logger.error("Manuel kapatma hatası: %s", exc, exc_info=True)
-                return False
+
+        try:
+            return await run_with_db_timeout(_do_manual_close())
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.error("Manuel kapatma zaman aşımı (id=%s): %s", signal_id, exc)
+            return False
 
     async def _get_prev_devisso(
         self, session: AsyncSession, symbol: str, interval: str, signal_type: str

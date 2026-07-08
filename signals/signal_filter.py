@@ -15,34 +15,15 @@ kaynak olduğu için bu sorun yapısal olarak ortadan kalkar.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import text
 
-from database.engine import get_session
+from database.engine import get_session, run_with_db_timeout
 
 logger = logging.getLogger(__name__)
-
-# database/engine.py'nin kendi pool_timeout=30/command_timeout=30'u var ama bu
-# check() HER sinyal değerlendirmesinde (hot path) çağrılıyor — bu iç timeout'lar
-# beklenmedik şekilde tetiklenmezse (ör. ağ kesintisi sırasında pool bağlantısı
-# yarım kalmış bir durumda askıda kalırsa) dıştan bağımsız bir üst sınır olmalı.
-# 8 Tem gece: hem live_data_manager hem signal_service'in sinyal değerlendirme
-# döngüsü, bu çağrının hiç dışarıdan zaman aşımı olmaması yüzünden saatlerce
-# (13:40-18:20) sessizce askıda kaldı — heartbeat bile bunu yakalayamadı çünkü
-# heartbeat ayrı bir task. Bu haftaki Redis çağrılarına eklenen
-# SAFE_EXTERNAL_TIMEOUT dersinin DB tarafına uygulanmamış hâliydi.
-_DB_TIMEOUT = 5.0
-
-
-async def _run_with_timeout(coro):
-    try:
-        return await asyncio.wait_for(coro, timeout=_DB_TIMEOUT)
-    except asyncio.TimeoutError:
-        raise TimeoutError(f"SignalFilter DB çağrısı {_DB_TIMEOUT}s içinde tamamlanmadı") from None
 
 
 class SignalFilter:
@@ -108,7 +89,7 @@ class SignalFilter:
             return passed
 
         try:
-            return await _run_with_timeout(_do_check())
+            return await run_with_db_timeout(_do_check())
         except Exception as e:  # pylint: disable=broad-exception-caught
             logger.warning(
                 "SignalFilter DB hatası [%s:%s:%s]: %s — fail-closed (reddedildi)",
@@ -134,7 +115,7 @@ class SignalFilter:
                 row = result.fetchone()
                 return (row[0], row[1]) if row else None
 
-        return await _run_with_timeout(_do_query())
+        return await run_with_db_timeout(_do_query())
 
     async def cleanup(self, symbol: str, interval: str, indicator: str) -> None:
         """Bir (symbol, interval, indicator) key'inin tüm olaylarını siler —
@@ -150,4 +131,4 @@ class SignalFilter:
                     {"symbol": symbol, "interval": interval, "indicator": indicator},
                 )
 
-        await _run_with_timeout(_do_delete())
+        await run_with_db_timeout(_do_delete())
