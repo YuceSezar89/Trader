@@ -15,7 +15,9 @@ from utils.telegram_notify import send_telegram_message
 logger = get_logger("Heartbeat")
 
 _HEARTBEAT_PREFIX = "heartbeat:"
+_THROUGHPUT_PREFIX = "throughput:"
 _alerted: set[str] = set()
+_activity_counts: dict[str, int] = {}
 
 # Paylaşımlı ana pool'dan bağımsız, kendi bağlantısı — iptal ortasında
 # zehirlenen paylaşımlı pool bağlantısının heartbeat'i sonsuza dek askıda
@@ -59,6 +61,45 @@ async def beat(component: str) -> None:
     except Exception as e:  # pylint: disable=broad-exception-caught
         logger.warning("beat(%s) yazılamadı, bağlantı yenilenecek: %s", component, e)
         await _reset_dedicated_connection()
+
+
+def record_activity(component: str) -> None:
+    """Bellek-içi sayaç — bir bileşenin GERÇEKTEN iş yaptığının kanıtı. beat()'ten
+    farkı: beat() ayrı, hafif bir asyncio task'tan çağrılır ve asıl işlem döngüsü
+    tıkansa bile taze görünmeye devam edebilir (8 Tem vakası — 4.5 saatlik sessiz
+    donmada heartbeat hiç bayat olmadı). Bu fonksiyon asıl iş akışının İÇİNDEN
+    çağrılmalı (ör. her bar kapanışı/event işleme), senkron ve çok ucuz olmalı."""
+    _activity_counts[component] = _activity_counts.get(component, 0) + 1
+
+
+async def throughput_watchdog_loop(min_expected: dict[str, int], check_interval: int = 60) -> None:
+    """min_expected: {bileşen_adı: check_interval içinde beklenen minimum
+    record_activity() çağrısı}. Sayı bu eşiğin altında kalırsa (heartbeat taze
+    olsa bile) asıl iş akışının durmuş olabileceğini loglar — Telegram alarmı
+    BİLEREK yok, sadece görünürlük (bkz. proje hafızası, 9 Tem kararı)."""
+    logger.info("Throughput watchdog başlatıldı: %s", min_expected)
+    last_counts = {component: _activity_counts.get(component, 0) for component in min_expected}
+    while True:
+        await asyncio.sleep(check_interval)
+        for component, min_count in min_expected.items():
+            current = _activity_counts.get(component, 0)
+            delta = current - last_counts[component]
+            last_counts[component] = current
+            try:
+                client = _get_dedicated_connection()
+                await asyncio.wait_for(
+                    client.set(f"{_THROUGHPUT_PREFIX}{component}", delta, ex=check_interval * 3),
+                    timeout=2,
+                )
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                logger.debug("throughput(%s) yazılamadı: %s", component, e)
+                await _reset_dedicated_connection()
+            if delta < min_count:
+                logger.warning(
+                    "[Throughput] %s son %ds'de %d işlem yaptı (beklenen >= %d) — "
+                    "heartbeat taze olsa bile asıl iş akışı durmuş olabilir",
+                    component, check_interval, delta, min_count,
+                )
 
 
 async def _read_all() -> dict[str, datetime]:

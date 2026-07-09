@@ -13,7 +13,7 @@ from utils.logger import get_logger
 from live_data_manager import main as live_data_main
 from signals.signal_performance_analyzer import SignalPerformanceAnalyzer
 from signals.signal_lifecycle_manager import signal_lifecycle_manager
-from utils.heartbeat import watchdog_loop as heartbeat_watchdog_loop
+from utils.heartbeat import watchdog_loop as heartbeat_watchdog_loop, throughput_watchdog_loop
 
 logger = get_logger("ServiceRunner")
 
@@ -362,7 +362,18 @@ async def run_all_services():
         name="heartbeat_watchdog",
     )
 
-    tasks = {live_task, perf_task, gap_task, sweep_task, heartbeat_task}
+    # 8. Throughput watchdog: heartbeat taze görünse bile asıl iş akışı (bar
+    # kapanışı işleme) durmuşsa yakalar — 8-9 Tem vakasında heartbeat hiç
+    # bayat olmamıştı ama saatlerce gerçek işlem yapılmamıştı.
+    throughput_task = asyncio.create_task(
+        _supervised(
+            throughput_watchdog_loop(min_expected={"live_data_manager": 5}),
+            "throughput_watchdog",
+        ),
+        name="throughput_watchdog",
+    )
+
+    tasks = {live_task, perf_task, gap_task, sweep_task, heartbeat_task, throughput_task}
 
     # Sinyal yakalayıcı: görevleri iptal et ve shutdown akışını başlat
     def _signal_handler(sig_name: str):

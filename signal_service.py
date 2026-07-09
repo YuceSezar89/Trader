@@ -15,7 +15,7 @@ import pandas as pd
 
 from utils.logger import get_logger
 from utils.redis_client import RedisClient, SAFE_EXTERNAL_TIMEOUT
-from utils.heartbeat import beat, watchdog_loop
+from utils.heartbeat import beat, watchdog_loop, record_activity, throughput_watchdog_loop
 from indicators.financial_metrics import calculate_metrics
 from signals.signal_processor import process_and_enrich_signals
 from signals.risk_manager import risk_manager
@@ -136,6 +136,7 @@ async def _process_event(fields: dict) -> None:
     open_time = fields.get("open_time", "")
 
     await _incr_metric("metrics:sigsvc:invocation")
+    record_activity("signal_service")
 
     if not await _claim_event(symbol, interval, open_time):
         logger.debug("[%s] %s open_time=%s zaten işlenmiş, atlanıyor (idempotency)", symbol, interval, open_time)
@@ -297,7 +298,14 @@ async def run_all() -> None:
     reclaim_task = asyncio.create_task(
         _supervised(_reclaim_stale_loop(), "signal_service_reclaim"), name="signal_service_reclaim"
     )
-    tasks = {consume_task, watchdog_task, queue_lag_task, reclaim_task}
+    throughput_task = asyncio.create_task(
+        _supervised(
+            throughput_watchdog_loop(min_expected={"signal_service": 1}),
+            "signal_service_throughput",
+        ),
+        name="signal_service_throughput",
+    )
+    tasks = {consume_task, watchdog_task, queue_lag_task, reclaim_task, throughput_task}
 
     def _handler(sig_name: str) -> None:
         logger.info("Sinyal alındı: %s. Signal service kapanıyor...", sig_name)

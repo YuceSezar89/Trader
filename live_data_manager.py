@@ -37,7 +37,7 @@ from utils.exceptions import BinanceAPIError, DatabaseError
 from config import Config
 from utils.kline_schema import check_kline_schema
 from utils.redis_client import RedisClient
-from utils.heartbeat import beat
+from utils.heartbeat import beat, record_activity
 from utils.telegram_notify import send_telegram_message
 from utils.logger import get_logger
 
@@ -564,6 +564,7 @@ class LiveDataManager:
             interval: Timeframe (e.g., '1m', '5m', '15m')
             kline_data: Kline data from WebSocket
         """
+        record_activity("live_data_manager")
         try:
             # Parse kline data
             _tbv = float(kline_data["V"])
@@ -611,6 +612,9 @@ class LiveDataManager:
                 # Cache to Redis
                 await RedisClient.set_mtf_klines(symbol, interval, self.mtf_buffers[symbol][interval])
                 logger.debug(f"[{symbol}] {interval} buffer updated and cached")
+
+                if interval == "5m":
+                    await self._check_do_kirilimi(symbol, self.mtf_buffers[symbol][interval])
 
             # Legacy 1m buffer (kline_data) — sadece DB batch insert için tutuluyor
             if interval == '1m':
@@ -733,141 +737,10 @@ class LiveDataManager:
         except Exception as e:
             logger.error(f"_handle_ws_error sırasında beklenmedik hata: {e}", exc_info=True)
 
-    async def _process_signal_for_symbol(self, symbol: str):
-        """Belirli bir sembol için sinyal hesaplamasını ve zenginleştirmesini tetikler."""
-        try:
-            if symbol == self.ref_symbol:
-                logger.debug(f"[{symbol}] Referans sembol, sinyal üretimi atlanıyor.")
-                return  # Referans sembol için sinyal üretme
-
-            df = self.kline_data.get(symbol)
-            ref_df = self.kline_data.get(self.ref_symbol)
-
-            logger.debug(
-                f"[{symbol}] Sinyal işleme kontrolü - DF: {len(df) if df is not None else 'None'}, Ref DF: {len(ref_df) if ref_df is not None else 'None'}"
-            )
-
-            if df is None or ref_df is None or df.empty or ref_df.empty:
-                logger.warning(
-                    f"[{symbol}] Sinyal işleme için yeterli veri bulunamadı, atlanıyor."
-                )
-                return
-
-            # Kilit mekanizmasını `process_and_enrich_signals` fonksiyonuna devretmek yerine burada yönetebiliriz.
-            # Ancak `create_signal` zaten kendi içinde atomik olmalı. Şimdilik kilitsiz devam edelim.
-            # async with self.db_lock:
-            oi_info = self._oi_cache.get(symbol)
-            oi_data_json = json.dumps(oi_info) if oi_info else None
-            await process_and_enrich_signals(
-                symbol=symbol,
-                df=df.copy(),
-                ref_df=ref_df.copy(),
-                interval=self.interval,
-                oi_data=oi_data_json,
-                symbol_buffers=self.mtf_buffers.get(symbol, {}),
-                dry_run=(Config.SIGNAL_SOURCE == "yeni"),
-            )
-        except Exception as e:
-            logger.error(f"Sinyal işleme ana hatası - {symbol}: {e}", exc_info=True)
-
     # =============================================================================
     # MULTI-TIMEFRAME FUNCTIONS (NEW!)
     # =============================================================================
-    
-    async def _update_mtf_data(self, symbol: str, new_row: Dict):
-        """
-        Updates multi-timeframe buffers when a new 1m bar is received.
-        
-        Args:
-            symbol: Symbol to update
-            new_row: New 1m OHLCV data
-        """
-        try:
-            if not self.mtf_enabled or symbol not in self.mtf_buffers:
-                return
-            
-            # Update 1m buffer first
-            new_df = pd.DataFrame([new_row])
-            self.mtf_buffers[symbol]['1m'] = pd.concat(
-                [self.mtf_buffers[symbol]['1m'], new_df], ignore_index=True
-            )
-            
-            # Apply buffer limit for 1m
-            limit_1m = self.mtf_buffer_limits.get('1m', 1000)
-            self.mtf_buffers[symbol]['1m'] = self.mtf_buffers[symbol]['1m'].tail(limit_1m)
-            
-            # Aggregate to higher timeframes
-            await self._aggregate_and_cache_mtf(symbol)
 
-            # YENİ: MTF Bar Kapanış Kontrolü ve Sinyal Üretimi
-            # close_time + 1ms = bir sonraki bar'ın open_time'ı
-            # Örnek: 16:30:00-16:30:59 arası bar için close_time=16:30:59999 -> next_open=16:31:00
-            # Bu sayede 16:31:00 minute % 15 kontrolünde, 16:30 bar'ının kapandığını anlayabiliriz
-            next_bar_open_time = datetime.fromtimestamp((new_row['close_time'] + 1) / 1000)
-
-            # Her timeframe için bar kapanış kontrolü (1m hariç)
-            for timeframe in self.supported_timeframes[1:]:  # 1m'i atla
-                if self._is_mtf_bar_complete(timeframe, next_bar_open_time):
-                    logger.info(f"🕯️ [{symbol}] {timeframe} bar kapandı - sinyal kontrolü başlatılıyor")
-
-                    # Async task olarak sinyal üretimi başlat (blocking olmasın)
-                    task = asyncio.create_task(
-                        self._generate_mtf_signal_live(symbol, timeframe)
-                    )
-                    self.processing_tasks.add(task)
-                    task.add_done_callback(self.processing_tasks.discard)
-            
-            logger.debug(f"[{symbol}] MTF data updated for all timeframes")
-            
-        except Exception as e:
-            logger.error(f"[{symbol}] MTF data update error: {e}", exc_info=True)
-    
-    async def _aggregate_and_cache_mtf(self, symbol: str):
-        """
-        1m verisinden 5m, 15m, 1h'yi aggregate eder ve Redis'e yazar.
-        4h ve 1d WebSocket'ten direkt geldiği için buradan atlanır —
-        bu TF'ler için 1m buffer yetersiz ve WebSocket verisini ezmemek gerekir.
-        """
-        try:
-            df_1m = self.mtf_buffers[symbol]['1m']
-            if df_1m.empty:
-                return
-
-            # Tüm TF'lerin kendi WebSocket stream'leri var — sadece 1m'i yaz
-            df_1m_cur = self.mtf_buffers[symbol].get('1m')
-            if df_1m_cur is not None and not df_1m_cur.empty:
-                await RedisClient.set_mtf_klines(symbol, '1m', df_1m_cur)
-
-        except Exception as e:
-            logger.error(f"[{symbol}] MTF aggregation error: {e}", exc_info=True)
-    
-    async def _cache_mtf_to_redis(self, symbol: str):
-        """
-        Caches all MTF data to Redis using new MTF cache functions.
-        
-        Args:
-            symbol: Symbol to cache
-        """
-        try:
-            cached_count = 0
-            
-            for timeframe in self.supported_timeframes:
-                df = self.mtf_buffers[symbol].get(timeframe)
-                if df is not None and not df.empty:
-                    # Use new MTF cache function
-                    success = await RedisClient.set_mtf_klines(symbol, timeframe, df)
-                    if success:
-                        cached_count += 1
-                        logger.debug(f"[{symbol}] {timeframe}: Cached {len(df)} bars to Redis")
-                    else:
-                        logger.warning(f"[{symbol}] {timeframe}: Failed to cache to Redis")
-            
-            if cached_count > 0:
-                logger.info(f"[{symbol}] MTF cache updated: {cached_count}/{len(self.supported_timeframes)} timeframes")
-            
-        except Exception as e:
-            logger.error(f"[{symbol}] MTF Redis cache error: {e}", exc_info=True)
-    
     async def _initialize_mtf_dataframes(self, reload_symbols: set[str] | None = None):
         """
         Hibrit batch initialization: Tarihsel tüm TF'leri batch halinde yükle + sonra WebSocket.
@@ -1094,41 +967,21 @@ class LiveDataManager:
                 stats[symbol][tf] = len(df) if df is not None else 0
         
         return stats
-    
-    def _is_mtf_bar_complete(self, timeframe: str, timestamp: datetime) -> bool:
-        """
-        MTF bar kapanış kontrolü - timestamp'e göre bar tamamlandı mı?
-        
-        Args:
-            timeframe: Timeframe (5m, 15m, 1h, 4h)
-            timestamp: Bar timestamp'i
-            
-        Returns:
-            bool: Bar tamamlandıysa True
-        """
-        minute = timestamp.minute
-        hour = timestamp.hour
-        
-        if timeframe == '5m':
-            return minute % 5 == 0
-        elif timeframe == '15m':
-            return minute % 15 == 0
-        elif timeframe == '1h':
-            return minute == 0
-        elif timeframe == '4h':
-            return minute == 0 and hour % 4 == 0
-        elif timeframe == '1d':
-            return minute == 0 and hour == 0
 
-        return False
-    
     async def _check_do_kirilimi(self, symbol: str, df_5m) -> None:
         """DO Kırılımı dedektörü — 5m bar kapanışında 6 kapı + ADX + ST."""
         try:
             btc_map = self.mtf_buffers.get("BTCUSDT", {})
             btc_df = btc_map.get("5m") if isinstance(btc_map, dict) else None
             btc_ctx = btc_day_context(btc_df) if btc_df is not None else None
-            entry = do_kirilimi_detector.check(symbol, df_5m, btc_ctx)
+            # do_kirilimi_detector.check() senkron ve ağır (pandas_ta ile ST/ADX/RSI/HTF,
+            # ~320 bar) — her 5m kapanışında TÜM semboller aynı anda tetiklendiği için
+            # ana event loop'ta çalıştırmak bu haftaki GIL tıkanması sorununu burada
+            # yeniden yaratır. Mevcut _MTF_EXECUTOR'a sarılıyor.
+            loop = asyncio.get_event_loop()
+            entry = await loop.run_in_executor(
+                _MTF_EXECUTOR, do_kirilimi_detector.check, symbol, df_5m, btc_ctx
+            )
             if entry:
                 opened = await do_kirilimi_manager.open_direct(
                     symbol=symbol,
@@ -1150,143 +1003,6 @@ class LiveDataManager:
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.error("[DOKirilimi] %s kanca hatası: %s", symbol, exc, exc_info=True)
 
-    async def _generate_mtf_signal_live(self, symbol: str, timeframe: str):
-        """
-        Canlı MTF sinyal üretimi - bar kapanışında çalışır
-        
-        Args:
-            symbol: Sembol adı
-            timeframe: Timeframe (5m, 15m, 1h, 4h)
-        """
-        try:
-            # MTF buffer'dan veri al
-            if symbol not in self.mtf_buffers or timeframe not in self.mtf_buffers[symbol]:
-                logger.debug(f"[{symbol}] {timeframe} buffer bulunamadı")
-                return
-            
-            df_mtf = self.mtf_buffers[symbol][timeframe]
-            if len(df_mtf) < 200:  # Yeterli veri yok
-                logger.debug(f"[{symbol}] {timeframe} yetersiz veri: {len(df_mtf)} < 200")
-                return
-
-            if timeframe == "5m":
-                await self._check_do_kirilimi(symbol, df_mtf)
-            
-            # Son bar için sinyal kontrol et (mtf_backfill mantığını kullan)
-            last_row = df_mtf.iloc[-1]
-            signal_data = await self._check_mtf_signal_conditions(
-                last_row, symbol, timeframe, df_mtf=df_mtf, idx=len(df_mtf) - 1
-            )
-            
-            if signal_data:
-                # OI filtresi — OI azalıyorsa sinyali atla
-                oi_data_json: Optional[str] = None
-                sig_type_check = signal_data.get("signal_type", "")
-                oi_info = self._oi_cache.get(symbol)
-                if oi_info:
-                    oi_data_json = json.dumps(oi_info)
-                    if Config.OI_FILTER_ENABLED and sig_type_check:
-                        oi_change = oi_info.get("change_pct", 0.0)
-                        if oi_change < -Config.OI_MIN_CHANGE_PCT:
-                            logger.info(
-                                "[%s] %s OI filtresi: OI değişim=%.1f%% < -%.1f%% → sinyal atlandı",
-                                symbol, sig_type_check, oi_change, Config.OI_MIN_CHANGE_PCT
-                            )
-                            return
-
-                # Mevcut pipeline: process_and_enrich_signals kullan
-                # Referans sembolün aynı timeframe MTF verisi (varsa)
-                ref_df = pd.DataFrame()
-                try:
-                    ref_tf_map = self.mtf_buffers.get(self.ref_symbol, {})
-                    if isinstance(ref_tf_map, dict):
-                        maybe_ref = ref_tf_map.get(timeframe)
-                        if maybe_ref is not None and not maybe_ref.empty:
-                            ref_df = maybe_ref
-                except Exception:
-                    ref_df = pd.DataFrame()
-
-                if ref_df.empty:
-                    logger.warning(f"[{symbol}] {timeframe} referans DF boş, sinyal işleme atlandı")
-                else:
-                    await process_and_enrich_signals(
-                        symbol=symbol,
-                        df=df_mtf.copy(),
-                        ref_df=ref_df.copy(),
-                        interval=timeframe,
-                        oi_data=oi_data_json,
-                        symbol_buffers=self.mtf_buffers.get(symbol, {}),
-                        dry_run=(Config.SIGNAL_SOURCE == "yeni"),
-                    )
-                    logger.info(f"🎯 [{symbol}] {timeframe} MTF sinyali üretimi tamamlandı (process_and_enrich_signals)")
-                    # _update_and_process_symbol_mtf'teki gibi kline_closed'a haber ver —
-                    # bu tetikleyici yol (1m agregasyonu + _check_mtf_signal_conditions)
-                    # olmadan signal_service.py bu sinyalleri hiç görmüyordu (7 Tem, dry-run
-                    # karşılaştırmasında HUSDT 15m MA200_Cross ile yakalandı).
-                    await RedisClient.publish_kline_closed_event(symbol, timeframe, int(last_row["open_time"]))
-            else:
-                logger.debug(f"[{symbol}] {timeframe} sinyal koşulları sağlanmadı")
-                
-        except Exception as e:
-            await self._handle_mtf_error(symbol, timeframe, e)
-    
-    async def _check_mtf_signal_conditions(
-        self, row: pd.Series, symbol: str, timeframe: str,
-        df_mtf: Optional[pd.DataFrame] = None, idx: Optional[int] = None,
-    ) -> Optional[Dict]:
-        """
-        MTF sinyal koşullarını kontrol et (mtf_backfill mantığı)
-
-        Args:
-            row: DataFrame satırı
-            symbol: Sembol adı
-            timeframe: Timeframe
-            df_mtf: VPMV skoru için tam buffer (opsiyonel — verilmezse vpms_score=0.0 döner)
-            idx: row'un df_mtf içindeki index'i
-
-        Returns:
-            Dict: Sinyal verisi veya None
-        """
-        try:
-            # MTF backfill'deki sinyal mantığını kullan
-            from backtest.mtf_backfill import MTFBackfillEngine
-
-            # Geçici engine oluştur (sadece sinyal kontrolü için)
-            temp_engine = MTFBackfillEngine()
-
-            # Sinyal koşullarını kontrol et
-            signal_data = temp_engine._check_signal_conditions(row, symbol, timeframe, df_mtf=df_mtf, idx=idx)
-
-            return signal_data
-
-        except Exception as e:
-            logger.error(f"[{symbol}] {timeframe} sinyal kontrol hatası: {e}")
-            return None
-    
-    async def _handle_mtf_error(self, symbol: str, timeframe: str, error: Exception):
-        """
-        MTF hata yönetimi
-        
-        Args:
-            symbol: Sembol adı
-            timeframe: Timeframe
-            error: Hata objesi
-        """
-        error_msg = f"[{symbol}] {timeframe} MTF sinyal hatası: {error}"
-        logger.error(error_msg, exc_info=True)
-        
-        # Error counter (basit implementasyon)
-        if not hasattr(self, 'mtf_error_count'):
-            self.mtf_error_count = 0
-        
-        self.mtf_error_count += 1
-        
-        # Circuit breaker pattern
-        if self.mtf_error_count > 10:
-            logger.warning("MTF circuit breaker activated - çok fazla hata")
-            await asyncio.sleep(60)  # 1 dakika bekle
-            self.mtf_error_count = 0
-    
     async def _keep_alive_ping_loop(self):
         """
         Proaktif keep-alive: WebSocket bağlantısını canlı tutmak için
@@ -2002,17 +1718,20 @@ class LiveDataManager:
 
         while True:
             try:
-                stats, funding_stats = await asyncio.gather(
+                stats, funding_stats, equity_symbols = await asyncio.gather(
                     BinanceClientManager.get_24hr_ticker_stats(),
                     BinanceClientManager.get_funding_rates(),
+                    BinanceClientManager.get_equity_underlying_symbols(),
                 )
                 funding_map = {f["symbol"]: float(f.get("lastFundingRate", 0)) for f in funding_stats}
                 ticker_prices: Dict[str, float] = {}
                 pipe = redis_conn.pipeline()
+                written = 0
                 for t in stats:
                     sym = t.get("symbol", "")
-                    if not sym.endswith("USDT"):
+                    if not sym.endswith("USDT") or sym in equity_symbols:
                         continue
+                    written += 1
                     last_price = float(t.get("lastPrice", 0))
                     if last_price > 0:
                         ticker_prices[sym] = last_price
@@ -2031,7 +1750,7 @@ class LiveDataManager:
                     )
                 await pipe.execute()
                 self._ticker_prices = ticker_prices
-                ticker_logger.info("Ticker güncellendi: %d sembol", len(stats))
+                ticker_logger.info("Ticker güncellendi: %d sembol", written)
             except Exception as exc:
                 ticker_logger.warning("Ticker güncelleme hatası: %s", exc)
             await asyncio.sleep(_INTERVAL)
@@ -2565,8 +2284,20 @@ class LiveDataManager:
 
 async def main():
     """Uygulamanın ana giriş noktası."""
-    # Veritabanını ve tabloları oluştur
-    await initialize_database()
+    # Veritabanını ve tabloları oluştur — DB/pgbouncer başlangıçta henüz hazır
+    # olmayabilir (ör. Postgres yeni restart oldu), bu yüzden sembol listesi
+    # çekimiyle aynı retry deseni uygulanıyor. Retry'sız hâli 9 Tem'de
+    # live_data_manager'ı kalıcı olarak öldürmüştü (bkz. proje hafızası).
+    for attempt in range(1, 7):
+        try:
+            await initialize_database()
+            break
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.error(f"Veritabanı başlatılamadı (deneme {attempt}/6): {e}")
+            if attempt < 6:
+                await asyncio.sleep(min(5 * attempt, 30))
+            else:
+                raise
 
     # Aktif pozisyonları belleğe yükle (QueuePool taşmasını önler)
     await risk_manager.load_active_symbols()

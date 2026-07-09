@@ -249,17 +249,46 @@ class BinanceClientManager:
         return result
 
     @classmethod
+    async def get_equity_underlying_symbols(cls) -> set:
+        """Binance exchangeInfo'dan underlyingType='EQUITY' olan sembolleri döner
+        (tokenize edilmiş ABD hisseleri/ETF'leri — NVDAUSDT, SPYUSDT vb.). Bunlar
+        kripto değil, kripto-varsayımlı sinyal/alfa-beta mantığımız için uygun
+        aday değiller. Çağrı başarısız olursa boş set döner (fail-open — filtre
+        atlanır, sembol listesi eskisi gibi tam kalır)."""
+        url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
+        try:
+            async def request():
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(url) as response:
+                        response.raise_for_status()
+                        return await response.json()
+            data = await asyncio.wait_for(request(), timeout=Config.API_TIMEOUT)
+            equity_symbols = {
+                s["symbol"] for s in data.get("symbols", [])
+                if s.get("underlyingType") == "EQUITY"
+            }
+            logger.info(f"exchangeInfo: {len(equity_symbols)} EQUITY (tokenize hisse) sembolü bulundu.")
+            return equity_symbols
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.warning(f"exchangeInfo çekilemedi, EQUITY filtresi atlanıyor: {e}")
+            return set()
+
+    @classmethod
     async def get_top_volume_symbols_async(cls, limit: int = 200) -> List[str]:
         """Fetches top symbols by 24-hour volume from Binance Futures."""
         logger.info(f"Fetching top {limit} symbols by 24hr volume...")
         try:
             stats = await cls.get_24hr_ticker_stats()
+            equity_symbols = await cls.get_equity_underlying_symbols()
             # Filter for USDT pairs with a minimum volume threshold
-            initial_usdt_pairs = [s for s in stats if s['symbol'].endswith('USDT')]
+            initial_usdt_pairs = [
+                s for s in stats
+                if s['symbol'].endswith('USDT') and s['symbol'] not in equity_symbols
+            ]
             volume_threshold = Config.MIN_VOLUME_THRESHOLD  # Minimum 24hr volume in USDT
-            
+
             valid_symbols = [
-                s for s in initial_usdt_pairs 
+                s for s in initial_usdt_pairs
                 if float(s.get('quoteVolume', 0)) > volume_threshold
             ]
             
