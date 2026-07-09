@@ -4,11 +4,6 @@
     "ast_hash": "167512d5e67883a81bf004d7f267cc68",
     "semantic_hash": "167512d5e67883a81bf004d7f267cc68"
   },
-  "app.py": {
-    "mtime": 1760548227.6477566,
-    "ast_hash": "f4f5cad2b245c21637e2b7a86590f66b",
-    "semantic_hash": "f4f5cad2b245c21637e2b7a86590f66b"
-  },
   "backtest/__init__.py": {
     "mtime": 1758473504.337073,
     "ast_hash": "1b7796d9ae85a2068841b3ecea52f6eb",
@@ -43,11 +38,6 @@
     "mtime": 1758478824.6242447,
     "ast_hash": "24aa366ba689fcdcf219bc32f7c455f8",
     "semantic_hash": "24aa366ba689fcdcf219bc32f7c455f8"
-  },
-  "backtest_ui.py": {
-    "mtime": 1759085543.7583404,
-    "ast_hash": "d41f997b626ebcf5e17d468db3628585",
-    "semantic_hash": "d41f997b626ebcf5e17d468db3628585"
   },
   "binance_client.py": {
     "mtime": 1758658265.8251011,
@@ -88,21 +78,6 @@
     "mtime": 1780347507.6508746,
     "ast_hash": "122e1d9752071ecc160df3a16a071817",
     "semantic_hash": "122e1d9752071ecc160df3a16a071817"
-  },
-  "dashboard/__init__.py": {
-    "mtime": 1760384174.4943304,
-    "ast_hash": "c32eca4aadd2835fb8fd7f59d28c1093",
-    "semantic_hash": "c32eca4aadd2835fb8fd7f59d28c1093"
-  },
-  "dashboard/signal_performance.py": {
-    "mtime": 1760467405.3268645,
-    "ast_hash": "d1358b73de15b01c574e96f349606310",
-    "semantic_hash": "d1358b73de15b01c574e96f349606310"
-  },
-  "dashboard/signal_performance_old.py": {
-    "mtime": 1760382793.9713936,
-    "ast_hash": "49577847771dd82bb5f33256e1b91db4",
-    "semantic_hash": "49577847771dd82bb5f33256e1b91db4"
   },
   "database/__init__.py": {
     "mtime": 1756119058.093318,
@@ -173,16 +148,6 @@
     "mtime": 1780823463.3811772,
     "ast_hash": "3394cb684a014ecf7fe1c45f2e44e2d8",
     "semantic_hash": "3394cb684a014ecf7fe1c45f2e44e2d8"
-  },
-  "migrations/005_auto_signal_performance_trigger.sql": {
-    "mtime": 1760465072.162136,
-    "ast_hash": "45b720dcaf5c39ae515db5ee6fc34930",
-    "semantic_hash": "45b720dcaf5c39ae515db5ee6fc34930"
-  },
-  "pages/__init__.py": {
-    "mtime": 1760382833.261772,
-    "ast_hash": "06dad093eb3dab52378c7187edec0331",
-    "semantic_hash": "06dad093eb3dab52378c7187edec0331"
   },
   "run_backtest.py": {
     "mtime": 1760548768.523572,
@@ -304,20 +269,10 @@
     "ast_hash": "8217dc2549e7f0a071f072d92d58b21c",
     "semantic_hash": "8217dc2549e7f0a071f072d92d58b21c"
   },
-  "tests/test_mtf_aggregation.py": {
-    "mtime": 1758736972.7782907,
-    "ast_hash": "b02be5ac79101555a1d7fda18630bc6b",
-    "semantic_hash": "b02be5ac79101555a1d7fda18630bc6b"
-  },
   "tests/test_mtf_integration.py": {
     "mtime": 1758726152.424662,
     "ast_hash": "703598f57c511e25f18fb8cddc3cb8ff",
     "semantic_hash": "703598f57c511e25f18fb8cddc3cb8ff"
-  },
-  "tests/test_mtf_live_manager.py": {
-    "mtime": 1758729703.8694515,
-    "ast_hash": "1cb244261658349a3eac0c5a9f3c960d",
-    "semantic_hash": "1cb244261658349a3eac0c5a9f3c960d"
   },
   "tests/test_mtf_redis.py": {
     "mtime": 1758725247.1714664,
@@ -455,14 +410,9 @@
     "semantic_hash": "f78d49875161b1d2d50fefdea1ff9ce1"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/.claude/settings.local.json": {
-    "mtime": 1781014321.34341,
-    "ast_hash": "1d223685c2256637fddfa8a8b877c776",
-    "semantic_hash": "1d223685c2256637fddfa8a8b877c776"
-  },
-  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/app.py": {
-    "mtime": 1780857326.2760894,
-    "ast_hash": "c3ae80e72bad8c6aa2bd15adce16eacb",
-    "semantic_hash": "c3ae80e72bad8c6aa2bd15adce16eacb"
+    "mtime": 1783494576.2174878,
+    "ast_hash": "cb6dc67ea634d64c17bc9d0edf1e920c",
+    "semantic_hash": "cb6dc67ea634d64c17bc9d0edf1e920c"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/backtest/__init__.py": {
     "mtime": 1758473504.337073,
@@ -475,24 +425,24 @@
     "semantic_hash": "28ce0120e6e680141080debc43ed9ee0"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/backtest/engine.py": {
-    "mtime": 1780823296.4632592,
-    "ast_hash": "446d39aee318dbfb3167765606250474",
-    "semantic_hash": "446d39aee318dbfb3167765606250474"
+    "mtime": 1782944917.3170657,
+    "ast_hash": "ff77e69e304d694bfaf316c1eba2af83",
+    "semantic_hash": "ff77e69e304d694bfaf316c1eba2af83"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/backtest/models.py": {
-    "mtime": 1758484152.5078778,
-    "ast_hash": "f7cf0965241cc51eff8f82495c14ce93",
-    "semantic_hash": "f7cf0965241cc51eff8f82495c14ce93"
+    "mtime": 1782944917.3172052,
+    "ast_hash": "7c7bc90a24e5ef3648992cd6aa47b4f1",
+    "semantic_hash": "7c7bc90a24e5ef3648992cd6aa47b4f1"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/backtest/mtf_backfill.py": {
-    "mtime": 1780857284.8119059,
-    "ast_hash": "8a2b2a3a1b3901f8d24a06e8b976fb7f",
-    "semantic_hash": "8a2b2a3a1b3901f8d24a06e8b976fb7f"
+    "mtime": 1783363142.7449045,
+    "ast_hash": "4e183c23fc506d42dce6d3481584a44c",
+    "semantic_hash": "4e183c23fc506d42dce6d3481584a44c"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/backtest/paper_trader.py": {
-    "mtime": 1758484470.7586389,
-    "ast_hash": "5761a8e1be05667b98c6fa0f1df9b167",
-    "semantic_hash": "5761a8e1be05667b98c6fa0f1df9b167"
+    "mtime": 1782944917.3174815,
+    "ast_hash": "42c5f7a282e20c013dc5ea79bd6c0a07",
+    "semantic_hash": "42c5f7a282e20c013dc5ea79bd6c0a07"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/backtest/risk_manager.py": {
     "mtime": 1758473641.124175,
@@ -500,19 +450,14 @@
     "semantic_hash": "6d661ee19cf6013101a572c00ae599e7"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/backtest/strategy_tester.py": {
-    "mtime": 1758478824.6242447,
-    "ast_hash": "24aa366ba689fcdcf219bc32f7c455f8",
-    "semantic_hash": "24aa366ba689fcdcf219bc32f7c455f8"
-  },
-  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/backtest_ui.py": {
-    "mtime": 1759085543.7583404,
-    "ast_hash": "d41f997b626ebcf5e17d468db3628585",
-    "semantic_hash": "d41f997b626ebcf5e17d468db3628585"
+    "mtime": 1782944917.3176262,
+    "ast_hash": "766b89a04a95b7aba4de5d19b92bfd22",
+    "semantic_hash": "766b89a04a95b7aba4de5d19b92bfd22"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/binance_client.py": {
-    "mtime": 1758658265.8251011,
-    "ast_hash": "99ff7adb9942245f36d086a8ffdbb8ae",
-    "semantic_hash": "99ff7adb9942245f36d086a8ffdbb8ae"
+    "mtime": 1783363142.7452586,
+    "ast_hash": "ab7295638b1a73fe753d3dcd29bfbc95",
+    "semantic_hash": "ab7295638b1a73fe753d3dcd29bfbc95"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/check_calculated_signals.py": {
     "mtime": 1760468406.287381,
@@ -540,29 +485,14 @@
     "semantic_hash": "95a3dcbcd1b467439ba93988d1d849fb"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/check_system.sh": {
-    "mtime": 1759077963.0975764,
-    "ast_hash": "5b11eb2fb4fdb297aa4e7518d64c5120",
-    "semantic_hash": "5b11eb2fb4fdb297aa4e7518d64c5120"
+    "mtime": 1782945055.0290084,
+    "ast_hash": "ee0cf4df6d73df26d7732444878b5f5d",
+    "semantic_hash": "ee0cf4df6d73df26d7732444878b5f5d"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/config.py": {
-    "mtime": 1781012776.4083,
-    "ast_hash": "574ae351cd7b3086a790929d00095c82",
-    "semantic_hash": "574ae351cd7b3086a790929d00095c82"
-  },
-  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/dashboard/__init__.py": {
-    "mtime": 1760384174.4943304,
-    "ast_hash": "c32eca4aadd2835fb8fd7f59d28c1093",
-    "semantic_hash": "c32eca4aadd2835fb8fd7f59d28c1093"
-  },
-  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/dashboard/signal_performance.py": {
-    "mtime": 1760467405.3268645,
-    "ast_hash": "d1358b73de15b01c574e96f349606310",
-    "semantic_hash": "d1358b73de15b01c574e96f349606310"
-  },
-  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/dashboard/signal_performance_old.py": {
-    "mtime": 1760382793.9713936,
-    "ast_hash": "49577847771dd82bb5f33256e1b91db4",
-    "semantic_hash": "49577847771dd82bb5f33256e1b91db4"
+    "mtime": 1783411770.9451725,
+    "ast_hash": "ef80285fed102c590d69e1962a149d09",
+    "semantic_hash": "ef80285fed102c590d69e1962a149d09"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/database/__init__.py": {
     "mtime": 1756119058.093318,
@@ -570,19 +500,19 @@
     "semantic_hash": "3277b7852bea20442b353741bc198136"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/database/connection_manager.py": {
-    "mtime": 1758140192.4629974,
-    "ast_hash": "b5961d1025580973dc55da72dfa3e6c7",
-    "semantic_hash": "b5961d1025580973dc55da72dfa3e6c7"
+    "mtime": 1783243752.2972548,
+    "ast_hash": "4c4191a230fe61f83db502d25477944f",
+    "semantic_hash": "4c4191a230fe61f83db502d25477944f"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/database/crud.py": {
-    "mtime": 1781016222.1699955,
-    "ast_hash": "46ecff9076687f9e1760b3d5771cdbf8",
-    "semantic_hash": "46ecff9076687f9e1760b3d5771cdbf8"
+    "mtime": 1783161483.6764047,
+    "ast_hash": "575184d9b5a9a6754474460cdb6f5441",
+    "semantic_hash": "575184d9b5a9a6754474460cdb6f5441"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/database/engine.py": {
-    "mtime": 1760374364.2040498,
-    "ast_hash": "ebf069be65c8bc989170fd51bdd59cff",
-    "semantic_hash": "ebf069be65c8bc989170fd51bdd59cff"
+    "mtime": 1783525928.1344857,
+    "ast_hash": "cf523abaf3d563a414c10cf615bea098",
+    "semantic_hash": "cf523abaf3d563a414c10cf615bea098"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/database/migrations/005_create_backtest_tables.sql": {
     "mtime": 1760471790.5666115,
@@ -615,9 +545,9 @@
     "semantic_hash": "c797fa34b1357b93ddd12cf7cfbd7b1d"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/database/models.py": {
-    "mtime": 1758310049.38512,
-    "ast_hash": "e067dd96ee3fd98c731ba700e26149d1",
-    "semantic_hash": "e067dd96ee3fd98c731ba700e26149d1"
+    "mtime": 1783172022.7424006,
+    "ast_hash": "1d4b839d7dd8e948f2aeb3e953cdbd66",
+    "semantic_hash": "1d4b839d7dd8e948f2aeb3e953cdbd66"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/indicators/__init__.py": {
     "mtime": 1751816966.2589962,
@@ -625,14 +555,14 @@
     "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/indicators/core.py": {
-    "mtime": 1759083111.8473463,
-    "ast_hash": "a68addc307abf791eef896f686551213",
-    "semantic_hash": "a68addc307abf791eef896f686551213"
+    "mtime": 1782072763.2162359,
+    "ast_hash": "bff6fdfc5e80232bfdd65781e0a3d16a",
+    "semantic_hash": "bff6fdfc5e80232bfdd65781e0a3d16a"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/indicators/financial_metrics.py": {
-    "mtime": 1780827780.8433547,
-    "ast_hash": "c4b263853e871b99ae9b82a0407ce526",
-    "semantic_hash": "c4b263853e871b99ae9b82a0407ce526"
+    "mtime": 1782412832.8091533,
+    "ast_hash": "838ba69572a27b2da3070b499bb537ff",
+    "semantic_hash": "838ba69572a27b2da3070b499bb537ff"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/install-mcp-servers.sh": {
     "mtime": 1758140192.4664676,
@@ -640,19 +570,9 @@
     "semantic_hash": "ebbcb5121e574f88cd3641c66194ef20"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/live_data_manager.py": {
-    "mtime": 1781026718.6826143,
-    "ast_hash": "e4687eb60d105c97f483c9f04481059a",
-    "semantic_hash": "e4687eb60d105c97f483c9f04481059a"
-  },
-  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/migrations/005_auto_signal_performance_trigger.sql": {
-    "mtime": 1760465072.162136,
-    "ast_hash": "45b720dcaf5c39ae515db5ee6fc34930",
-    "semantic_hash": "45b720dcaf5c39ae515db5ee6fc34930"
-  },
-  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/pages/__init__.py": {
-    "mtime": 1760382833.261772,
-    "ast_hash": "06dad093eb3dab52378c7187edec0331",
-    "semantic_hash": "06dad093eb3dab52378c7187edec0331"
+    "mtime": 1783596450.0278294,
+    "ast_hash": "62b151077d1ab5e3998d0242ff17e152",
+    "semantic_hash": "62b151077d1ab5e3998d0242ff17e152"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/run_backtest.py": {
     "mtime": 1780857292.3564146,
@@ -675,9 +595,9 @@
     "semantic_hash": "a6fb952eed6394ecc9d6b2ffc26595e5"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/run_services.py": {
-    "mtime": 1780945704.3709762,
-    "ast_hash": "f45969294adb650ad28b4e55c9712f76",
-    "semantic_hash": "f45969294adb650ad28b4e55c9712f76"
+    "mtime": 1783594865.125673,
+    "ast_hash": "9e3973150ae28b7daf44fc4fa08b385e",
+    "semantic_hash": "9e3973150ae28b7daf44fc4fa08b385e"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/run_tests.sh": {
     "mtime": 1760375365.3949518,
@@ -740,24 +660,24 @@
     "semantic_hash": "7fd2b4cefc34bf8592f051931c1c9920"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/signals/signal_engine.py": {
-    "mtime": 1781013280.5246587,
-    "ast_hash": "21afe597570efbc9817c2bc947403217",
-    "semantic_hash": "21afe597570efbc9817c2bc947403217"
+    "mtime": 1783451154.3859746,
+    "ast_hash": "8df0e6867f0ee36b27aa614b0e228f9c",
+    "semantic_hash": "8df0e6867f0ee36b27aa614b0e228f9c"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/signals/signal_lifecycle_manager.py": {
-    "mtime": 1758658424.0687644,
-    "ast_hash": "366c88ebde033736aca7a843dc5a1c42",
-    "semantic_hash": "366c88ebde033736aca7a843dc5a1c42"
+    "mtime": 1783526079.9061277,
+    "ast_hash": "8b1d7433038f66d9d8e281a3e29934e6",
+    "semantic_hash": "8b1d7433038f66d9d8e281a3e29934e6"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/signals/signal_performance_analyzer.py": {
-    "mtime": 1780827747.3707983,
-    "ast_hash": "adbdcfdccfde793e2a0c913ca654fa1a",
-    "semantic_hash": "adbdcfdccfde793e2a0c913ca654fa1a"
+    "mtime": 1782336270.7336433,
+    "ast_hash": "6a350fc63d33368093e3522716804e9d",
+    "semantic_hash": "6a350fc63d33368093e3522716804e9d"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/signals/signal_processor.py": {
-    "mtime": 1781013292.2417276,
-    "ast_hash": "59a955adf7bc0aab6ea2a366f68da0e8",
-    "semantic_hash": "59a955adf7bc0aab6ea2a366f68da0e8"
+    "mtime": 1783427035.4902463,
+    "ast_hash": "b6577dbbfaf837bbd7575f03286da6be",
+    "semantic_hash": "b6577dbbfaf837bbd7575f03286da6be"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/signals/vpm_calculator.py": {
     "mtime": 1780865750.7322426,
@@ -770,9 +690,9 @@
     "semantic_hash": "fb7c4d86ab6736f5b575833dde0fe969"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/tests/conftest.py": {
-    "mtime": 1760375725.3817134,
-    "ast_hash": "891ea1f9c6afe66bb473035e633600aa",
-    "semantic_hash": "891ea1f9c6afe66bb473035e633600aa"
+    "mtime": 1783009851.3555906,
+    "ast_hash": "4c3ea30bc2af2f3da1e237301e74dc58",
+    "semantic_hash": "4c3ea30bc2af2f3da1e237301e74dc58"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/tests/test_aggregation.py": {
     "mtime": 1758724507.0444348,
@@ -780,54 +700,44 @@
     "semantic_hash": "4be6203fd28350eaddf0692d8deac10a"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/tests/test_live_mtf.py": {
-    "mtime": 1758737175.3965642,
-    "ast_hash": "8217dc2549e7f0a071f072d92d58b21c",
-    "semantic_hash": "8217dc2549e7f0a071f072d92d58b21c"
-  },
-  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/tests/test_mtf_aggregation.py": {
-    "mtime": 1758736972.7782907,
-    "ast_hash": "b02be5ac79101555a1d7fda18630bc6b",
-    "semantic_hash": "b02be5ac79101555a1d7fda18630bc6b"
+    "mtime": 1782947575.0820975,
+    "ast_hash": "94e47579a5a98fe956c40ab1fa3b9856",
+    "semantic_hash": "94e47579a5a98fe956c40ab1fa3b9856"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/tests/test_mtf_integration.py": {
-    "mtime": 1758726152.424662,
-    "ast_hash": "703598f57c511e25f18fb8cddc3cb8ff",
-    "semantic_hash": "703598f57c511e25f18fb8cddc3cb8ff"
-  },
-  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/tests/test_mtf_live_manager.py": {
-    "mtime": 1758729703.8694515,
-    "ast_hash": "1cb244261658349a3eac0c5a9f3c960d",
-    "semantic_hash": "1cb244261658349a3eac0c5a9f3c960d"
+    "mtime": 1783009728.6934047,
+    "ast_hash": "d3ec4d42dc7d2c5c8a5dee01e54f9e7a",
+    "semantic_hash": "d3ec4d42dc7d2c5c8a5dee01e54f9e7a"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/tests/test_mtf_redis.py": {
-    "mtime": 1758725247.1714664,
-    "ast_hash": "d16d4ec43ca989b947fbe1bfe4a39d02",
-    "semantic_hash": "d16d4ec43ca989b947fbe1bfe4a39d02"
+    "mtime": 1782947575.0810792,
+    "ast_hash": "0c3656c14486703fb4d1aeaf1fb887aa",
+    "semantic_hash": "0c3656c14486703fb4d1aeaf1fb887aa"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/tests/test_redis_mtf_cache.py": {
-    "mtime": 1758816161.429376,
-    "ast_hash": "3ff6a6034d7ce82b8ddfe360b00f8107",
-    "semantic_hash": "3ff6a6034d7ce82b8ddfe360b00f8107"
+    "mtime": 1783009728.6929615,
+    "ast_hash": "4631b2330c7788909cc969ed92a6ecb2",
+    "semantic_hash": "4631b2330c7788909cc969ed92a6ecb2"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/tests/test_signal_lifecycle.py": {
-    "mtime": 1758140192.469117,
-    "ast_hash": "a44b7456a94328d867357dc18ea259b8",
-    "semantic_hash": "a44b7456a94328d867357dc18ea259b8"
+    "mtime": 1783010074.763734,
+    "ast_hash": "213d4074560a06ccd0917b8e2a10a8e4",
+    "semantic_hash": "213d4074560a06ccd0917b8e2a10a8e4"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/tests/test_signal_performance.py": {
-    "mtime": 1780832075.4833348,
-    "ast_hash": "b152504aab093bea149394efa7fc40b9",
-    "semantic_hash": "b152504aab093bea149394efa7fc40b9"
+    "mtime": 1782947876.2338927,
+    "ast_hash": "fcf444cd1e88da1702bb05871f03e62a",
+    "semantic_hash": "fcf444cd1e88da1702bb05871f03e62a"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/tests/test_timeframe_aggregator.py": {
-    "mtime": 1758725871.37971,
-    "ast_hash": "d9748fbb55ed799df62e6c8e54b7db57",
-    "semantic_hash": "d9748fbb55ed799df62e6c8e54b7db57"
+    "mtime": 1782944917.3181753,
+    "ast_hash": "a8c3de2bc0c2435fbe95b5e66820c4d9",
+    "semantic_hash": "a8c3de2bc0c2435fbe95b5e66820c4d9"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/tests/test_vpm_calculator.py": {
-    "mtime": 1780823325.9295893,
-    "ast_hash": "32b4e50396995be80805559c5a5d2a04",
-    "semantic_hash": "32b4e50396995be80805559c5a5d2a04"
+    "mtime": 1783010106.657761,
+    "ast_hash": "32fc2df300d1988e65492d48adb23a99",
+    "semantic_hash": "32fc2df300d1988e65492d48adb23a99"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/utils/__init__.py": {
     "mtime": 1753021264.4801202,
@@ -850,9 +760,9 @@
     "semantic_hash": "a449109ddb1c38c72d04c7e18986b98d"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/utils/logger.py": {
-    "mtime": 1780002151.7521882,
-    "ast_hash": "2d97fe7133f8f38a4c9f371f533fd7f6",
-    "semantic_hash": "2d97fe7133f8f38a4c9f371f533fd7f6"
+    "mtime": 1783427014.64578,
+    "ast_hash": "aa6c92b6ee8ae9e5055d6dbfbda05d70",
+    "semantic_hash": "aa6c92b6ee8ae9e5055d6dbfbda05d70"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/utils/preprocessing.py": {
     "mtime": 1780866094.7141242,
@@ -860,9 +770,9 @@
     "semantic_hash": "a3d78ce3458a6d4284ae46311d85f13b"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/utils/redis_client.py": {
-    "mtime": 1781027334.3592894,
-    "ast_hash": "a42846ebd0932d971366e6a78eb58ef4",
-    "semantic_hash": "a42846ebd0932d971366e6a78eb58ef4"
+    "mtime": 1783494816.5490482,
+    "ast_hash": "af28aa730893ef3eec13956c2812502a",
+    "semantic_hash": "af28aa730893ef3eec13956c2812502a"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/utils/simple_backtest.py": {
     "mtime": 1760548801.3775947,
@@ -870,9 +780,9 @@
     "semantic_hash": "3e4e08b1f65334b618e39abfdc31902f"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/utils/timeframe_aggregator.py": {
-    "mtime": 1781026687.7964897,
-    "ast_hash": "029a7e1ad28126509cb0125e809954e4",
-    "semantic_hash": "029a7e1ad28126509cb0125e809954e4"
+    "mtime": 1782944917.3183138,
+    "ast_hash": "6dfb123fbadf6d0480eb95e229a244e9",
+    "semantic_hash": "6dfb123fbadf6d0480eb95e229a244e9"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/.github/workflows/ci.yml": {
     "mtime": 1758140192.4608421,
@@ -900,9 +810,9 @@
     "semantic_hash": "bf8ea50cb81cdf4803263aa78dee98fc"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/requirements.txt": {
-    "mtime": 1758140192.4673615,
-    "ast_hash": "572f6c26a068f4ba042a24ef4c4a5d8b",
-    "semantic_hash": "572f6c26a068f4ba042a24ef4c4a5d8b"
+    "mtime": 1782923368.23743,
+    "ast_hash": "c459897cbb735b76ec857960e4716f3c",
+    "semantic_hash": "c459897cbb735b76ec857960e4716f3c"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/userlist.txt": {
     "mtime": 1758140192.4692116,
@@ -930,14 +840,14 @@
     "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/desktop/main.py": {
-    "mtime": 1780944593.1678052,
-    "ast_hash": "08da7b14c21659057a5700a4fd948e3f",
-    "semantic_hash": "08da7b14c21659057a5700a4fd948e3f"
+    "mtime": 1781646010.187139,
+    "ast_hash": "5cdec97c366411c1d7a97fc0547cea89",
+    "semantic_hash": "5cdec97c366411c1d7a97fc0547cea89"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/desktop/main_window.py": {
-    "mtime": 1781014179.9888031,
-    "ast_hash": "d8295de0fcb233405b75de35c7a75b26",
-    "semantic_hash": "d8295de0fcb233405b75de35c7a75b26"
+    "mtime": 1783497038.1993165,
+    "ast_hash": "33d11a985fc3d1a6bf0062c65740c93d",
+    "semantic_hash": "33d11a985fc3d1a6bf0062c65740c93d"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/desktop/models/__init__.py": {
     "mtime": 1780838619.4856048,
@@ -945,14 +855,14 @@
     "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/desktop/models/signals_model.py": {
-    "mtime": 1780865801.7568097,
-    "ast_hash": "1d3dab708f44c37c7520d9ee42e5ad61",
-    "semantic_hash": "1d3dab708f44c37c7520d9ee42e5ad61"
+    "mtime": 1783014595.7707973,
+    "ast_hash": "e85146800cdae302e075a5ccec8b21ef",
+    "semantic_hash": "e85146800cdae302e075a5ccec8b21ef"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/desktop/models/watchlist_model.py": {
-    "mtime": 1780841713.743417,
-    "ast_hash": "8cae20130f23c951120c879c03739f0d",
-    "semantic_hash": "8cae20130f23c951120c879c03739f0d"
+    "mtime": 1781813844.163347,
+    "ast_hash": "c86508bfd791d2ebdf541ec8e405910f",
+    "semantic_hash": "c86508bfd791d2ebdf541ec8e405910f"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/desktop/panels/__init__.py": {
     "mtime": 1780838619.4855194,
@@ -960,24 +870,24 @@
     "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/desktop/panels/active_signals_panel.py": {
-    "mtime": 1780862462.3171265,
-    "ast_hash": "bd4f003a5454b91dc2e40638cc716d52",
-    "semantic_hash": "bd4f003a5454b91dc2e40638cc716d52"
+    "mtime": 1783011602.6288393,
+    "ast_hash": "d87a243e14bf085612ed8cbbdfa5dc82",
+    "semantic_hash": "d87a243e14bf085612ed8cbbdfa5dc82"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/desktop/panels/chart_panel.py": {
-    "mtime": 1780997072.4432602,
-    "ast_hash": "62d5ff1137ceb103a6dcedec1deded11",
-    "semantic_hash": "62d5ff1137ceb103a6dcedec1deded11"
+    "mtime": 1782850239.0453231,
+    "ast_hash": "73c4b9ab7f394d9fa2d8ee0b735d1532",
+    "semantic_hash": "73c4b9ab7f394d9fa2d8ee0b735d1532"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/desktop/panels/divergence_panel.py": {
-    "mtime": 1780997140.9785051,
-    "ast_hash": "88d94a733650a5192fed622dd88eab3c",
-    "semantic_hash": "88d94a733650a5192fed622dd88eab3c"
+    "mtime": 1782569101.6986177,
+    "ast_hash": "b6cb4b9ae0f024ef1feecf55d3e2d3df",
+    "semantic_hash": "b6cb4b9ae0f024ef1feecf55d3e2d3df"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/desktop/panels/watchlist_panel.py": {
-    "mtime": 1780862638.4727762,
-    "ast_hash": "daaee531d1377b25b9fc2b3d9a8be655",
-    "semantic_hash": "daaee531d1377b25b9fc2b3d9a8be655"
+    "mtime": 1783497012.159523,
+    "ast_hash": "38fba61b74ffd64ecdf41adc63492d1c",
+    "semantic_hash": "38fba61b74ffd64ecdf41adc63492d1c"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/desktop/theme.py": {
     "mtime": 1780838865.9624436,
@@ -995,9 +905,9 @@
     "semantic_hash": "3bd633bd2e964dc001ed8f7edecbd2c2"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/desktop/widgets/tv_chart.py": {
-    "mtime": 1780997062.5351706,
-    "ast_hash": "e06cad17d39a1583b026d771401d43f0",
-    "semantic_hash": "e06cad17d39a1583b026d771401d43f0"
+    "mtime": 1782928509.5556104,
+    "ast_hash": "dc35d05f470901d581c5b5ed5fb19ceb",
+    "semantic_hash": "dc35d05f470901d581c5b5ed5fb19ceb"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/desktop/workers/__init__.py": {
     "mtime": 1780838619.4854748,
@@ -1005,24 +915,24 @@
     "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/desktop/workers/divergence_worker.py": {
-    "mtime": 1780953090.8862894,
-    "ast_hash": "b0ec6c9c71556dfdbc23ef702b8944e9",
-    "semantic_hash": "b0ec6c9c71556dfdbc23ef702b8944e9"
+    "mtime": 1783363142.7454875,
+    "ast_hash": "e18b8b050037623d8876aff3c531d1d1",
+    "semantic_hash": "e18b8b050037623d8876aff3c531d1d1"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/desktop/workers/health_worker.py": {
-    "mtime": 1780838704.983108,
-    "ast_hash": "433bb1fa4bbc3ca477161bd92831b2e8",
-    "semantic_hash": "433bb1fa4bbc3ca477161bd92831b2e8"
+    "mtime": 1781801720.9154036,
+    "ast_hash": "c42455c446b92c14ca63850351ff8172",
+    "semantic_hash": "c42455c446b92c14ca63850351ff8172"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/desktop/workers/market_worker.py": {
-    "mtime": 1780949558.7951045,
-    "ast_hash": "968bb1db8abaf524bba27ce524060c77",
-    "semantic_hash": "968bb1db8abaf524bba27ce524060c77"
+    "mtime": 1783496955.1095035,
+    "ast_hash": "2b55e260dc8ac2705d7f0b2e0748a762",
+    "semantic_hash": "2b55e260dc8ac2705d7f0b2e0748a762"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/desktop/workers/signal_worker.py": {
-    "mtime": 1780861501.8520265,
-    "ast_hash": "7d7a8a6e8319d928798f8981c389e81a",
-    "semantic_hash": "7d7a8a6e8319d928798f8981c389e81a"
+    "mtime": 1783011623.6778493,
+    "ast_hash": "64925da80460d8035b4ab100dba7dc4e",
+    "semantic_hash": "64925da80460d8035b4ab100dba7dc4e"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/desktop/widgets/log_panel.py": {
     "mtime": 1781014151.132094,
@@ -1030,23 +940,398 @@
     "semantic_hash": "d6586539de7fd317778e7634a137f165"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/scripts/compare_filter_output.py": {
-    "mtime": 1781009557.775971,
-    "ast_hash": "af3481d0bbafed3477a64275b7c11f65",
-    "semantic_hash": "af3481d0bbafed3477a64275b7c11f65"
+    "mtime": 1783492451.583974,
+    "ast_hash": "0fa367b3716f1d31ac65339d54af0ac2",
+    "semantic_hash": "0fa367b3716f1d31ac65339d54af0ac2"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/scripts/visualize_filter.py": {
-    "mtime": 1781010468.3079271,
-    "ast_hash": "136bd89b11b9159fc14028f0d1d19e2f",
-    "semantic_hash": "136bd89b11b9159fc14028f0d1d19e2f"
+    "mtime": 1783492470.3464546,
+    "ast_hash": "48f4671c3063710d44870eb9d4220f9b",
+    "semantic_hash": "48f4671c3063710d44870eb9d4220f9b"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/signals/signal_filter.py": {
-    "mtime": 1781008821.9429665,
-    "ast_hash": "3b470fe930e348a4385df15c35369d3e",
-    "semantic_hash": "3b470fe930e348a4385df15c35369d3e"
+    "mtime": 1783525978.851126,
+    "ast_hash": "07d0d2c2c626efbc421c3df6c8569fd2",
+    "semantic_hash": "07d0d2c2c626efbc421c3df6c8569fd2"
   },
   "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/tests/test_signal_filter.py": {
-    "mtime": 1781008699.3290005,
-    "ast_hash": "859046e1233c7a21f0e9aa03b6acdc5a",
-    "semantic_hash": "859046e1233c7a21f0e9aa03b6acdc5a"
+    "mtime": 1783492536.7016177,
+    "ast_hash": "7612d31b5e28f4b3de1c6faee7848f98",
+    "semantic_hash": "7612d31b5e28f4b3de1c6faee7848f98"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/database/migrations/006_continuous_aggregates.sql": {
+    "mtime": 1781733492.1590235,
+    "ast_hash": "1878a05559deaf94e38d03918475c6f4",
+    "semantic_hash": "1878a05559deaf94e38d03918475c6f4"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/database/migrations/007_rebuild_signals.sql": {
+    "mtime": 1781734992.9250424,
+    "ast_hash": "cf984cdee83eb312b630e5beb87e3aa7",
+    "semantic_hash": "cf984cdee83eb312b630e5beb87e3aa7"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/database/migrations/008_add_risk_management.sql": {
+    "mtime": 1781959587.7804637,
+    "ast_hash": "9902901ee77dfa5aebcd16e80f1672a1",
+    "semantic_hash": "9902901ee77dfa5aebcd16e80f1672a1"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/database/migrations/009_add_confluence.sql": {
+    "mtime": 1781965166.3956463,
+    "ast_hash": "f051efd45ffaa34e1672846cef28765c",
+    "semantic_hash": "f051efd45ffaa34e1672846cef28765c"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/database/migrations/010_add_trailing_stop.sql": {
+    "mtime": 1781967099.5884318,
+    "ast_hash": "be1da38d42683416cb4e6d6427a749a0",
+    "semantic_hash": "be1da38d42683416cb4e6d6427a749a0"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/database/migrations/011_paper_trading.sql": {
+    "mtime": 1781985466.5218832,
+    "ast_hash": "c70b57ecdb979d6baece313eb0eb33f8",
+    "semantic_hash": "c70b57ecdb979d6baece313eb0eb33f8"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/database/migrations/012_smc_columns.sql": {
+    "mtime": 1782838311.2057505,
+    "ast_hash": "63aa04266a37d57fc601ffb50dea38b5",
+    "semantic_hash": "63aa04266a37d57fc601ffb50dea38b5"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/database/migrations/013_fvg.sql": {
+    "mtime": 1782840349.6296935,
+    "ast_hash": "366655ef00febf6e1edfc80f7d29447a",
+    "semantic_hash": "366655ef00febf6e1edfc80f7d29447a"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/database/migrations/014_candle_pattern.sql": {
+    "mtime": 1782922569.5333014,
+    "ast_hash": "5f3307df3b055396166148eb001ad244",
+    "semantic_hash": "5f3307df3b055396166148eb001ad244"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/database/migrations/015_auto_signal_performance_trigger.sql": {
+    "mtime": 1760465072.162136,
+    "ast_hash": "45b720dcaf5c39ae515db5ee6fc34930",
+    "semantic_hash": "45b720dcaf5c39ae515db5ee6fc34930"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/database/migrations/add_deviso_delta.sql": {
+    "mtime": 1782673661.7342021,
+    "ast_hash": "76e3a45ba701fe643fb2cc200e465246",
+    "semantic_hash": "76e3a45ba701fe643fb2cc200e465246"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/database/migrations/add_deviso_score.sql": {
+    "mtime": 1782672612.9154785,
+    "ast_hash": "0bf42dd3bf71fdb932577ba222a3b32d",
+    "semantic_hash": "0bf42dd3bf71fdb932577ba222a3b32d"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/database/migrations/add_oi_data.sql": {
+    "mtime": 1781815073.423297,
+    "ast_hash": "cdafee97749f0bb4d31602b7f4ab15d7",
+    "semantic_hash": "cdafee97749f0bb4d31602b7f4ab15d7"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/database/migrations/rename_deviso_to_devisso.sql": {
+    "mtime": 1782759167.86638,
+    "ast_hash": "5e7232574f4f3ffdf27c224e12ece3f1",
+    "semantic_hash": "5e7232574f4f3ffdf27c224e12ece3f1"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/desktop/dialogs/manual_trade_dialog.py": {
+    "mtime": 1782944917.3177722,
+    "ast_hash": "365b88c50633c687e4224e1ca44af967",
+    "semantic_hash": "365b88c50633c687e4224e1ca44af967"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/desktop/panels/deviso_panel.py": {
+    "mtime": 1782837822.917197,
+    "ast_hash": "697c21e61aac7d9d1f2889583a163784",
+    "semantic_hash": "697c21e61aac7d9d1f2889583a163784"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/desktop/panels/paper_trade_panel.py": {
+    "mtime": 1783011602.629523,
+    "ast_hash": "8913030b4350b4318f6e7059599afb7f",
+    "semantic_hash": "8913030b4350b4318f6e7059599afb7f"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/desktop/panels/ranking_panel.py": {
+    "mtime": 1781997848.9027731,
+    "ast_hash": "308246b5742b2b06835e3c8b6a75ed9e",
+    "semantic_hash": "308246b5742b2b06835e3c8b6a75ed9e"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/desktop/panels/vpmv_divergence_panel.py": {
+    "mtime": 1782588960.9134853,
+    "ast_hash": "36488bf0d33636050858fc86729b4379",
+    "semantic_hash": "36488bf0d33636050858fc86729b4379"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/desktop/workers/ranking_worker.py": {
+    "mtime": 1782031302.0917814,
+    "ast_hash": "f834d1bdc3505a7f247350ec6474477d",
+    "semantic_hash": "f834d1bdc3505a7f247350ec6474477d"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/desktop/workers/vpmv_worker.py": {
+    "mtime": 1783502057.530063,
+    "ast_hash": "927dc7d10e395cd8bd88d53b59dd68ca",
+    "semantic_hash": "927dc7d10e395cd8bd88d53b59dd68ca"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/fill_price_gaps.py": {
+    "mtime": 1781806718.2328155,
+    "ast_hash": "5e9cdf185eab278b43c721d186fe0a8b",
+    "semantic_hash": "5e9cdf185eab278b43c721d186fe0a8b"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/indicators/incremental.py": {
+    "mtime": 1783361800.760245,
+    "ast_hash": "1dc688a80ed94fd5ed66c063f1524693",
+    "semantic_hash": "1dc688a80ed94fd5ed66c063f1524693"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/research/__init__.py": {
+    "mtime": 1783176902.793314,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/research/corpus/meta.json": {
+    "mtime": 1783197045.0235026,
+    "ast_hash": "98a15299dc088a45948ffe468c1a095a",
+    "semantic_hash": "98a15299dc088a45948ffe468c1a095a"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/research/pattern_lab/__init__.py": {
+    "mtime": 1783176902.7932537,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/research/pattern_lab/check_signal_at.py": {
+    "mtime": 1783186381.0905154,
+    "ast_hash": "e6c8af8f8c2e951a145faa2d1226aab0",
+    "semantic_hash": "e6c8af8f8c2e951a145faa2d1226aab0"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/research/pattern_lab/config.py": {
+    "mtime": 1783176830.5618484,
+    "ast_hash": "350a21ee3d5e8740aa02787f2ba1cd5b",
+    "semantic_hash": "350a21ee3d5e8740aa02787f2ba1cd5b"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/research/pattern_lab/corpus.py": {
+    "mtime": 1783197017.1815464,
+    "ast_hash": "abe6051a6c89880f677edb9234c2a6d8",
+    "semantic_hash": "abe6051a6c89880f677edb9234c2a6d8"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/research/pattern_lab/features.py": {
+    "mtime": 1783181333.482543,
+    "ast_hash": "99e5fde5d03148b8aa7cca76db9e5f10",
+    "semantic_hash": "99e5fde5d03148b8aa7cca76db9e5f10"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/research/pattern_lab/rank.py": {
+    "mtime": 1783178874.593719,
+    "ast_hash": "345bde0e8db368141500dd026ef303af",
+    "semantic_hash": "345bde0e8db368141500dd026ef303af"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/research/pattern_lab/report.py": {
+    "mtime": 1783179061.4390137,
+    "ast_hash": "01ef387c6915dbfaea368adccda7e03b",
+    "semantic_hash": "01ef387c6915dbfaea368adccda7e03b"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/research/pattern_lab/robustness.py": {
+    "mtime": 1783179461.5278316,
+    "ast_hash": "4d35d7f75dcef02ba9af3005857f8b85",
+    "semantic_hash": "4d35d7f75dcef02ba9af3005857f8b85"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/research/pattern_lab/run_features.py": {
+    "mtime": 1783178992.260643,
+    "ast_hash": "da79a619aad198e9147f77e2b52ef029",
+    "semantic_hash": "da79a619aad198e9147f77e2b52ef029"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/research/pattern_lab/scan_do_kirilimi_frequency.py": {
+    "mtime": 1783235441.1054456,
+    "ast_hash": "462e14212418bd99555c1214deaae6dd",
+    "semantic_hash": "462e14212418bd99555c1214deaae6dd"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/research/pattern_lab/scan_do_kirilimi_now.py": {
+    "mtime": 1783244243.7028635,
+    "ast_hash": "aaeb155639fd71ee3732d663d23c70f3",
+    "semantic_hash": "aaeb155639fd71ee3732d663d23c70f3"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/research/pattern_lab/st_equity_bt.py": {
+    "mtime": 1783180193.303578,
+    "ast_hash": "4da03b89ef0546e36d2bac5db4e5a4c8",
+    "semantic_hash": "4da03b89ef0546e36d2bac5db4e5a4c8"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/research/pattern_lab/t0.py": {
+    "mtime": 1783177185.6989975,
+    "ast_hash": "dd537385ffc94969856284a2055a9086",
+    "semantic_hash": "dd537385ffc94969856284a2055a9086"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/research/pattern_lab/test_lookahead.py": {
+    "mtime": 1783178948.3713953,
+    "ast_hash": "21415e0c71e1bf98978b3ca6164c12a6",
+    "semantic_hash": "21415e0c71e1bf98978b3ca6164c12a6"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/research/pattern_lab/test_vpmv_divergence.py": {
+    "mtime": 1783333015.927541,
+    "ast_hash": "fd10150b3436fde535921e96d51d6f0d",
+    "semantic_hash": "fd10150b3436fde535921e96d51d6f0d"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/research/pattern_lab/vol_exh_pine_bt.py": {
+    "mtime": 1783182112.7275045,
+    "ast_hash": "d5fa0e1c1a71c040fcd716def5569fe9",
+    "semantic_hash": "d5fa0e1c1a71c040fcd716def5569fe9"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/research/pattern_lab/vol_exh_split_check.py": {
+    "mtime": 1783182315.5640333,
+    "ast_hash": "01e447cb3a791590a5c510b8977782a8",
+    "semantic_hash": "01e447cb3a791590a5c510b8977782a8"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/research/pattern_lab/vol_exhaustion_bt.py": {
+    "mtime": 1783181613.2083511,
+    "ast_hash": "0a9dd2d171f88b546feeeb60db52b03a",
+    "semantic_hash": "0a9dd2d171f88b546feeeb60db52b03a"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/research/pattern_lab/vol_exhaustion_sr_bt.py": {
+    "mtime": 1783181827.0296862,
+    "ast_hash": "d8e1f85b723d6a91976f50fcd25bb8f8",
+    "semantic_hash": "d8e1f85b723d6a91976f50fcd25bb8f8"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/scripts/analyze_confluence.py": {
+    "mtime": 1782945259.4706473,
+    "ast_hash": "ee363f1a8d1325f36efe495382ee94e6",
+    "semantic_hash": "ee363f1a8d1325f36efe495382ee94e6"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/scripts/analyze_do_bt_filters.py": {
+    "mtime": 1783027398.236668,
+    "ast_hash": "ee822215c1841e687847ae48cb0a7346",
+    "semantic_hash": "ee822215c1841e687847ae48cb0a7346"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/scripts/analyze_prevol.py": {
+    "mtime": 1782945259.4708576,
+    "ast_hash": "5b93938a5a51cd506f566c4de55b3a8e",
+    "semantic_hash": "5b93938a5a51cd506f566c4de55b3a8e"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/scripts/analyze_regime.py": {
+    "mtime": 1782945259.4709587,
+    "ast_hash": "1261929e021e3a8ceb47b071973f66ed",
+    "semantic_hash": "1261929e021e3a8ceb47b071973f66ed"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/scripts/analyze_vol_ab.py": {
+    "mtime": 1781891222.49123,
+    "ast_hash": "8e13276900ee76f9c905fc7fd7d2471b",
+    "semantic_hash": "8e13276900ee76f9c905fc7fd7d2471b"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/scripts/analyze_vpmv_presignal.py": {
+    "mtime": 1782944917.3180463,
+    "ast_hash": "f87b0c0dba0b710c549b14d03f24d9b8",
+    "semantic_hash": "f87b0c0dba0b710c549b14d03f24d9b8"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/scripts/backfill_devisso.py": {
+    "mtime": 1783363142.7464857,
+    "ast_hash": "d58ca90c775a2c4df15c2500e1b4b7b7",
+    "semantic_hash": "d58ca90c775a2c4df15c2500e1b4b7b7"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/scripts/backtest_do_kirilimi.py": {
+    "mtime": 1783194246.466085,
+    "ast_hash": "920c9d58fa097ffa7d3c2b561e3d9bdb",
+    "semantic_hash": "920c9d58fa097ffa7d3c2b561e3d9bdb"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/scripts/reload_redis_klines.py": {
+    "mtime": 1781983756.814223,
+    "ast_hash": "e65fd5535999775f1526bf491e562342",
+    "semantic_hash": "e65fd5535999775f1526bf491e562342"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/signal_service.py": {
+    "mtime": 1783594828.1077437,
+    "ast_hash": "1e962574d8715fd60417498d5d236954",
+    "semantic_hash": "1e962574d8715fd60417498d5d236954"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/signals/do_kirilimi.py": {
+    "mtime": 1783244712.5281243,
+    "ast_hash": "26df764fbe3432669963ca5ad66cad18",
+    "semantic_hash": "26df764fbe3432669963ca5ad66cad18"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/signals/paper_trade_manager.py": {
+    "mtime": 1783526751.4458783,
+    "ast_hash": "ec30b928d200b51b0bc0a75946c91dbf",
+    "semantic_hash": "ec30b928d200b51b0bc0a75946c91dbf"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/signals/risk_manager.py": {
+    "mtime": 1783527059.0715735,
+    "ast_hash": "99cbad9d5079138623a4a3bce6826897",
+    "semantic_hash": "99cbad9d5079138623a4a3bce6826897"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/signals/risk_policy.py": {
+    "mtime": 1781987800.1658669,
+    "ast_hash": "761a779d905fd5ee4aae8792cb71f6a0",
+    "semantic_hash": "761a779d905fd5ee4aae8792cb71f6a0"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/signals/trailing.py": {
+    "mtime": 1782945461.348658,
+    "ast_hash": "e9a44547a5f22b6e247931665766c226",
+    "semantic_hash": "e9a44547a5f22b6e247931665766c226"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/start_services.sh": {
+    "mtime": 1782135334.1939542,
+    "ast_hash": "381f9cf4bef257dfe8cf80633027dc3a",
+    "semantic_hash": "381f9cf4bef257dfe8cf80633027dc3a"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/utils/heartbeat.py": {
+    "mtime": 1783594771.8136702,
+    "ast_hash": "ced9cf9b1e05fe5d6a04b1cb13b535af",
+    "semantic_hash": "ced9cf9b1e05fe5d6a04b1cb13b535af"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/utils/kline_schema.py": {
+    "mtime": 1783161465.2488444,
+    "ast_hash": "fe763e2cd257c0705a461ac79db1ed69",
+    "semantic_hash": "fe763e2cd257c0705a461ac79db1ed69"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/utils/resampler.py": {
+    "mtime": 1781557363.452642,
+    "ast_hash": "ce091c95b3b802bfb74d99fd6a533b57",
+    "semantic_hash": "ce091c95b3b802bfb74d99fd6a533b57"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/utils/telegram_notify.py": {
+    "mtime": 1783201175.8337307,
+    "ast_hash": "21de75438dc1580398ad0a8b5634981e",
+    "semantic_hash": "21de75438dc1580398ad0a8b5634981e"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/utils/vpmv.py": {
+    "mtime": 1783172054.0683277,
+    "ast_hash": "38f6913d04db1ca4012c121fa0a975bc",
+    "semantic_hash": "38f6913d04db1ca4012c121fa0a975bc"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/CLAUDE.md": {
+    "mtime": 1783432502.391185,
+    "ast_hash": "1514dd18d40f6c47aab6cbdfb5923ced",
+    "semantic_hash": "1514dd18d40f6c47aab6cbdfb5923ced"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/database/migrations/016_signal_filter_events.sql": {
+    "mtime": 1783450957.3158305,
+    "ast_hash": "71f1b1b78162a40acd8bc99d5d27b4c4",
+    "semantic_hash": "71f1b1b78162a40acd8bc99d5d27b4c4"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/research/pattern_lab/cohort_rank_bt.py": {
+    "mtime": 1783498676.9150467,
+    "ast_hash": "bc334a7de5ae46932803e26518b0a0a4",
+    "semantic_hash": "bc334a7de5ae46932803e26518b0a0a4"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/research/pattern_lab/evol_backtest.py": {
+    "mtime": 1783502289.8378055,
+    "ast_hash": "0bce6460d7800e598e44396b6e972527",
+    "semantic_hash": "0bce6460d7800e598e44396b6e972527"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/research/pattern_lab/evol_bt.py": {
+    "mtime": 1783499457.6311784,
+    "ast_hash": "4fde9450f452f4a3c71dcce4ede15580",
+    "semantic_hash": "4fde9450f452f4a3c71dcce4ede15580"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/research/pattern_lab/evol_signed_bt.py": {
+    "mtime": 1783504098.4888139,
+    "ast_hash": "185309e1126d0c0701c37f4ecd5141fa",
+    "semantic_hash": "185309e1126d0c0701c37f4ecd5141fa"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/research/pattern_lab/evol_trend_bt.py": {
+    "mtime": 1783504966.5861151,
+    "ast_hash": "01f75dfc8e16bbac933e04093f7eec88",
+    "semantic_hash": "01f75dfc8e16bbac933e04093f7eec88"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/research/pattern_lab/oi_theory_bt.py": {
+    "mtime": 1783504750.3423622,
+    "ast_hash": "1e27d5db3e36cb13cafeea064175bafa",
+    "semantic_hash": "1e27d5db3e36cb13cafeea064175bafa"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/research/pattern_lab/vol_accel_bt.py": {
+    "mtime": 1783505783.193338,
+    "ast_hash": "4fb3938fbf06d9e106ad2f083f19fe0f",
+    "semantic_hash": "4fb3938fbf06d9e106ad2f083f19fe0f"
+  },
+  "/Users/yusuf/Documents/TRader/CascadeProjects/TRader-Panel-ASYNC/scripts/replay_full_filter_history.py": {
+    "mtime": 1783494644.1898901,
+    "ast_hash": "e39e42fd5b212b9406488f11dc06d328",
+    "semantic_hash": "e39e42fd5b212b9406488f11dc06d328"
   }
 }
