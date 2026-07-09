@@ -113,6 +113,8 @@ class Signal(Base):
     market_structure = Column(String(10), nullable=True)
     fvg_tfs          = Column(String(40), nullable=True)
     candle_pattern   = Column(String(100), nullable=True)
+    rank_score       = Column(Float, nullable=True)
+    vs_btc           = Column(Float, nullable=True)
 
     paper_trades = relationship("PaperTrade", back_populates="signal", lazy="noload")
 

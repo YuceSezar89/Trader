@@ -11,6 +11,7 @@ Geçiş kuralları:
 """
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
@@ -120,6 +121,24 @@ class SignalLifecycleManager:
                         else None
                     )
 
+                    rank_score_val: Optional[float] = None
+                    vs_btc_val: Optional[float] = None
+                    try:
+                        raw_rank = await asyncio.wait_for(
+                            RedisClient.get_client().get("ranking:snapshot"),
+                            timeout=SAFE_EXTERNAL_TIMEOUT,
+                        )
+                        if raw_rank:
+                            snap = json.loads(raw_rank)
+                            entry = next(
+                                (item for item in snap if item.get("symbol") == symbol), None
+                            )
+                            if entry:
+                                rank_score_val = entry.get("rank_score")
+                                vs_btc_val = entry.get("vs_btc")
+                    except Exception as exc:  # pylint: disable=broad-exception-caught
+                        logger.debug("[%s] ranking snapshot okunamadı: %s", symbol, exc)
+
                     new_sig = Signal(
                         symbol            = symbol,
                         interval          = interval,
@@ -164,6 +183,8 @@ class SignalLifecycleManager:
                         market_structure  = signal_data.get("market_structure"),
                         fvg_tfs           = signal_data.get("fvg_tfs"),
                         candle_pattern    = signal_data.get("candle_pattern"),
+                        rank_score        = rank_score_val,
+                        vs_btc            = vs_btc_val,
                     )
                     session.add(new_sig)
                     await session.flush()

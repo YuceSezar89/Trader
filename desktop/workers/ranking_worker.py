@@ -79,7 +79,15 @@ class RankingWorker(QThread):
                     )
                     try:
                         import json as _json
-                        snapshot = [{"symbol": r["symbol"], "rank": r["rank"]} for r in result]
+                        snapshot = [
+                            {
+                                "symbol": r["symbol"],
+                                "rank": r["rank"],
+                                "rank_score": r.get("rank_score"),
+                                "vs_btc": r.get("vs_btc"),
+                            }
+                            for r in result
+                        ]
                         self._redis.set("ranking:snapshot", _json.dumps(snapshot), ex=600)
                     except Exception:
                         pass
@@ -191,6 +199,14 @@ class RankingWorker(QThread):
             parts = k.decode().split(":")
             if len(parts) == 3:
                 symbols.append(parts[1])
+
+        # Tokenize hisse/ETF sembollerini (NVDAUSDT, SPYUSDT vb.) hariç tut —
+        # bunlar ticker:* içinde de yok (backend _ticker_refresh_loop'ta filtrelendi),
+        # burada da o kümeyle kesişim alarak aynı dışlamayı uyguluyoruz.
+        ticker_keys = self._redis.keys("ticker:*")
+        tracked = {k.decode().split(":", 1)[1] for k in ticker_keys}
+        if tracked:
+            symbols = [s for s in symbols if s in tracked]
         return symbols
 
     def _fetch_klines(self, symbol: str, tf: str) -> Optional[pd.DataFrame]:
