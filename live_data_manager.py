@@ -492,6 +492,13 @@ class LiveDataManager:
 
                     logger.debug(f"[{symbol}] {interval} Bar closed (x): {is_closed}")
 
+                    # PnL/watchlist fiyatı — kline buffer throttle'ından bağımsız,
+                    # HER mesajda güncellenir (sadece dict yazımı, bedava). Önceden
+                    # _handle_tick içindeydi ve 2s throttle'a bağımlıydı, PnL'i
+                    # gereksiz yere yavaşlatıyordu.
+                    if interval == "1m":
+                        self._last_prices[symbol] = float(kline["c"])
+
                     if is_closed:
                         logger.info(f"🕯️ [{symbol}] {interval} mum kapandı. Fiyat: {kline['c']}")
                         # WebSocket thread'inden ana event loop'a güvenli coroutine çağrısı
@@ -520,9 +527,6 @@ class LiveDataManager:
     async def _handle_tick(self, symbol: str, interval: str, kline_data: Dict) -> None:
         """Açık mumu kapalı buffer'a ekleyerek Redis'e yazar ve pub/sub tetikler."""
         try:
-            if interval == "1m":
-                self._last_prices[symbol] = float(kline_data["c"])
-
             if symbol not in self.mtf_buffers or interval not in self.mtf_buffers[symbol]:
                 return
             buf = self.mtf_buffers[symbol][interval]
@@ -641,25 +645,34 @@ class LiveDataManager:
                 min_bars = {'1m': 200, '5m': 100, '15m': 67, '1h': 24, '4h': 12, '1d': 7}.get(interval, 100)
 
                 if not ref_df.empty and len(self.mtf_buffers[symbol][interval]) >= min_bars:
-                    oi_info = self._oi_cache.get(symbol)
-                    oi_data_json = json.dumps(oi_info) if oi_info else None
-                    df_copy = await loop.run_in_executor(
-                        _MTF_EXECUTOR, pd.DataFrame.copy, self.mtf_buffers[symbol][interval]
-                    )
-                    task = asyncio.create_task(
-                        process_and_enrich_signals(
-                            symbol=symbol,
-                            df=df_copy,
-                            ref_df=ref_df,
-                            interval=interval,
-                            oi_data=oi_data_json,
-                            symbol_buffers=self.mtf_buffers.get(symbol, {}),
-                            dry_run=(Config.SIGNAL_SOURCE == "yeni"),
+                    # Cutover sonrası (SIGNAL_SOURCE=yeni) signal_service.py gerçek
+                    # yazan taraf — bu gölge hesaplama (dry_run=True) artık saf israf
+                    # değil, signal_engine.SignalFilter.check() dry_run'dan habersiz
+                    # koşulsuz signal_filter_events'e INSERT yapıyor: iki process aynı
+                    # olayı çift yazıyordu. Cutover aktifken bu blok tamamen atlanır,
+                    # publish_kline_closed_event (signal_service'i besleyen asıl satır)
+                    # dokunulmadan kalır. SIGNAL_SOURCE='eski'ye dönülürse otomatik
+                    # eski davranışa döner.
+                    if Config.SIGNAL_SOURCE != "yeni":
+                        oi_info = self._oi_cache.get(symbol)
+                        oi_data_json = json.dumps(oi_info) if oi_info else None
+                        df_copy = await loop.run_in_executor(
+                            _MTF_EXECUTOR, pd.DataFrame.copy, self.mtf_buffers[symbol][interval]
                         )
-                    )
-                    self.processing_tasks.add(task)
-                    task.add_done_callback(self.processing_tasks.discard)
-                    logger.info(f"🎯 [{symbol}] {interval} sinyal üretimi başlatıldı")
+                        task = asyncio.create_task(
+                            process_and_enrich_signals(
+                                symbol=symbol,
+                                df=df_copy,
+                                ref_df=ref_df,
+                                interval=interval,
+                                oi_data=oi_data_json,
+                                symbol_buffers=self.mtf_buffers.get(symbol, {}),
+                                dry_run=False,
+                            )
+                        )
+                        self.processing_tasks.add(task)
+                        task.add_done_callback(self.processing_tasks.discard)
+                        logger.info(f"🎯 [{symbol}] {interval} sinyal üretimi başlatıldı")
                     await RedisClient.publish_kline_closed_event(symbol, interval, new_row["open_time"])
 
         except Exception as e:
@@ -1880,13 +1893,13 @@ class LiveDataManager:
             await do_kirilimi_manager.check_all_prices(prices)
 
     async def _price_publish_loop(self) -> None:
-        """Her 2 saniyede canlı fiyatları tek Redis key'ine yazar (panel canlı PnL için).
+        """Her 1 saniyede canlı fiyatları tek Redis key'ine yazar (panel canlı PnL için).
         Ticker (REST, 628 sembol) taban; WS tick fiyatları daha taze olduğundan üzerine yazar.
         Paylaşımlı havuz kullanılmaz: iptal ortasında zehirlenen havuz bağlantısı
         timeout'suz set()'i sonsuza dek askıda bırakabiliyor (3 Tem vakası)."""
         redis_conn = None
         while True:
-            await asyncio.sleep(2)
+            await asyncio.sleep(1)
             prices = {**self._ticker_prices, **self._last_prices}
             if not prices:
                 continue

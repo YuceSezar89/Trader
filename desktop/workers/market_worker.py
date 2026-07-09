@@ -17,7 +17,8 @@ from PyQt6.QtCore import QThread, pyqtSignal  # pylint: disable=no-name-in-modul
 logger = logging.getLogger(__name__)
 
 _ARROW_MAGIC = b"ARDF"
-_FALLBACK_MS = 3_000
+_FALLBACK_MS = 1_000  # prices:live + aktif grafik pollingi — backend 1sn'de bir yazıyor
+_TICKER_POLL_INTERVAL = 20  # saniye — backend ticker:* verisini 60sn'de bir güncelliyor
 _SYMBOL_DISCOVERY_INTERVAL = 60  # saniye — sembol evreni (yeni listing/delisting) bu kadar seyrek değişir
 _FALLBACK_SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"]
 
@@ -43,6 +44,7 @@ class MarketWorker(QThread):  # pylint: disable=too-many-instance-attributes
         self._chart_symbol: str = ""
         self._chart_tf: str = ""
         self._last_symbol_discovery: float = 0.0
+        self._last_ticker_poll: float = 0.0
 
     def request_symbol_refresh(self) -> None:
         """Manuel yenile — sıradaki poll döngüsünde sembol evrenini yeniden keşfeder."""
@@ -175,11 +177,12 @@ class MarketWorker(QThread):  # pylint: disable=too-many-instance-attributes
         self._discover_symbols()
 
         with self._lock:
-            symbols = list(self._watched_symbols)
             chart_sym = self._chart_symbol
             chart_tf = self._chart_tf
 
-        # Canlı tick fiyatları (backend 2s'de bir yazar) — tek GET, tek toplu emit
+        # Canlı tick fiyatları (backend 1s'de bir yazar) — tek GET, tek toplu emit.
+        # Bu döngü artık hızlı (1s) çalışıyor — aktif sinyallerin PnL'i ve aktif
+        # grafik bu sayede TradingView'a yakın bir gecikmeyle güncelleniyor.
         try:
             raw = self._redis.get("prices:live")
             if raw:
@@ -187,29 +190,37 @@ class MarketWorker(QThread):  # pylint: disable=too-many-instance-attributes
         except Exception:  # pylint: disable=broad-exception-caught
             pass
 
-        # Ticker verisi (24h change/volume/funding) — tek pipeline'da oku
-        if symbols:
-            try:
-                pipe = self._redis.pipeline(transaction=False)
-                for symbol in symbols:
-                    pipe.get(f"ticker:{symbol}")
-                results = pipe.execute()
-            except Exception:  # pylint: disable=broad-exception-caught
-                results = [None] * len(symbols)
-            for symbol, raw in zip(symbols, results):
-                if not raw:
-                    continue
+        # Ticker verisi (24h change/volume/funding) — backend sadece 60s'de bir
+        # günceller, bu yüzden ayrı ve çok daha yavaş bir zamanlayıcıya bağlandı.
+        # Önceden prices:live ile aynı hızlı döngüdeydi — 20 kat gereksiz Redis
+        # round-trip yapıyordu (543 sembol × saniyede bir yerine 20sn'de bir).
+        now = time.time()
+        if now - self._last_ticker_poll >= _TICKER_POLL_INTERVAL:
+            self._last_ticker_poll = now
+            with self._lock:
+                symbols = list(self._watched_symbols)
+            if symbols:
                 try:
-                    ticker = json.loads(raw)
+                    pipe = self._redis.pipeline(transaction=False)
+                    for symbol in symbols:
+                        pipe.get(f"ticker:{symbol}")
+                    results = pipe.execute()
                 except Exception:  # pylint: disable=broad-exception-caught
-                    continue
-                self.price_updated.emit(
-                    symbol,
-                    float(ticker.get("price", 0.0)),
-                    float(ticker.get("change_pct", 0.0)),
-                    float(ticker.get("volume", 0.0)),
-                    float(ticker.get("funding_rate", 0.0)),
-                )
+                    results = [None] * len(symbols)
+                for symbol, raw in zip(symbols, results):
+                    if not raw:
+                        continue
+                    try:
+                        ticker = json.loads(raw)
+                    except Exception:  # pylint: disable=broad-exception-caught
+                        continue
+                    self.price_updated.emit(
+                        symbol,
+                        float(ticker.get("price", 0.0)),
+                        float(ticker.get("change_pct", 0.0)),
+                        float(ticker.get("volume", 0.0)),
+                        float(ticker.get("funding_rate", 0.0)),
+                    )
 
         if chart_sym:
             df = self._fetch_klines(chart_sym, chart_tf)
