@@ -466,6 +466,9 @@ class SignalsModel(QAbstractTableModel):
         return None
 
 
+_RANGE_FIELDS = ("vpm", "mtf", "alpha", "beta", "zscore")
+
+
 class SignalsProxyModel(QSortFilterProxyModel):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -474,8 +477,15 @@ class SignalsProxyModel(QSortFilterProxyModel):
         self._indicator_filter = ""
         self._st_only = False
         self._cf_only = False
+        # VPMV/MTF/α/β/Z için min-max eşik filtreleri — None = o yönde sınır yok.
+        self._ranges: dict[str, list[Optional[float]]] = {f: [None, None] for f in _RANGE_FIELDS}
         self.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self.setFilterKeyColumn(COL_SYMBOL)
+
+    def set_range_filter(self, field_name: str, min_val: Optional[float], max_val: Optional[float]) -> None:
+        """field_name: 'vpm'|'mtf'|'alpha'|'beta'|'zscore'. None sınır konulmadığı anlamına gelir."""
+        self._ranges[field_name] = [min_val, max_val]
+        self.invalidateFilter()
 
     def set_type_filter(self, type_filter: str) -> None:
         self._type_filter = type_filter
@@ -512,6 +522,16 @@ class SignalsProxyModel(QSortFilterProxyModel):
             return False
         if self._cf_only and not row.is_confluence:
             return False
+        for field_name, (lo, hi) in self._ranges.items():
+            if lo is None and hi is None:
+                continue
+            val = getattr(row, field_name, None)
+            if val is None:
+                return False  # eşik konulmuşsa ve değer bilinmiyorsa gösterme
+            if lo is not None and val < lo:
+                return False
+            if hi is not None and val > hi:
+                return False
         return super().filterAcceptsRow(source_row, source_parent)
 
     def lessThan(self, left: QModelIndex, right: QModelIndex) -> bool:

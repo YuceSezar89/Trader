@@ -8,6 +8,7 @@ Filtreler: LONG / SHORT / Hepsi toggle + sembol arama
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, pyqtSlot
+from PyQt6.QtGui import QDoubleValidator
 from PyQt6.QtWidgets import QHeaderView
 from PyQt6.QtWidgets import (
     QComboBox,
@@ -125,6 +126,29 @@ class ActiveSignalsPanel(QWidget):
         self._search.textChanged.connect(self._proxy.setFilterFixedString)
         filter_row.addWidget(self._search)
         root.addLayout(filter_row)
+
+        # Sayısal aralık filtreleri — VPMV/MTF/α/β/Z için min-max eşikleri.
+        range_row = QHBoxLayout()
+        self._range_edits: dict[str, tuple[QLineEdit, QLineEdit]] = {}
+        for field_name, label in (
+            ("vpm", "VPMV"), ("mtf", "MTF"), ("alpha", "α"), ("beta", "β"), ("zscore", "Z"),
+        ):
+            range_row.addWidget(QLabel(f"{label}:"))
+            lo_edit = QLineEdit()
+            lo_edit.setPlaceholderText("min")
+            lo_edit.setFixedWidth(42)
+            lo_edit.setValidator(QDoubleValidator())
+            hi_edit = QLineEdit()
+            hi_edit.setPlaceholderText("max")
+            hi_edit.setFixedWidth(42)
+            hi_edit.setValidator(QDoubleValidator())
+            lo_edit.textChanged.connect(lambda _t, f=field_name: self._on_range_changed(f))
+            hi_edit.textChanged.connect(lambda _t, f=field_name: self._on_range_changed(f))
+            range_row.addWidget(lo_edit)
+            range_row.addWidget(hi_edit)
+            self._range_edits[field_name] = (lo_edit, hi_edit)
+        range_row.addStretch()
+        root.addLayout(range_row)
 
         # Tablo
         self._table = QTableView()
@@ -245,6 +269,21 @@ class ActiveSignalsPanel(QWidget):
 
     def _on_indicator_changed(self, text: str) -> None:
         self._proxy.set_indicator_filter("" if text.startswith("İnd:") else text)
+        self._update_stats()
+
+    def _on_range_changed(self, field_name: str) -> None:
+        lo_edit, hi_edit = self._range_edits[field_name]
+
+        def _parse(edit: QLineEdit) -> "float | None":
+            text = edit.text().strip()
+            if not text or text in ("-", "+", "."):
+                return None
+            try:
+                return float(text)
+            except ValueError:
+                return None
+
+        self._proxy.set_range_filter(field_name, _parse(lo_edit), _parse(hi_edit))
         self._update_stats()
 
     # ── Age timer — Süre kolonunu dakikada bir yenile ─────────────────────────
