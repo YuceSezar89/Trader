@@ -10,6 +10,8 @@ from config import Config
 # Error handling
 from utils.exceptions import (
     BinanceAPIError,
+    BinanceRateLimitError,
+    BinanceInvalidParamsError,
     DataError,
     raise_api_timeout,
     ErrorCodes
@@ -19,6 +21,32 @@ from utils.logger import get_logger, log_error_with_context
 
 # Logger
 logger = get_logger(__name__)
+
+
+def _check_binance_error_code(data: Any, endpoint: str) -> None:
+    """Binance yanıtında hata kodu varsa uygun exception'ı fırlatır.
+
+    Sadece futures SALT-OKUMA uçlarında (klines/ticker/funding/OI/exchangeInfo)
+    gerçekten karşılaşılabilecek kodlar ele alınıyor. Emir/pozisyon API'siyle
+    ilgili kodlar (ör. -2010 yetersiz bakiye, -2011 emir bulunamadı) BİLEREK
+    yok — TRader gerçek emir açmıyor (paper trading kendi içinde simüle
+    ediliyor), eklenirse hiç tetiklenmeyecek ölü kod olurdu.
+    """
+    if not (isinstance(data, dict) and "code" in data):
+        return
+    code = data.get("code")
+    msg = data.get("msg", "")
+    if code == -1003:
+        raise BinanceRateLimitError(f"Oran limiti aşıldı: {msg}", endpoint=endpoint)
+    if code == -1021:
+        raise BinanceAPIError(
+            f"Geçersiz zaman damgası (sunucu saati kaymış olabilir): {msg}", endpoint=endpoint
+        )
+    if code == -1022:
+        raise BinanceAPIError(f"Geçersiz imza: {msg}", endpoint=endpoint)
+    if code in (-1100, -1101, -1102):
+        raise BinanceInvalidParamsError(f"Geçersiz parametre: {msg}", endpoint=endpoint)
+    raise BinanceAPIError(f"Binance API hatası {code}: {msg}", endpoint=endpoint)
 
 def get_live_binance(
     symbol: str, 
@@ -117,9 +145,13 @@ class BinanceClientManager:
                 return pd.DataFrame()
 
             if isinstance(data, dict) and data.get("code"):
-                if data.get("code") == -1003:
+                try:
+                    _check_binance_error_code(data, url)
+                except BinanceRateLimitError as e:
                     cls._set_ban_cooldown(status, headers, data)
-                logger.warning(f"[{symbol}] Binance API Error: {data}")
+                    logger.warning(f"[{symbol}] {e}")
+                except BinanceAPIError as e:
+                    logger.warning(f"[{symbol}] {e}")
                 return pd.DataFrame()
             df = pd.DataFrame(data, columns=[
                 "open_time", "open", "high", "low", "close", "volume",
@@ -199,6 +231,7 @@ class BinanceClientManager:
                         return await response.json()
             data = await asyncio.wait_for(request(), timeout=Config.API_TIMEOUT)
             if not isinstance(data, list):
+                _check_binance_error_code(data, url)
                 raise DataError("Expected data format not found: response is not a list.")
             logger.info(f"✅ Successfully fetched 24hr ticker stats for {len(data)} symbols.")
             return data
@@ -219,6 +252,7 @@ class BinanceClientManager:
                         return await response.json()
             data = await asyncio.wait_for(request(), timeout=Config.API_TIMEOUT)
             if not isinstance(data, list):
+                _check_binance_error_code(data, url)
                 return []
             return data
         except Exception as e:  # pylint: disable=broad-exception-caught
@@ -233,19 +267,26 @@ class BinanceClientManager:
         url = "https://fapi.binance.com/fapi/v1/openInterest"
         sem = asyncio.Semaphore(concurrency)
         result: Dict[str, float] = {}
+        errors: Dict[str, int] = {}
 
         async def _fetch_one(sym: str) -> None:
             async with sem:
                 try:
                     async with aiohttp.ClientSession() as session:
                         async with session.get(url, params={"symbol": sym}, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                            data = await resp.json()
                             if resp.status == 200:
-                                data = await resp.json()
                                 result[sym] = float(data.get("openInterest", 0))
-                except Exception:  # pylint: disable=broad-exception-caught
-                    pass
+                            else:
+                                _check_binance_error_code(data, url)
+                except Exception as e:  # pylint: disable=broad-exception-caught
+                    errors[type(e).__name__] = errors.get(type(e).__name__, 0) + 1
 
         await asyncio.gather(*[_fetch_one(s) for s in symbols])
+        if errors:
+            # Tek tek loglamak 20+ eşzamanlı istekte gürültü yapar — özet yeterli.
+            n_failed = sum(errors.values())
+            logger.warning("OI batch: %d/%d sembol başarısız (%s)", n_failed, len(symbols), errors)
         return result
 
     @classmethod
@@ -263,6 +304,8 @@ class BinanceClientManager:
                         response.raise_for_status()
                         return await response.json()
             data = await asyncio.wait_for(request(), timeout=Config.API_TIMEOUT)
+            if "symbols" not in data:
+                _check_binance_error_code(data, url)
             equity_symbols = {
                 s["symbol"] for s in data.get("symbols", [])
                 if s.get("underlyingType") == "EQUITY"

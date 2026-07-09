@@ -44,6 +44,16 @@ class BinanceAPIError(APIError):
     pass
 
 
+class BinanceRateLimitError(BinanceAPIError):
+    """Binance oran limiti aşıldı (code -1003 vb.)"""
+    pass
+
+
+class BinanceInvalidParamsError(BinanceAPIError):
+    """Binance geçersiz parametre/sembol/interval (code -1100/-1101/-1102)"""
+    pass
+
+
 class CalculationError(TRaderBaseException):
     """İndikatör hesaplama hatalar"""
     
