@@ -11,7 +11,6 @@ import redis.asyncio as aioredis
 import numpy as np
 import pandas as pd
 
-from binance.websocket.um_futures.websocket_client import UMFuturesWebsocketClient
 from utils.asyncio_ws_client import AsyncioBinanceStreamManager
 
 from binance_client import BinanceClientManager
@@ -33,8 +32,6 @@ from sqlalchemy import text
 from signals.signal_processor import process_and_enrich_signals
 from signals.risk_manager import risk_manager
 from signals.paper_trade_manager import paper_trade_manager, ha_cross_manager, rsi_15m_manager, manual_manager, do_kirilimi_manager, do_open_streak_manager
-from signals.do_kirilimi import do_kirilimi_detector, btc_day_context
-from signals.do_open_streak import do_open_streak_detector
 from utils.exceptions import BinanceAPIError, DatabaseError
 from config import Config
 from utils.kline_schema import check_kline_schema
@@ -282,8 +279,8 @@ class LiveDataManager:
         })
         # Multi-WebSocket istemcileri: Her connection için ayrı client
         self.ws_clients: Dict[int, Any] = {}  # connection_id -> ws_client
-        # WS_BACKEND="asyncio" iken kullanılan alternatif taşıma katmanı yöneticisi
-        # (utils/asyncio_ws_client.py) — thread yerine asyncio task modeli.
+        # Asyncio-native WS taşıma katmanı yöneticisi (utils/asyncio_ws_client.py) —
+        # thread-per-connection yerine aynı event loop'ta task modeli.
         self._asyncio_ws_manager: Optional[AsyncioBinanceStreamManager] = None
         self.is_ws_connected = False
         self.last_message_time: Optional[float] = (
@@ -598,7 +595,7 @@ class LiveDataManager:
                 if kline_data.get("e") == "kline":
                     kline = kline_data["k"]
                     symbol = kline["s"]
-                    interval = kline["i"]  # Timeframe bilgisi (1m, 5m, 15m, etc.)
+                    interval = kline["i"]  # 1m-türetme cutover sonrası her zaman "1m"
                     is_closed = kline["x"]
 
                     logger.debug(f"[{symbol}] {interval} Bar closed (x): {is_closed}")
@@ -607,33 +604,23 @@ class LiveDataManager:
                     # HER mesajda güncellenir (sadece dict yazımı, bedava). Önceden
                     # _handle_tick içindeydi ve 2s throttle'a bağımlıydı, PnL'i
                     # gereksiz yere yavaşlatıyordu.
-                    if interval == "1m":
-                        self._last_prices[symbol] = float(kline["c"])
-
-                    derive_from_1m = interval == "1m" and getattr(Config, "MTF_STREAM_SOURCE", "eski") == "yeni"
+                    self._last_prices[symbol] = float(kline["c"])
 
                     if is_closed:
                         logger.info(f"🕯️ [{symbol}] {interval} mum kapandı. Fiyat: {kline['c']}")
                         # WebSocket thread'inden ana event loop'a güvenli coroutine çağrısı.
-                        # 1m-türetme AÇIKSA _update_and_process_symbol_mtf (1m barını buffer'a
-                        # ekler) ile _derive_and_dispatch_closing_tfs (o buffer'ı okur) TEK
-                        # coroutine'de SIRALI await edilir — ayrı run_coroutine_threadsafe
-                        # çağrıları sıralama garantisi vermiyordu (ilki executor'a await ettiği
-                        # an event loop'u bırakıyor, ikincisi HENÜZ EKLENMEMİŞ buffer'ı okuyup
+                        # _update_and_process_symbol_mtf (1m barını buffer'a ekler) ile
+                        # _derive_and_dispatch_closing_tfs (o buffer'ı okur) TEK coroutine'de
+                        # SIRALI await edilir — ayrı run_coroutine_threadsafe çağrıları
+                        # sıralama garantisi vermiyordu (ilki executor'a await ettiği an
+                        # event loop'u bırakıyor, ikincisi HENÜZ EKLENMEMİŞ buffer'ı okuyup
                         # sessizce atlıyordu; 10 Tem, çoğu sembolde türetme hiç tetiklenmiyordu).
-                        if derive_from_1m:
-                            asyncio.run_coroutine_threadsafe(
-                                self._process_closed_1m_and_derive(
-                                    symbol, interval, kline, int(kline["T"]) + 1
-                                ), self.loop
-                            )
-                        else:
-                            asyncio.run_coroutine_threadsafe(
-                                self._update_and_process_symbol_mtf(symbol, interval, kline), self.loop
-                            )
+                        asyncio.run_coroutine_threadsafe(
+                            self._process_closed_1m_and_derive(
+                                symbol, interval, kline, int(kline["T"]) + 1
+                            ), self.loop
+                        )
                     else:
-                        if interval not in _TICK_TF_WHITELIST:
-                            return
                         tick_key = f"{symbol}:{interval}"
                         now = time.time()
                         throttle = _TICK_THROTTLE_SECS.get(interval, 2)
@@ -641,14 +628,9 @@ class LiveDataManager:
                             self._tick_last_sent[tick_key] = now
                             # bkz. yukarıdaki is_closed dalı — aynı sıralama garantisi
                             # forming bar türetmesi için de gerekli.
-                            if derive_from_1m:
-                                asyncio.run_coroutine_threadsafe(
-                                    self._process_tick_and_derive(symbol, interval, kline), self.loop
-                                )
-                            else:
-                                asyncio.run_coroutine_threadsafe(
-                                    self._handle_tick(symbol, interval, kline), self.loop
-                                )
+                            asyncio.run_coroutine_threadsafe(
+                                self._process_tick_and_derive(symbol, interval, kline), self.loop
+                            )
 
         except json.JSONDecodeError:
             logger.error(f"WebSocket'ten bozuk JSON verisi alındı: {msg}")
@@ -863,12 +845,8 @@ class LiveDataManager:
                 # Cache to Redis
                 await RedisClient.set_mtf_klines(symbol, interval, self.mtf_buffers[symbol][interval])
                 logger.debug(f"[{symbol}] {interval} buffer updated and cached")
-
-                if interval == "5m":
-                    await self._check_do_kirilimi(symbol, self.mtf_buffers[symbol][interval])
-
-                if interval == "15m":
-                    await self._check_do_open_streak(symbol, self.mtf_buffers[symbol][interval])
+                # do_kirilimi/do_open_streak tetikleme artık signal_service.py'de
+                # (bkz. paper trading ayrıştırması, 10 Tem 2026 cutover).
 
             # Legacy 1m buffer (kline_data) — sadece DB batch insert için tutuluyor
             if interval == '1m':
@@ -940,65 +918,6 @@ class LiveDataManager:
             logger.info(f"[{symbol}] Veritabanından başarıyla temizlendi.")
         except Exception as e:
             logger.error(f"[{symbol}] Veritabanı temizliği sırasında hata: {e}")
-
-    def _handle_ws_close(self, *args):
-        """Callback function for when the websocket connection is closed."""
-        try:
-            # Log any provided close arguments (code, reason, etc.) for diagnostics
-            logger.warning(f"WebSocket bağlantısı kapandı. args={args!r}")
-            # If the websocket client provides a close code/reason, try to extract
-            if args:
-                try:
-                    # common signatures: (ws, close_status_code, close_msg) or (code, reason)
-                    # attempt a best-effort extraction
-                    if len(args) >= 2:
-                        close_code = args[1]
-                        logger.warning(f"WebSocket close code: {close_code}")
-                    if len(args) >= 3:
-                        close_msg = args[2]
-                        logger.warning(f"WebSocket close message: {close_msg}")
-                except Exception:
-                    logger.debug("Close args couldn't be parsed further.", exc_info=True)
-        except Exception as e:
-            logger.error(f"_handle_ws_close hata verirken: {e}", exc_info=True)
-        finally:
-            # Mark connection as down and set an error type for reconnect logic
-            self.is_ws_connected = False
-            self.last_error_type = "closed"
-
-    def _handle_ws_error(self, error, *args):
-        """Callback function for websocket errors."""
-        try:
-            error_str = str(error)
-            logger.error(f"WebSocket hata callback tetiklendi. error={error_str}, args={args!r}")
-
-            # Connection reset hatalarını özel olarak takip et
-            if "Connection reset by peer" in error_str or "[Errno 54]" in error_str:
-                self.connection_reset_count += 1
-                self.last_error_type = "connection_reset"
-                logger.error(
-                    f"WebSocket connection reset hatası (#{self.connection_reset_count}): {error}"
-                )
-            elif "timeout" in error_str.lower():
-                self.last_error_type = "timeout"
-                logger.error(f"WebSocket timeout hatası: {error}")
-            else:
-                self.last_error_type = "other"
-                logger.error(f"WebSocket genel hatası: {error}", exc_info=True)
-
-            # If the error object has attributes like code/reason, log them too
-            try:
-                if hasattr(error, 'code'):
-                    logger.debug(f"Error.code={getattr(error, 'code')}")
-                if hasattr(error, 'reason'):
-                    logger.debug(f"Error.reason={getattr(error, 'reason')}")
-            except Exception:
-                logger.debug("Ek hata öznitelikleri alınamadı.", exc_info=True)
-
-            self.consecutive_errors += 1
-            self.is_ws_connected = False
-        except Exception as e:
-            logger.error(f"_handle_ws_error sırasında beklenmedik hata: {e}", exc_info=True)
 
     # =============================================================================
     # MULTI-TIMEFRAME FUNCTIONS (NEW!)
@@ -1223,93 +1142,6 @@ class LiveDataManager:
         
         return stats
 
-    async def _check_do_kirilimi(self, symbol: str, df_5m) -> None:
-        """DO Kırılımı dedektörü — 5m bar kapanışında 6 kapı + ADX + ST.
-        10 Tem 2026: PAPER_TRADING_SOURCE="yeni" iken atlanır — signal_service.py'nin
-        eşdeğeri gerçek tetiklemeyi yapar."""
-        if getattr(Config, 'PAPER_TRADING_SOURCE', 'eski') == 'yeni':
-            return
-        try:
-            btc_map = self.mtf_buffers.get("BTCUSDT", {})
-            btc_df = btc_map.get("5m") if isinstance(btc_map, dict) else None
-            btc_ctx = btc_day_context(btc_df) if btc_df is not None else None
-            # do_kirilimi_detector.check() senkron ve ağır (pandas_ta ile ST/ADX/RSI/HTF,
-            # ~320 bar) — her 5m kapanışında TÜM semboller aynı anda tetiklendiği için
-            # ana event loop'ta çalıştırmak bu haftaki GIL tıkanması sorununu burada
-            # yeniden yaratır. Mevcut _MTF_EXECUTOR'a sarılıyor.
-            loop = asyncio.get_event_loop()
-            entry = await loop.run_in_executor(
-                _MTF_EXECUTOR, do_kirilimi_detector.check, symbol, df_5m, btc_ctx
-            )
-            if entry:
-                opened = await do_kirilimi_manager.open_direct(
-                    symbol=symbol,
-                    signal_type="Long",
-                    interval="5m",
-                    price=entry["price"],
-                    atr=entry["atr"],
-                    sl_price=entry["sl_price"],
-                    tp_price=entry["tp_price"],
-                    note=f"{entry['pattern']} {entry['ayrisma']:+.1f}%",
-                )
-                if opened:
-                    await send_telegram_message(
-                        f"🎯 DO Kırılımı — {symbol}\n"
-                        f"Giriş: {entry['price']:.6g}\n"
-                        f"SL: {entry['sl_price']:.6g} · TP: {entry['tp_price']:.6g}\n"
-                        f"Pattern: {entry['pattern']} · Ayrışma: {entry['ayrisma']:+.1f}%"
-                    )
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            logger.error("[DOKirilimi] %s kanca hatası: %s", symbol, exc, exc_info=True)
-
-    async def _check_do_open_streak(self, symbol: str, df_15m) -> None:
-        """DO Kırılımı + Ardışık Yeşil Mum + Gauss dedektörü — 15m bar kapanışında.
-        Pattern Lab araştırması: research/pattern_lab/do_break_gauss_*.py (9-10 Tem 2026).
-        Pozisyon boyutlandırma volatilite-ayarlı: sabit $ risk hedefi, ATR'ye göre
-        pozisyon büyüklüğü otomatik ayarlanır (hocanın DevisSoTrader risk_management.py
-        ::position_size_volatility_adjusted fikri) — volatil coinde küçük nominal,
-        sakin coinde büyük nominal, ama SL'e değince kaybedilen $ HER ZAMAN sabit.
-
-        10 Tem 2026: PAPER_TRADING_SOURCE="yeni" iken atlanır — signal_service.py'nin
-        eşdeğeri gerçek tetiklemeyi yapar."""
-        if getattr(Config, 'PAPER_TRADING_SOURCE', 'eski') == 'yeni':
-            return
-        try:
-            loop = asyncio.get_event_loop()
-            entry = await loop.run_in_executor(
-                _MTF_EXECUTOR, do_open_streak_detector.check, symbol, df_15m
-            )
-            if not entry:
-                return
-
-            cfg = Config.PAPER["DO_OPEN_STREAK"]
-            sl_dist = entry["price"] - entry["sl_price"]  # her zaman pozitif (Long)
-            if sl_dist <= 0:
-                return
-            position_usd = cfg["TARGET_RISK_USD"] * entry["price"] / sl_dist
-
-            opened = await do_open_streak_manager.open_direct(
-                symbol=symbol,
-                signal_type="Long",
-                interval="15m",
-                price=entry["price"],
-                atr=entry["atr"],
-                sl_price=entry["sl_price"],
-                tp_price=entry["tp_price"],
-                note=f"gauss={entry['gauss_val']:.1f} hareket={entry['long_perc']:+.1f}%",
-                position_usd=position_usd,
-            )
-            if opened:
-                await send_telegram_message(
-                    f"📈 DO Streak — {symbol}\n"
-                    f"Giriş: {entry['price']:.6g}\n"
-                    f"SL: {entry['sl_price']:.6g} (TP yok — 24h timeout)\n"
-                    f"Pozisyon: ${position_usd:.0f} · Gauss: {entry['gauss_val']:.1f} · "
-                    f"3-mum hareket: {entry['long_perc']:+.1f}%"
-                )
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            logger.error("[DoOpenStreak] %s kanca hatası: %s", symbol, exc, exc_info=True)
-
     async def _keep_alive_ping_loop(self):
         """
         Proaktif keep-alive: WebSocket bağlantısını canlı tutmak için
@@ -1395,19 +1227,13 @@ class LiveDataManager:
             logger.warning("İzlenecek sembol kalmadı, WebSocket başlatılmıyor.")
             return
 
-        mtf_stream_source = getattr(Config, 'MTF_STREAM_SOURCE', 'eski')
-        stream_tfs = ['1m'] if mtf_stream_source == 'yeni' else self.supported_timeframes
+        # 1m-türetme (10 Tem 2026 cutover): sadece kline_1m'e abone olunur, diğer
+        # TF'ler 1m buffer'ından türetilir (bkz. _derive_and_dispatch_closing_tfs).
+        stream_tfs = ['1m']
 
-        logger.info(f"🚀 Multi-Timeframe WebSocket başlatılıyor: {len(self.symbols)} sembol × {len(stream_tfs)} TF "
-                    f"(MTF_STREAM_SOURCE={mtf_stream_source})")
+        logger.info(f"🚀 Multi-Timeframe WebSocket başlatılıyor: {len(self.symbols)} sembol × {len(stream_tfs)} TF")
 
-        # Tüm stream'leri oluştur (sembol × timeframe)
-        # 10 Tem 2026: MTF_STREAM_SOURCE="yeni" iken sadece kline_1m'e abone olunur —
-        # diğer TF'ler 1m buffer'ından türetilir (bkz. _derive_and_dispatch_closing_tfs).
-        all_streams = []
-        for symbol in self.symbols:
-            for tf in stream_tfs:
-                all_streams.append(f"{symbol.lower()}@kline_{tf}")
+        all_streams = [f"{symbol.lower()}@kline_1m" for symbol in self.symbols]
 
         total_streams = len(all_streams)
         # Allow override from central config (new tunable)
@@ -1431,72 +1257,23 @@ class LiveDataManager:
             self._conn_last_message_time.clear()
             self._conn_symbols.clear()
 
-            ws_backend = getattr(Config, 'WS_BACKEND', 'thread')
-
-            if ws_backend == 'asyncio':
-                # Asyncio-native taşıma katmanı (utils/asyncio_ws_client.py) — her
-                # bağlantı kendi OS thread'i yerine aynı event loop'ta bir task.
-                # Gölge testlerle doğrulandı (10 Tem 2026, bkz. modül docstring'i).
-                base_url = getattr(Config, 'BINANCE_WS_BASE', 'wss://fstream.binance.com/market')
-                self._asyncio_ws_manager = AsyncioBinanceStreamManager(
-                    base_url=base_url,
-                    on_message=self._handle_websocket_message,
-                    max_streams_per_connection=self.max_streams_per_connection,
-                )
-                connections = await self._asyncio_ws_manager.start(all_streams)
-                for connection_id, conn in connections.items():
-                    self.ws_clients[connection_id] = conn
-                    self._socket_mgr_to_conn_id[id(conn)] = connection_id
-                    self._conn_last_message_time[connection_id] = self.loop.time()
-                    self._conn_symbols[connection_id] = sorted({s.split("@")[0].upper() for s in conn.streams})
-                    logger.info(f"✅ Connection #{connection_id} başarıyla kuruldu ({len(conn.streams)} stream, asyncio)")
-            else:
-                # Stream'leri connection'lara böl (her connection max 200 stream)
-                stream_chunks = [
-                    all_streams[i:i + self.max_streams_per_connection]
-                    for i in range(0, total_streams, self.max_streams_per_connection)
-                ]
-
-                # Her chunk için ayrı WebSocket connection oluştur
-                for connection_id, streams in enumerate(stream_chunks):
-                    logger.info(f"🔌 Connection #{connection_id + 1}: {len(streams)} stream subscribe ediliyor...")
-
-                    # python-binance ile WebSocket client oluştur
-                    # Use configured Binance websocket base so we can target /market endpoints
-                    stream_url = getattr(Config, 'BINANCE_WS_BASE', None)
-                    if stream_url:
-                        logger.info(f"Using custom Binance WS base: {stream_url} for connection #{connection_id + 1}")
-
-                    if stream_url:
-                        ws_client = UMFuturesWebsocketClient(
-                            stream_url=stream_url,
-                            on_message=self._handle_websocket_message,
-                            on_close=self._handle_ws_close,
-                            on_error=self._handle_ws_error,
-                            is_combined=True,  # Combined streams kullan
-                        )
-                    else:
-                        ws_client = UMFuturesWebsocketClient(
-                            on_message=self._handle_websocket_message,
-                            on_close=self._handle_ws_close,
-                            on_error=self._handle_ws_error,
-                            is_combined=True,  # Combined streams kullan
-                        )
-
-                    # Bu connection'daki tüm stream'lere subscribe et
-                    ws_client.subscribe(stream=streams, id=connection_id + 1)
-
-                    # Client'ı sakla
-                    self.ws_clients[connection_id] = ws_client
-
-                    # Tekil bağlantı takibi: socket_manager -> connection_id eşlemesi + tanı için semboller
-                    self._socket_mgr_to_conn_id[id(ws_client.socket_manager)] = connection_id
-                    self._conn_last_message_time[connection_id] = self.loop.time()
-                    self._conn_symbols[connection_id] = sorted({s.split("@")[0].upper() for s in streams})
-
-                    logger.info(f"✅ Connection #{connection_id + 1} başarıyla kuruldu ({len(streams)} stream)")
-                    # Stagger connection subscriptions slightly to avoid server-side burst handling
-                    await asyncio.sleep(0.25)
+            # Asyncio-native taşıma katmanı (utils/asyncio_ws_client.py) — her bağlantı
+            # kendi OS thread'i yerine aynı event loop'ta bir task (10 Tem 2026 cutover,
+            # thread-tabanlı binance-connector kalıcı olarak kaldırıldı — gölge testlerle
+            # doğrulanmıştı, bkz. modül docstring'i).
+            base_url = getattr(Config, 'BINANCE_WS_BASE', 'wss://fstream.binance.com/market')
+            self._asyncio_ws_manager = AsyncioBinanceStreamManager(
+                base_url=base_url,
+                on_message=self._handle_websocket_message,
+                max_streams_per_connection=self.max_streams_per_connection,
+            )
+            connections = await self._asyncio_ws_manager.start(all_streams)
+            for connection_id, conn in connections.items():
+                self.ws_clients[connection_id] = conn
+                self._socket_mgr_to_conn_id[id(conn)] = connection_id
+                self._conn_last_message_time[connection_id] = self.loop.time()
+                self._conn_symbols[connection_id] = sorted({s.split("@")[0].upper() for s in conn.streams})
+                logger.info(f"✅ Connection #{connection_id} başarıyla kuruldu ({len(conn.streams)} stream, asyncio)")
 
             # Bağlantılar kurulduktan sonra kısa bir bekleme
             await asyncio.sleep(2)
@@ -2253,28 +2030,6 @@ class LiveDataManager:
                 oi_logger.warning("OI güncelleme hatası: %s", exc)
             await asyncio.sleep(_INTERVAL)
 
-    async def _risk_check_loop(self) -> None:
-        """Her 5 saniyede paper trade pozisyonlarını kontrol eder.
-        Sinyaller fiyatla kapanmaz (SL/TP bilgi amaçlı) — kapanış yalnızca
-        ters sinyal / timeout / manuel (signal_lifecycle_manager).
-
-        10 Tem 2026 (paper trading ayrıştırması): PAPER_TRADING_SOURCE="yeni"
-        iken bu döngü sessizce atlanır — signal_service.py'deki eşdeğeri gerçek
-        kontrolü yapar. "eski" (varsayılan) iken davranış AYNEN eskisi gibi."""
-        while True:
-            await asyncio.sleep(5)
-            if getattr(Config, 'PAPER_TRADING_SOURCE', 'eski') == 'yeni':
-                continue
-            prices = {**self._ticker_prices, **self._last_prices}
-            if not prices:
-                continue
-            await paper_trade_manager.check_all_prices(prices)
-            await ha_cross_manager.check_all_prices(prices)
-            await rsi_15m_manager.check_all_prices(prices)
-            await manual_manager.check_all_prices(prices)
-            await do_kirilimi_manager.check_all_prices(prices)
-            await do_open_streak_manager.check_all_prices(prices)
-
     async def _price_publish_loop(self) -> None:
         """Her 1 saniyede canlı fiyatları tek Redis key'ine yazar (panel canlı PnL için).
         Ticker (REST, 628 sembol) taban; WS tick fiyatları daha taze olduğundan üzerine yazar.
@@ -2470,7 +2225,6 @@ class LiveDataManager:
                 asyncio.create_task(self._continuous_gap_heal_loop()),
                 asyncio.create_task(self._ticker_refresh_loop()),
                 asyncio.create_task(self._oi_refresh_loop()),
-                asyncio.create_task(self._risk_check_loop()),
                 asyncio.create_task(self._price_publish_loop()),
                 asyncio.create_task(self._vpmv_post_loop()),
                 asyncio.create_task(self._manual_refresh_loop()),

@@ -14,9 +14,9 @@ başına artmadı), production'la %99.8+ doğruluk (kalan ~%0.2 fark production'
 kendi geçici yazma gecikmesinden — ayrı, bilinen bir konu, bkz. memory
 project_pc_power_loss_10temmuz.md / project_data_layer_debt.md).
 
-Kullanım: LiveDataManager, Config.WS_BACKEND=="asyncio" olduğunda bu modülü
-kullanır (bkz. live_data_manager.py::start_streams). Varsayılan "thread" —
-mevcut davranış AYNEN korunur, flag açıkça değiştirilmeden hiçbir şey değişmez.
+Kullanım: LiveDataManager bu modülü kullanır (bkz. live_data_manager.py::start_streams).
+10 Tem 2026 cutover'dan sonra tek taşıma katmanı budur — thread-tabanlı
+UMFuturesWebsocketClient yolu tamamen kaldırıldı.
 """
 
 import asyncio

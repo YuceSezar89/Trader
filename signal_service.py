@@ -1,10 +1,9 @@
 """Signal/Feature servisi — Faz 4: sinyal işleme yolunu (process_and_enrich_signals)
 Config.SIGNAL_SOURCE="yeni" iken gerçek yazar (aktif). Paper trading'in son iki
-parçası (10 Tem 2026, ingestion/paper-trading ayrıştırması): risk kontrolü
+parçası (10 Tem 2026, ingestion/paper-trading ayrıştırması cutover): risk kontrolü
 (_risk_check_loop) ve detector-tabanlı stratejiler (do_kirilimi/do_open_streak)
-Config.PAPER_TRADING_SOURCE="yeni" iken burada gerçek yazar; "eski" (varsayılan)
-iken live_data_manager.py'deki eski yol aktif kalır — aynı feature-flag deseni,
-geri dönüş tek satır + iki servis restart.
+de burada gerçek yazar — live_data_manager.py'deki eski (aynı işi yapan) yol
+tamamen kaldırıldı.
 """
 
 import asyncio
@@ -177,11 +176,10 @@ async def _process_event(fields: dict) -> None:
     elapsed_ms = (loop.time() - t0) * 1000
     logger.info("[DRY-RUN] [%s] %s işlendi (%.1fms)", symbol, interval, elapsed_ms)
 
-    if Config.PAPER_TRADING_SOURCE == "yeni":
-        if interval == "5m":
-            await _check_do_kirilimi(symbol, df, ref_df)
-        elif interval == "15m":
-            await _check_do_open_streak(symbol, df)
+    if interval == "5m":
+        await _check_do_kirilimi(symbol, df, ref_df)
+    elif interval == "15m":
+        await _check_do_open_streak(symbol, df)
 
 
 async def _check_do_kirilimi(symbol: str, df_5m: pd.DataFrame, btc_df_5m: pd.DataFrame) -> None:
@@ -255,15 +253,11 @@ async def _check_do_open_streak(symbol: str, df_15m: pd.DataFrame) -> None:
 
 
 async def _risk_check_loop() -> None:
-    """live_data_manager.py::_risk_check_loop'un signal_service.py eşdeğeri (10 Tem
-    2026) — her 5 saniyede paper trade pozisyonlarını kontrol eder. Fiyatlar artık
-    in-memory değil, live_data_manager.py'nin zaten her saniye yazdığı Redis
-    'prices:live' key'inden okunuyor. Sadece PAPER_TRADING_SOURCE="yeni" iken aktif —
-    "eski" iken live_data_manager.py'nin kendi döngüsü çalışmaya devam eder."""
+    """Her 5 saniyede paper trade pozisyonlarını kontrol eder. Fiyatlar in-memory
+    değil, live_data_manager.py'nin zaten her saniye yazdığı Redis 'prices:live'
+    key'inden okunuyor (10 Tem 2026, ingestion/paper-trading ayrıştırması)."""
     while True:
         await asyncio.sleep(_RISK_CHECK_INTERVAL)
-        if Config.PAPER_TRADING_SOURCE != "yeni":
-            continue
         try:
             raw = await asyncio.wait_for(RedisClient.get_client().get("prices:live"), timeout=SAFE_EXTERNAL_TIMEOUT)
         except Exception as e:  # pylint: disable=broad-exception-caught
