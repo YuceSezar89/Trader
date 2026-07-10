@@ -367,7 +367,7 @@ async def run_all_services():
     # bayat olmamıştı ama saatlerce gerçek işlem yapılmamıştı.
     throughput_task = asyncio.create_task(
         _supervised(
-            throughput_watchdog_loop(min_expected={"live_data_manager": 5}),
+            throughput_watchdog_loop(min_expected={"live_data_manager": 5}, self_heal_after=3),
             "throughput_watchdog",
         ),
         name="throughput_watchdog",

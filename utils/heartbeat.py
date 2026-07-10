@@ -2,6 +2,7 @@
 uzun süre güncellenmeyen bileşenler için Telegram alarmı üretir."""
 
 import asyncio
+import os
 from datetime import datetime
 from typing import Optional
 
@@ -72,13 +73,26 @@ def record_activity(component: str) -> None:
     _activity_counts[component] = _activity_counts.get(component, 0) + 1
 
 
-async def throughput_watchdog_loop(min_expected: dict[str, int], check_interval: int = 60) -> None:
+async def throughput_watchdog_loop(
+    min_expected: dict[str, int],
+    check_interval: int = 60,
+    self_heal_after: int = 0,
+) -> None:
     """min_expected: {bileşen_adı: check_interval içinde beklenen minimum
     record_activity() çağrısı}. Sayı bu eşiğin altında kalırsa (heartbeat taze
-    olsa bile) asıl iş akışının durmuş olabileceğini loglar — Telegram alarmı
-    BİLEREK yok, sadece görünürlük (bkz. proje hafızası, 9 Tem kararı)."""
-    logger.info("Throughput watchdog başlatıldı: %s", min_expected)
+    olsa bile) asıl iş akışının durmuş olabileceğini loglar — rutin uyarı için
+    Telegram alarmı BİLEREK yok, sadece görünürlük (bkz. proje hafızası, 9 Tem kararı).
+
+    self_heal_after: bir bileşen art arda kaç kontrolde eşiğin altında kalırsa
+    process'in kendini sonlandıracağı (os._exit(1)) — launchd KeepAlive.Crashed=true
+    bunu yakalayıp otomatik yeniden başlatır. 0 = kapalı (varsayılan, eski davranış).
+    Sadece launchd/benzeri bir supervisor altında çalışan servislerde kullanılmalı."""
+    logger.info(
+        "Throughput watchdog başlatıldı: %s (self_heal_after=%s)",
+        min_expected, self_heal_after or "kapalı",
+    )
     last_counts = {component: _activity_counts.get(component, 0) for component in min_expected}
+    consecutive_breaches = {component: 0 for component in min_expected}
     while True:
         await asyncio.sleep(check_interval)
         for component, min_count in min_expected.items():
@@ -95,11 +109,31 @@ async def throughput_watchdog_loop(min_expected: dict[str, int], check_interval:
                 logger.debug("throughput(%s) yazılamadı: %s", component, e)
                 await _reset_dedicated_connection()
             if delta < min_count:
+                consecutive_breaches[component] += 1
                 logger.warning(
-                    "[Throughput] %s son %ds'de %d işlem yaptı (beklenen >= %d) — "
+                    "[Throughput] %s son %ds'de %d işlem yaptı (beklenen >= %d, art arda %d. ihlal) — "
                     "heartbeat taze olsa bile asıl iş akışı durmuş olabilir",
-                    component, check_interval, delta, min_count,
+                    component, check_interval, delta, min_count, consecutive_breaches[component],
                 )
+                if self_heal_after and consecutive_breaches[component] >= self_heal_after:
+                    stalled_secs = consecutive_breaches[component] * check_interval
+                    logger.critical(
+                        "[Throughput] %s %ds'dir 0 işlem yapıyor — self-heal: process "
+                        "sonlandırılıyor, launchd yeniden başlatacak", component, stalled_secs,
+                    )
+                    try:
+                        await asyncio.wait_for(
+                            send_telegram_message(
+                                f"🔴 {component} {stalled_secs}s'dir donmuş görünüyor — "
+                                f"self-heal restart tetiklendi"
+                            ),
+                            timeout=5,
+                        )
+                    except Exception:  # pylint: disable=broad-exception-caught
+                        pass
+                    os._exit(1)  # pylint: disable=protected-access
+            else:
+                consecutive_breaches[component] = 0
 
 
 async def _read_all() -> dict[str, datetime]:

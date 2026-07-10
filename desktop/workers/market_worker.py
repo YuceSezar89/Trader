@@ -14,6 +14,8 @@ import pandas as pd
 import redis
 from PyQt6.QtCore import QThread, pyqtSignal  # pylint: disable=no-name-in-module
 
+from utils.vpmv import compute_components
+
 logger = logging.getLogger(__name__)
 
 _ARROW_MAGIC = b"ARDF"
@@ -31,6 +33,7 @@ class MarketWorker(QThread):  # pylint: disable=too-many-instance-attributes
     klines_updated = pyqtSignal(str, str, object)           # symbol, timeframe, DataFrame
     connection_changed = pyqtSignal(bool, str)              # connected, message
     symbols_discovered = pyqtSignal(list)                   # sembol evreni (yeniden) keşfedildiğinde
+    vpmv_breakdown_ready = pyqtSignal(str, str, dict)       # symbol, interval, {vol, mom, vlt, prc}
 
     def __init__(self, redis_url: str, interval_ms: int = _FALLBACK_MS, parent=None):
         super().__init__(parent)
@@ -45,10 +48,24 @@ class MarketWorker(QThread):  # pylint: disable=too-many-instance-attributes
         self._chart_tf: str = ""
         self._last_symbol_discovery: float = 0.0
         self._last_ticker_poll: float = 0.0
+        self._vpmv_symbol: str = ""
+        self._vpmv_interval: str = ""
+        self._vpmv_signal_type: str = ""
 
     def request_symbol_refresh(self) -> None:
         """Manuel yenile — sıradaki poll döngüsünde sembol evrenini yeniden keşfeder."""
         self._last_symbol_discovery = 0.0
+        self._wake.set()
+
+    def request_vpmv_breakdown(self, symbol: str, interval: str, signal_type: str) -> None:
+        """Aktif Sinyaller panelinde bir sinyale tıklandığında çağrılır. Grafik takibiyle
+        aynı mekanizma: sembol seçili kaldığı sürece her poll döngüsünde (1sn) canlı
+        Hacim/Momentum/Volatilite/Fiyat bileşenleri yeniden hesaplanıp yayınlanır.
+        symbol boş verilirse takip durur (satır seçimi kaldırıldığında çağrılır)."""
+        with self._lock:
+            self._vpmv_symbol = symbol
+            self._vpmv_interval = interval
+            self._vpmv_signal_type = signal_type
         self._wake.set()
 
     def set_chart_watch(self, symbol: str, tf: str) -> None:
@@ -226,6 +243,25 @@ class MarketWorker(QThread):  # pylint: disable=too-many-instance-attributes
             df = self._fetch_klines(chart_sym, chart_tf)
             if df is not None and not df.empty:
                 self.klines_updated.emit(chart_sym, chart_tf, df)
+
+        with self._lock:
+            vpmv_symbol = self._vpmv_symbol
+            vpmv_interval = self._vpmv_interval
+            vpmv_signal_type = self._vpmv_signal_type
+        if vpmv_symbol:
+            df = self._fetch_klines(vpmv_symbol, vpmv_interval)
+            if df is not None and not df.empty:
+                try:
+                    vol, mom, vlt, prc = compute_components(df, vpmv_signal_type)
+                    self.vpmv_breakdown_ready.emit(
+                        vpmv_symbol, vpmv_interval,
+                        {"volume": vol, "momentum": mom, "volatility": vlt, "price": prc},
+                    )
+                except Exception:  # pylint: disable=broad-exception-caught
+                    logger.warning(
+                        "VPMV bileşenleri hesaplanamadı: %s %s",
+                        vpmv_symbol, vpmv_interval, exc_info=True,
+                    )
 
     def _fetch_klines(self, symbol: str, timeframe: str) -> Optional[pd.DataFrame]:
         try:

@@ -17,14 +17,20 @@ from .models import Base
 DB_CALL_TIMEOUT = 5.0
 
 
-async def run_with_db_timeout(coro):
-    """Bir DB coroutine'ini DB_CALL_TIMEOUT içinde tamamlanmaya zorlar — aksi
+async def run_with_db_timeout(coro, timeout: float = DB_CALL_TIMEOUT):
+    """Bir DB coroutine'ini `timeout` saniye içinde tamamlanmaya zorlar — aksi
     halde TimeoutError fırlatır. Çağıran taraf bunu yakalayıp fail-closed/fail-safe
-    davranmalı (ör. sinyali reddetmek, denemeyi loglayıp bir sonrakine geçmek)."""
+    davranmalı (ör. sinyali reddetmek, denemeyi loglayıp bir sonrakine geçmek).
+
+    Varsayılan (5s) kritik/hızlı-başarısız-olması-gereken çağrılar için. Periyodik,
+    kritik-olmayan kontrollerde (ör. paper_trade_manager.check_all_prices) havuzun
+    kendi pool_timeout'una (30s) daha yakın bir değer (8-10s) vererek burst anındaki
+    normal kısa kuyruklanmaya tahammül edilebilir — bkz. 10 Tem 2026 vakası
+    (memory: project_data_layer_debt.md)."""
     try:
-        return await asyncio.wait_for(coro, timeout=DB_CALL_TIMEOUT)
+        return await asyncio.wait_for(coro, timeout=timeout)
     except asyncio.TimeoutError:
-        raise TimeoutError(f"DB çağrısı {DB_CALL_TIMEOUT}s içinde tamamlanmadı") from None
+        raise TimeoutError(f"DB çağrısı {timeout}s içinde tamamlanmadı") from None
 
 # PostgreSQL connection URL - Direct PostgreSQL connection
 _db_host = os.getenv("DB_HOST", "localhost")

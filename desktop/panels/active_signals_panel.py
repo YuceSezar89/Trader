@@ -7,11 +7,15 @@ Filtreler: LONG / SHORT / Hepsi toggle + sembol arama
 
 from __future__ import annotations
 
+from typing import Optional
+
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QDoubleValidator
 from PyQt6.QtWidgets import QHeaderView
 from PyQt6.QtWidgets import (
     QComboBox,
+    QGridLayout,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -34,14 +38,16 @@ class ActiveSignalsPanel(QWidget):
         symbol_selected(str, str): Satıra tıklandığında (symbol, interval).
     """
 
-    symbol_selected      = pyqtSignal(str, str)
-    signal_data_selected = pyqtSignal(dict)
+    symbol_selected          = pyqtSignal(str, str)
+    signal_data_selected     = pyqtSignal(dict)
+    vpmv_breakdown_requested = pyqtSignal(str, str, str)  # symbol, interval, signal_type
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._model = SignalsModel(self)
         self._proxy = SignalsProxyModel(self)
         self._proxy.setSourceModel(self._model)
+        self._vpmv_pending: Optional[tuple[str, str]] = None
 
         self._setup_ui()
         self._setup_age_timer()
@@ -192,6 +198,37 @@ class ActiveSignalsPanel(QWidget):
         self._detail_bar.setWordWrap(False)
         self._detail_bar.hide()
         root.addWidget(self._detail_bar)
+
+        # Canlı VPMV bileşenleri — seçili sinyal için Hacim/Momentum/Volatilite/Fiyat
+        self._vpmv_box = QGroupBox("Canlı VPMV Bileşenleri")
+        self._vpmv_box.setStyleSheet(
+            f"QGroupBox {{ color: {COLORS['text_muted']}; font-size: 10px; "
+            f"border: 1px solid {COLORS['border']}; border-radius: 3px; margin-top: 6px; }} "
+            f"QGroupBox::title {{ subcontrol-origin: margin; left: 6px; padding: 0 3px; }}"
+        )
+        vpmv_grid = QGridLayout(self._vpmv_box)
+        vpmv_grid.setContentsMargins(8, 10, 8, 6)
+        vpmv_grid.setHorizontalSpacing(14)
+        self._vpmv_labels: dict[str, QLabel] = {}
+        vpmv_fields = [
+            ("volume", "Hacim"),
+            ("momentum", "Momentum"),
+            ("volatility", "Volatilite"),
+            ("price", "Fiyat"),
+        ]
+        for col, (key, title) in enumerate(vpmv_fields):
+            cap = QLabel(title)
+            cap.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 10px;")
+            val = QLabel("—")
+            val.setStyleSheet(
+                f"color: {COLORS['text_primary']}; font-size: 13px; "
+                f"font-weight: bold; font-family: monospace;"
+            )
+            vpmv_grid.addWidget(cap, 0, col)
+            vpmv_grid.addWidget(val, 1, col)
+            self._vpmv_labels[key] = val
+        self._vpmv_box.hide()
+        root.addWidget(self._vpmv_box)
 
     def _make_filter_btn(self, text: str, active: bool) -> QPushButton:
         btn = QPushButton(text)
@@ -355,6 +392,29 @@ class ActiveSignalsPanel(QWidget):
     def _on_row_clicked(self) -> None:
         self._update_stats()
         self._update_detail_bar()
+
+        row = self._selected_row()
+        if row is None:
+            self._vpmv_box.hide()
+            self._vpmv_pending = None
+            self.vpmv_breakdown_requested.emit("", "", "")
+            return
+        signal_type = "Long" if row.signal_type.upper() == "LONG" else "Short"
+        self._vpmv_pending = (row.symbol, row.interval)
+        for lbl in self._vpmv_labels.values():
+            lbl.setText("—")
+        self._vpmv_box.show()
+        self.vpmv_breakdown_requested.emit(row.symbol, row.interval, signal_type)
+
+    @pyqtSlot(str, str, dict)
+    def on_vpmv_breakdown_ready(self, symbol: str, interval: str, data: dict) -> None:
+        """MarketWorker.vpmv_breakdown_ready sinyaline bağlanır."""
+        if self._vpmv_pending != (symbol, interval):
+            return  # kullanıcı bu arada başka bir satır seçmiş — bayat sonucu at
+        self._vpmv_labels["volume"].setText(f"{data['volume']:.1f}")
+        self._vpmv_labels["momentum"].setText(f"{data['momentum']:.1f}")
+        self._vpmv_labels["volatility"].setText(f"{data['volatility']:.1f}")
+        self._vpmv_labels["price"].setText(f"{data['price']:.1f}")
 
     def _update_detail_bar(self) -> None:
         row = self._selected_row()

@@ -1,7 +1,5 @@
 import pandas as pd
-import ta
 import aiohttp
-from indicators.core import calculate_ema
 from typing import Optional, List, Tuple, Dict, Any
 
 # Config import
@@ -12,12 +10,10 @@ from utils.exceptions import (
     BinanceAPIError,
     BinanceRateLimitError,
     BinanceInvalidParamsError,
-    DataError,
-    raise_api_timeout,
-    ErrorCodes
+    DataError
 )
 from utils.kline_schema import check_kline_schema
-from utils.logger import get_logger, log_error_with_context
+from utils.logger import get_logger
 
 # Logger
 logger = get_logger(__name__)
@@ -121,6 +117,22 @@ class BinanceClientManager:
     # YENİ istek ağa hiç çıkmaz (ban sırasında istek atmak süreyi uzatıyor — 4 Tem dersi).
     _banned_until: float = 0.0
 
+    # 10 Tem 2026 akşam: process-İÇİ sliding-window denemesi YETERSİZ çıktı — bu
+    # sistemde run_services.py, signal_service.py VE masaüstü panel (desktop.main,
+    # market_worker/divergence_worker/ranking_worker/vpmv_worker) AYNI IP'den
+    # BAĞIMSIZ process'ler olarak Binance'e istek atıyor. Process-içi bir liste/lock
+    # sadece o process'i sınırlar, TOPLAM istek hızı yine aşılabiliyordu (canlıda
+    # 429 iki kez alındı). Artık RedisClient.throttle_external_api ile TÜM process'lerin
+    # paylaştığı tek bir Redis sliding-window sayacından geçiliyor (bkz. o fonksiyonun
+    # docstring'i) — hangi process/fonksiyon eşzamanlı çalışırsa çalışsın toplam hız
+    # gerçek IP limitinin (2400/dk) altında kalıyor.
+    _MAX_REQUESTS_PER_MIN = 1200  # gerçek limit 2400'ün yarısı — diğer REST tüketicilerine pay
+
+    @classmethod
+    async def _throttle_global_rate(cls) -> None:
+        from utils.redis_client import RedisClient
+        await RedisClient.throttle_external_api("binance", cls._MAX_REQUESTS_PER_MIN)
+
     @classmethod
     async def fetch_klines(cls, symbol: str, interval: str, limit: int = 500, startTime: Optional[int] = None) -> pd.DataFrame:
         """Fetches historical klines for a single symbol."""
@@ -128,6 +140,8 @@ class BinanceClientManager:
             remaining = cls._banned_until - time.time()
             logger.warning(f"[{symbol}] IP ban cooldown aktif, istek atlanıyor ({remaining:.0f}s kaldı)")
             return pd.DataFrame()
+
+        await cls._throttle_global_rate()
 
         url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}"
         if startTime:
@@ -272,6 +286,7 @@ class BinanceClientManager:
         async def _fetch_one(sym: str) -> None:
             async with sem:
                 try:
+                    await cls._throttle_global_rate()
                     async with aiohttp.ClientSession() as session:
                         async with session.get(url, params={"symbol": sym}, timeout=aiohttp.ClientTimeout(total=5)) as resp:
                             data = await resp.json()

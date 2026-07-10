@@ -155,11 +155,34 @@ class WatchlistModel(QAbstractTableModel):
     # ── Veri yükleme / güncelleme ─────────────────────────────────────────
 
     def load_symbols(self, symbols: list[str]) -> None:
-        """İlk sembol listesini yükler."""
-        self.beginResetModel()
-        self._rows = [SymbolRow(symbol=s) for s in sorted(symbols)]
-        self._symbol_index = {r.symbol: i for i, r in enumerate(self._rows)}
-        self.endResetModel()
+        """Sembol evrenini günceller. MarketWorker._discover_symbols() değişiklik
+        olsun olmasın her 60sn'de bir emit ettiği için, burada tam reset yapmak
+        watchlist'i her dakika görsel olarak boşaltıp yeniden dolduruyordu (tüm
+        fiyat/hacim verisi sıfırlanıyordu). Artık sadece eklenen/çıkan semboller
+        için satır ekleyip/siliyor, mevcut sembollerin satırlarını (ve o ana kadar
+        gelen fiyat verisini) olduğu gibi koruyor."""
+        new_set = set(symbols)
+        old_set = set(self._symbol_index)
+        to_remove = old_set - new_set
+        to_add = sorted(new_set - old_set)
+
+        if not to_remove and not to_add:
+            return
+
+        if to_remove:
+            remove_indices = sorted((self._symbol_index[s] for s in to_remove), reverse=True)
+            for idx in remove_indices:
+                self.beginRemoveRows(QModelIndex(), idx, idx)
+                del self._rows[idx]
+                self.endRemoveRows()
+            self._symbol_index = {r.symbol: i for i, r in enumerate(self._rows)}
+
+        if to_add:
+            start = len(self._rows)
+            self.beginInsertRows(QModelIndex(), start, start + len(to_add) - 1)
+            self._rows.extend(SymbolRow(symbol=s) for s in to_add)
+            self.endInsertRows()
+            self._symbol_index = {r.symbol: i for i, r in enumerate(self._rows)}
 
     @pyqtSlot(str, float, float, float, float)
     def on_price_updated(self, symbol: str, price: float, change_pct: float, volume: float = 0.0, funding_rate: float = 0.0) -> None:

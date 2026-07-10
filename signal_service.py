@@ -1,11 +1,15 @@
-"""Signal/Feature servisi — Faz 4: dry-run modda çalışır, gerçek sinyal işleme
-yolunu (process_and_enrich_signals) çağırır ama dry_run=True ile DB'ye yazmaz,
-paper trade tetiklemez. Mevcut (DB'ye yazan) yol live_data_manager.py'de hâlâ
-aktif — cutover (Faz 4 Adım 7) ayrı bir feature flag ile, ayrı onayla yapılacak.
+"""Signal/Feature servisi — Faz 4: sinyal işleme yolunu (process_and_enrich_signals)
+Config.SIGNAL_SOURCE="yeni" iken gerçek yazar (aktif). Paper trading'in son iki
+parçası (10 Tem 2026, ingestion/paper-trading ayrıştırması): risk kontrolü
+(_risk_check_loop) ve detector-tabanlı stratejiler (do_kirilimi/do_open_streak)
+Config.PAPER_TRADING_SOURCE="yeni" iken burada gerçek yazar; "eski" (varsayılan)
+iken live_data_manager.py'deki eski yol aktif kalır — aynı feature-flag deseni,
+geri dönüş tek satır + iki servis restart.
 """
 
 import asyncio
 import functools
+import json
 import os
 import signal
 from concurrent.futures import ProcessPoolExecutor
@@ -16,13 +20,19 @@ import pandas as pd
 from utils.logger import get_logger
 from utils.redis_client import RedisClient, SAFE_EXTERNAL_TIMEOUT
 from utils.heartbeat import beat, watchdog_loop, record_activity, throughput_watchdog_loop
+from utils.telegram_notify import send_telegram_message
 from indicators.financial_metrics import calculate_metrics
 from signals.signal_processor import process_and_enrich_signals
 from signals.risk_manager import risk_manager
 from signals.paper_trade_manager import (
-    paper_trade_manager, ha_cross_manager, rsi_15m_manager, manual_manager, do_kirilimi_manager,
+    paper_trade_manager, ha_cross_manager, rsi_15m_manager, manual_manager,
+    do_kirilimi_manager, do_open_streak_manager,
 )
+from signals.do_kirilimi import do_kirilimi_detector, btc_day_context
+from signals.do_open_streak import do_open_streak_detector
 from config import Config
+
+_RISK_CHECK_INTERVAL = 5  # saniye — live_data_manager.py::_risk_check_loop ile aynı
 
 logger = get_logger("SignalService")
 
@@ -167,6 +177,115 @@ async def _process_event(fields: dict) -> None:
     elapsed_ms = (loop.time() - t0) * 1000
     logger.info("[DRY-RUN] [%s] %s işlendi (%.1fms)", symbol, interval, elapsed_ms)
 
+    if Config.PAPER_TRADING_SOURCE == "yeni":
+        if interval == "5m":
+            await _check_do_kirilimi(symbol, df, ref_df)
+        elif interval == "15m":
+            await _check_do_open_streak(symbol, df)
+
+
+async def _check_do_kirilimi(symbol: str, df_5m: pd.DataFrame, btc_df_5m: pd.DataFrame) -> None:
+    """DO Kırılımı dedektörü — live_data_manager.py::_check_do_kirilimi'nin
+    signal_service.py eşdeğeri (10 Tem 2026). BTC context artık in-memory
+    self.mtf_buffers'tan değil, zaten elde olan ref_df'ten (MARKET_REFERENCE_SYMBOL
+    = BTCUSDT) hesaplanıyor — process ayrımı sonrası in-process state erişimi yok."""
+    try:
+        btc_ctx = btc_day_context(btc_df_5m) if btc_df_5m is not None and not btc_df_5m.empty else None
+        loop = asyncio.get_running_loop()
+        entry = await loop.run_in_executor(None, do_kirilimi_detector.check, symbol, df_5m, btc_ctx)
+        if not entry:
+            return
+        opened = await do_kirilimi_manager.open_direct(
+            symbol=symbol,
+            signal_type="Long",
+            interval="5m",
+            price=entry["price"],
+            atr=entry["atr"],
+            sl_price=entry["sl_price"],
+            tp_price=entry["tp_price"],
+            note=f"{entry['pattern']} {entry['ayrisma']:+.1f}%",
+        )
+        if opened:
+            await send_telegram_message(
+                f"🎯 DO Kırılımı — {symbol}\n"
+                f"Giriş: {entry['price']:.6g}\n"
+                f"SL: {entry['sl_price']:.6g} · TP: {entry['tp_price']:.6g}\n"
+                f"Pattern: {entry['pattern']} · Ayrışma: {entry['ayrisma']:+.1f}%"
+            )
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.error("[DOKirilimi] %s kanca hatası: %s", symbol, exc, exc_info=True)
+
+
+async def _check_do_open_streak(symbol: str, df_15m: pd.DataFrame) -> None:
+    """DO Kırılımı + Ardışık Yeşil Mum + Gauss dedektörü — live_data_manager.py::
+    _check_do_open_streak'in signal_service.py eşdeğeri (10 Tem 2026)."""
+    try:
+        loop = asyncio.get_running_loop()
+        entry = await loop.run_in_executor(None, do_open_streak_detector.check, symbol, df_15m)
+        if not entry:
+            return
+
+        cfg = Config.PAPER["DO_OPEN_STREAK"]
+        sl_dist = entry["price"] - entry["sl_price"]
+        if sl_dist <= 0:
+            return
+        position_usd = cfg["TARGET_RISK_USD"] * entry["price"] / sl_dist
+
+        opened = await do_open_streak_manager.open_direct(
+            symbol=symbol,
+            signal_type="Long",
+            interval="15m",
+            price=entry["price"],
+            atr=entry["atr"],
+            sl_price=entry["sl_price"],
+            tp_price=entry["tp_price"],
+            note=f"gauss={entry['gauss_val']:.1f} hareket={entry['long_perc']:+.1f}%",
+            position_usd=position_usd,
+        )
+        if opened:
+            await send_telegram_message(
+                f"📈 DO Streak — {symbol}\n"
+                f"Giriş: {entry['price']:.6g}\n"
+                f"SL: {entry['sl_price']:.6g} (TP yok — 24h timeout)\n"
+                f"Pozisyon: ${position_usd:.0f} · Gauss: {entry['gauss_val']:.1f} · "
+                f"3-mum hareket: {entry['long_perc']:+.1f}%"
+            )
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.error("[DoOpenStreak] %s kanca hatası: %s", symbol, exc, exc_info=True)
+
+
+async def _risk_check_loop() -> None:
+    """live_data_manager.py::_risk_check_loop'un signal_service.py eşdeğeri (10 Tem
+    2026) — her 5 saniyede paper trade pozisyonlarını kontrol eder. Fiyatlar artık
+    in-memory değil, live_data_manager.py'nin zaten her saniye yazdığı Redis
+    'prices:live' key'inden okunuyor. Sadece PAPER_TRADING_SOURCE="yeni" iken aktif —
+    "eski" iken live_data_manager.py'nin kendi döngüsü çalışmaya devam eder."""
+    while True:
+        await asyncio.sleep(_RISK_CHECK_INTERVAL)
+        if Config.PAPER_TRADING_SOURCE != "yeni":
+            continue
+        try:
+            raw = await asyncio.wait_for(RedisClient.get_client().get("prices:live"), timeout=SAFE_EXTERNAL_TIMEOUT)
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.warning("[RiskCheck] prices:live okunamadı: %s", e)
+            continue
+        if not raw:
+            continue
+        try:
+            prices = json.loads(raw)
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.warning("[RiskCheck] prices:live parse hatası: %s", e)
+            continue
+        if not prices:
+            continue
+        await paper_trade_manager.check_all_prices(prices)
+        await ha_cross_manager.check_all_prices(prices)
+        await rsi_15m_manager.check_all_prices(prices)
+        await manual_manager.check_all_prices(prices)
+        await do_kirilimi_manager.check_all_prices(prices)
+        await do_open_streak_manager.check_all_prices(prices)
+        await beat("paper_trading_risk_check")
+
 
 async def _handle_message(client, msg_id: str, fields: dict) -> None:
     """Tek bir event'i semaphore ile sınırlı eşzamanlılıkta işler, sonunda ack eder.
@@ -282,13 +401,18 @@ async def run_all() -> None:
     await rsi_15m_manager.load_open_symbols()
     await manual_manager.load_open_symbols()
     await do_kirilimi_manager.load_open_symbols()
+    await do_open_streak_manager.load_open_symbols()
 
     consume_task = asyncio.create_task(
         _supervised(_consume_loop(), "signal_service_consume"), name="signal_service_consume"
     )
+    risk_check_task = asyncio.create_task(
+        _supervised(_risk_check_loop(), "signal_service_risk_check"), name="signal_service_risk_check"
+    )
     watchdog_task = asyncio.create_task(
         _supervised(
-            watchdog_loop(max_age_seconds={"signal_service": 120}), "signal_service_watchdog"
+            watchdog_loop(max_age_seconds={"signal_service": 120, "paper_trading_risk_check": 60}),
+            "signal_service_watchdog",
         ),
         name="signal_service_watchdog",
     )
@@ -300,12 +424,12 @@ async def run_all() -> None:
     )
     throughput_task = asyncio.create_task(
         _supervised(
-            throughput_watchdog_loop(min_expected={"signal_service": 1}),
+            throughput_watchdog_loop(min_expected={"signal_service": 1}, self_heal_after=3),
             "signal_service_throughput",
         ),
         name="signal_service_throughput",
     )
-    tasks = {consume_task, watchdog_task, queue_lag_task, reclaim_task, throughput_task}
+    tasks = {consume_task, risk_check_task, watchdog_task, queue_lag_task, reclaim_task, throughput_task}
 
     def _handler(sig_name: str) -> None:
         logger.info("Sinyal alındı: %s. Signal service kapanıyor...", sig_name)

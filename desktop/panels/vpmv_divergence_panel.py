@@ -92,9 +92,14 @@ def _make_table() -> QTableWidget:
     t.verticalHeader().setVisible(False)
     t.verticalHeader().setDefaultSectionSize(24)
     hh = t.horizontalHeader()
+    # ResizeToContents sürekli modda HER setItem() çağrısında tüm sütunu yeniden
+    # ölçüyor (O(satır) maliyet × N setItem = O(satır²)) — 550 sembolle bu, ana
+    # thread'i kilitleyip panel kasmasına yol açıyordu. Interactive + tabloyu
+    # dolduran fonksiyonun sonunda tek seferlik resizeColumnsToContents() aynı
+    # görünümü verir, sürekli yeniden ölçüm olmadan.
     hh.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-    hh.setSectionResizeMode(_COL_SYMBOL, QHeaderView.ResizeMode.ResizeToContents)
-    hh.setSectionResizeMode(_COL_TIME,   QHeaderView.ResizeMode.ResizeToContents)
+    hh.setSectionResizeMode(_COL_SYMBOL, QHeaderView.ResizeMode.Interactive)
+    hh.setSectionResizeMode(_COL_TIME,   QHeaderView.ResizeMode.Interactive)
     return t
 
 
@@ -440,3 +445,4 @@ class VpmvDivergencePanel(QWidget):
             table.setItem(row_idx, _COL_TIME, t_item)
 
         table.setSortingEnabled(True)
+        table.resizeColumnsToContents()

@@ -409,6 +409,12 @@ class MainWindow(QMainWindow):
         self._signal_worker.new_signal.connect(self._active_signals_panel.on_new_signal)
         self._signal_worker.signals_closed.connect(self._active_signals_panel.on_signals_closed)
         self._market_worker.prices_updated.connect(self._active_signals_panel.on_prices_updated)
+        self._active_signals_panel.vpmv_breakdown_requested.connect(
+            self._market_worker.request_vpmv_breakdown
+        )
+        self._market_worker.vpmv_breakdown_ready.connect(
+            self._active_signals_panel.on_vpmv_breakdown_ready
+        )
         self._signal_worker.start()
         self._workers.append(self._signal_worker)
 

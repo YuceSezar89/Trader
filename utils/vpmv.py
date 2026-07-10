@@ -50,6 +50,23 @@ def _volume_by_mode(df: pd.DataFrame, side: float, volume_mode: str) -> pd.Serie
     return directional_volume(df, side)
 
 
+def compute_components(
+    df: pd.DataFrame, signal_type: str, volume_mode: str = "real"
+) -> Tuple[float, float, float, float]:
+    """df'nin SON barı için 4 bileşeni ayrı ayrı döner (hepsi 0-100):
+    (vol_score, momentum_score, vlt_score, price_score) — compute_series()'in
+    ağırlıklı toplamının kırılımı. Anlık/canlı VPMV bileşen gösterimi için
+    (ör. Aktif Sinyaller panelinde bir sinyale tıklandığında) kullanılır."""
+    side = 1.0 if signal_type == "Long" else -1.0
+    vol = normalize_volume_0_100(_volume_by_mode(df, side, volume_mode))
+    rsi = calculate_rsi(df, period=14)
+    mom = normalize_momentum_0_100(rsi.diff().fillna(0.0) * side)
+    atr = calculate_atr(df, period=Config.ATR_PERIOD)
+    vlt = normalize_volatility_0_100(atr)
+    prc = normalize_price_0_100(df["close"].pct_change().fillna(0.0) * 100.0 * side)
+    return float(vol.iloc[-1]), float(mom.iloc[-1]), float(vlt.iloc[-1]), float(prc.iloc[-1])
+
+
 def compute_series(df: pd.DataFrame, signal_type: str, volume_mode: str = "real") -> pd.Series:
     """Tüm df için bar bazlı VPMV serisi döner (0-100).
     volume_mode: 'real' (taker) | 'proxy' (Pine vekili) | 'total' (yönsüz)."""

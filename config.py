@@ -15,7 +15,12 @@ load_dotenv()
 class Config:
     # --- Genel Ayarlar ---
     MARKET_REFERENCE_SYMBOL = 'BTCUSDT'  # Alpha ve Beta hesaplamaları için referans sembol
-    SYMBOL_LIMIT = 200  # Binance'ten çekilecek en yüksek hacimli sembol sayısı (200 × 6 TF = 1,200 stream → 6 connection)
+    # Binance'ten çekilecek en yüksek hacimli sembol sayısı. MIN_VOLUME_THRESHOLD eşiğini
+    # geçen sembol sayısı zaten ~543 (9 Tem 2026 itibariyle) — 200'de kalırsa top-200 dışındaki
+    # sembollerde açılan sinyaller (aktif sinyallerin ~%78'i) hiç geçmiş bar almıyor, sadece
+    # canlı WS tick'iyle sıfırdan birikiyor (RSI/ATR gibi göstergeler için yetersiz kalıyor).
+    # 550: tüm uygun evreni kapsar + hacim dalgalanmasına pay bırakır.
+    SYMBOL_LIMIT = 550  # 550 × 10 TF ≈ 5.500 stream → ~55 WS connection (100 stream/connection)
 
     """Merkezi konfigürasyon sınıfı"""
     
@@ -70,6 +75,14 @@ class Config:
     MTF_ENABLED = True  # MTF sistemini etkinleştir/devre dışı bırak
     MTF_TIMEFRAMES = ['1m', '5m', '15m', '30m', '1h', '4h', '6h', '8h', '12h', '1d']
 
+    # 1m-türetme projesi (10 Tem 2026): "eski" (varsayılan) — MTF_TIMEFRAMES'in
+    # HEPSİNE doğrudan WS abone olunur (mevcut davranış, 5430 stream). "yeni" —
+    # sadece kline_1m'e abone olunur (543 stream), diğer TF'ler
+    # utils/timeframe_aggregator.py ile 1m buffer'ından türetilir (gerçek veriyle
+    # doğrulandı: kapanmış barlarda tam eşleşme, forming barlarda ~2-3sn'lik
+    # doğal senkron farkı — bkz. memory: project_data_layer_debt.md).
+    MTF_STREAM_SOURCE = os.getenv('MTF_STREAM_SOURCE', 'eski')
+
     # Interval → dakika eşlemesi (tek kaynak; risk_manager, signals_model, live_data_manager kullanır)
     INTERVAL_MINUTES = {
         '1m': 1, '3m': 3, '5m': 5, '15m': 15, '30m': 30,
@@ -102,6 +115,12 @@ class Config:
     # By default point to the new announced market base so that library will form
     # wss://<base>/stream or wss://<base>/ws depending on client usage.
     BINANCE_WS_BASE = os.getenv('BINANCE_WS_BASE', 'wss://fstream.binance.com/market')
+    # WS taşıma katmanı: "thread" (binance-connector, her bağlantı kendi OS thread'i,
+    # varsayılan/mevcut davranış) | "asyncio" (websockets kütüphanesi, her bağlantı
+    # aynı event loop'ta bir task — GIL çekişmesi yaratmaz, gölge testlerle
+    # doğrulandı: scripts/ws_shadow_test.py, 10 Tem 2026). Geri dönüş: bu değeri
+    # "thread"e çekip restart etmek yeterli.
+    WS_BACKEND = os.getenv('WS_BACKEND', 'thread')
     API_TIMEOUT = 10  # saniye
     MAX_RETRIES = 3
     KLINE_INTERVAL = "1m"   # Veri çekme ve sinyal üretme zaman aralığı (hızlı test için 1m)
@@ -149,10 +168,16 @@ class Config:
 
     # Paper Trading stratejileri
     PAPER = {
-        'ENABLED_STRATEGIES': ['do_kirilimi'],  # otomatik pozisyon açabilen stratejiler
+        'ENABLED_STRATEGIES': ['do_kirilimi', 'do_open_streak'],  # otomatik pozisyon açabilen stratejiler
         'DO_KIRILIMI': {
             'SL_ATR': 3.0,             # backtest: 1.5 verimsiz, 3.0 en iyi (PF 1.75)
             'TP_ATR': 6.0,             # R:R 1:2 korunur, TP'de trailing devralır
+        },
+        'DO_OPEN_STREAK': {
+            # research/pattern_lab/do_break_gauss_sltp_bt.py: TP/breakeven eklemek
+            # asıl kazandıran büyük hareketi erken kesiyordu — TP YOK, sadece geniş SL.
+            'SL_ATR': 3.0,
+            'TARGET_RISK_USD': 100.0,  # volatilite-ayarlı boyutlandırma: SL'e değince kaybedilecek hedef $ tutar
         },
     }
 
@@ -257,6 +282,14 @@ class Config:
     #         dry_run'a döner — kesme anı. Kod silinmez, geri dönüş bu değeri
     #         "eski"ye çevirip iki servisi restart etmekten ibarettir.
     SIGNAL_SOURCE = os.getenv('SIGNAL_SOURCE', 'eski')
+
+    # Paper trading ayrıştırması (10 Tem 2026, ingestion/paper-trading tam ayrıştırma planı):
+    # "eski": live_data_manager.py'nin _risk_check_loop + _check_do_kirilimi/_check_do_open_streak
+    #         hook'ları gerçek yazar — şu anki durum.
+    # "yeni": signal_service.py'deki eşdeğerleri gerçek yazar, live_data_manager.py'deki eski
+    #         hook'lar devre dışı kalır. Aynı SIGNAL_SOURCE deseniyle, geri dönüş bu değeri
+    #         "eski"ye çevirip iki servisi restart etmekten ibaret.
+    PAPER_TRADING_SOURCE = os.getenv('PAPER_TRADING_SOURCE', 'eski')
 
     # =============================================================================
     # LOGGING AYARLARI

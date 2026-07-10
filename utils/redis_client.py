@@ -2,6 +2,8 @@ import asyncio
 import functools
 import json
 import logging
+import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from io import StringIO
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -9,13 +11,16 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import pandas as pd
 import pyarrow as pa
 import redis.asyncio as redis
+import redis.exceptions as redis_exceptions
 
 from config import Config
 
 logger = logging.getLogger(__name__)
 
 _ARROW_MAGIC = b"ARDF"
-_ARROW_EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="arrow")
+# 8→4 (10 Tem 2026): _MTF_EXECUTOR ile aynı gerekçe — dedup+serialize artık hafif,
+# 8 thread gereksiz GIL çekişmesi yaratıyordu (bkz. live_data_manager.py yorumu).
+_ARROW_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="arrow")
 
 # Ana pool'un (BlockingConnectionPool) bağlantı-edinme timeout'u. Dıştan bu pool'a
 # karşı asyncio.wait_for ile sarılan HER çağrı, SAFE_EXTERNAL_TIMEOUT'tan kısa bir
@@ -123,6 +128,66 @@ class RedisClient:
         """Mevcut event loop'a uygun bağlantı havuzundan bir istemci döndürür."""
         pool = cls._get_pool_for_current_loop()
         return redis.Redis(connection_pool=pool)
+
+    # 10 Tem 2026 akşam: process-bağımsız paylaşımlı rate limiter. Kök neden:
+    # run_services.py, signal_service.py VE masaüstü panel (desktop.main —
+    # market_worker/divergence_worker/ranking_worker/vpmv_worker) AYNI IP'den
+    # bağımsız olarak Binance'e istek atıyor; her process kendi içinde ne kadar
+    # dikkatli throttle uygularsa uygulasın, TOPLAM istek hızı yine gerçek IP
+    # limitini (2400/dk) aşabiliyordu (canlıda 429 alındı, iki kez). Tek process
+    # içi bir sayaç (liste/lock) bunu çözemez — sayaç her process'te ayrı hafızada.
+    # Redis zaten TÜM process'ler tarafından paylaşılan tek durak, bu yüzden
+    # sliding-window sayacı burada, ZSET + Lua (atomik, tek round-trip) ile tutuluyor.
+    _RATE_LIMIT_LUA = """
+        local key = KEYS[1]
+        local now = tonumber(ARGV[1])
+        local window = tonumber(ARGV[2])
+        local limit = tonumber(ARGV[3])
+        local member = ARGV[4]
+        redis.call('ZREMRANGEBYSCORE', key, 0, now - window)
+        local count = redis.call('ZCARD', key)
+        if count < limit then
+            redis.call('ZADD', key, now, member)
+            redis.call('PEXPIRE', key, window + 1000)
+            return 0
+        else
+            local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
+            return (tonumber(oldest[2]) + window) - now
+        end
+    """
+    _rate_limit_sha: Dict[str, str] = {}
+
+    @classmethod
+    async def throttle_external_api(cls, bucket: str, max_per_min: int) -> None:
+        """Verilen bucket (ör. 'binance') için process-bağımsız sliding-window
+        rate limit uygular — limit dolmuşsa gereken süre kadar asyncio.sleep ile
+        bekler, sonra tekrar dener. Her çağıran (hangi process'te olursa olsun)
+        AYNI Redis anahtarını paylaştığı için toplam istek hızı asla aşılmaz."""
+        key = f"rate_limit:{bucket}"
+        window_ms = 60_000
+        client = cls.get_client()
+        while True:
+            now_ms = int(time.time() * 1000)
+            member = f"{now_ms}-{uuid.uuid4().hex[:8]}"
+            try:
+                sha = cls._rate_limit_sha.get("script")
+                if sha is None:
+                    sha = await client.script_load(cls._RATE_LIMIT_LUA)
+                    cls._rate_limit_sha["script"] = sha
+                try:
+                    wait_ms = await client.evalsha(sha, 1, key, now_ms, window_ms, max_per_min, member)
+                except redis_exceptions.NoScriptError:
+                    sha = await client.script_load(cls._RATE_LIMIT_LUA)
+                    cls._rate_limit_sha["script"] = sha
+                    wait_ms = await client.evalsha(sha, 1, key, now_ms, window_ms, max_per_min, member)
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                # Redis'e ulaşılamıyorsa güvenli tarafta kal ama tüm sistemi kilitleme —
+                # kısa bir bekleme ile devam et (rate limit koruması geçici devre dışı).
+                logger.warning("[RateLimit] %s throttle hatası, atlanıyor: %s", bucket, exc)
+                return
+            if wait_ms <= 0:
+                return
+            await asyncio.sleep(min(wait_ms / 1000 + 0.02, 5))
 
     @classmethod
     def _get_binary_client(cls) -> redis.Redis:

@@ -39,9 +39,15 @@ _STRATEGY_TRIGGERS: dict[str, Callable[[dict], bool]] = {
 
 class PaperTradeManager:
 
-    def __init__(self, strategy: str = "conf_100") -> None:
+    def __init__(self, strategy: str = "conf_100", max_hold_hours: Optional[float] = None) -> None:
         self.strategy = strategy
         self._open_symbols: set[str] = set()
+        # None: eski davranış (fiyat kapanışı yok, sadece ters sinyal/manuel/paper
+        # SL-TP-trailing). Verilirse: bu süreyi aşan açık pozisyonlar check_all_prices'ta
+        # "timeout" ile kapatılır (do_open_streak — SL=3xATR TEK BAŞINA, TP/breakeven yok,
+        # backtestte kazananın büyük hareketi 24h'e kadar sınırsız bırakması gerektiği
+        # bulundu — bkz. research/pattern_lab/do_break_gauss_sltp_bt.py).
+        self.max_hold_hours = max_hold_hours
 
     async def load_open_symbols(self) -> None:
         async def _do_load() -> set[str]:
@@ -211,8 +217,9 @@ class PaperTradeManager:
         price: float,
         atr: float,
         sl_price: float,
-        tp_price: float,
+        tp_price: Optional[float],
         note: str = "",
+        position_usd: Optional[float] = None,
     ) -> bool:
         """Sinyal tablosundan bağımsız pozisyon açar (dedektör tabanlı stratejiler)."""
         if self.strategy not in Config.PAPER.get("ENABLED_STRATEGIES", []):
@@ -248,7 +255,7 @@ class PaperTradeManager:
                         symbol=symbol,
                         signal_type=signal_type,
                         interval=interval,
-                        position_usd=POSITION_USD,
+                        position_usd=position_usd if position_usd is not None else POSITION_USD,
                         entry_price=price,
                         stop_loss_price=sl_price,
                         take_profit_price=tp_price,
@@ -259,10 +266,11 @@ class PaperTradeManager:
                     session.add(trade)
                     await session.commit()
                     self._open_symbols.add(symbol)
+                    tp_str = f"{tp_price:.6f}" if tp_price is not None else "yok"
                     logger.info(
-                        "[PaperTrade][%s] ★ AÇILDI %s %s %s @ %.6f | SL=%.6f TP=%.6f %s",
+                        "[PaperTrade][%s] ★ AÇILDI %s %s %s @ %.6f | pozisyon=$%.2f SL=%.6f TP=%s %s",
                         self.strategy, symbol, signal_type, interval, price,
-                        sl_price, tp_price, note,
+                        trade.position_usd, sl_price, tp_str, note,
                     )
                     return True
                 except Exception as exc:
@@ -270,11 +278,31 @@ class PaperTradeManager:
                     logger.error("[PaperTrade][%s] open_direct hatası: %s", self.strategy, exc, exc_info=True)
                     return False
 
-        try:
-            return await run_with_db_timeout(_do_open_direct())
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            logger.error("[PaperTrade][%s] open_direct zaman aşımı (%s): %s", self.strategy, symbol, exc)
-            return False
+        # Kayıp-kritik nokta: bu, do_kirilimi/do_open_streak gibi nadir ateşlenen
+        # dedektör-tabanlı sinyallerin YEGANE giriş noktası — burada timeout olup
+        # kaybedilen bir sinyal bir sonraki bar'a kadar (ya da hiç) geri gelmez
+        # (bkz. 10 Tem 2026 ARXUSDT/POLUSDT vakaları, memory: project_data_layer_debt.md).
+        # 1 ek deneme: havuz burst anında birkaç saniye içinde açılıyor, retry çoğu
+        # zaman yeterli. _do_open_direct() kendi "existing" kontrolüyle idempotent —
+        # ilk deneme aslında commit'i başarıp sadece bize timeout dönmüşse bile
+        # retry çift pozisyon AÇMAZ (zaten açık bulur, False döner).
+        for attempt in range(2):
+            try:
+                return await run_with_db_timeout(_do_open_direct())
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                if attempt == 0:
+                    logger.warning(
+                        "[PaperTrade][%s] open_direct zaman aşımı (%s), tekrar deneniyor: %s",
+                        self.strategy, symbol, exc,
+                    )
+                    await asyncio.sleep(0.5)
+                else:
+                    logger.error(
+                        "[PaperTrade][%s] open_direct zaman aşımı (%s), retry de başarısız: %s",
+                        self.strategy, symbol, exc,
+                    )
+                    return False
+        return False
 
     async def check_all_prices(self, prices: dict[str, float]) -> None:
         if not self._open_symbols:
@@ -309,6 +337,15 @@ class PaperTradeManager:
                         price = prices.get(trade.symbol)
                         if price is None:
                             continue
+
+                        if self.max_hold_hours is not None:
+                            age_hours = (datetime.now() - trade.opened_at).total_seconds() / 3600
+                            if age_hours >= self.max_hold_hours:
+                                self._apply_close(trade, price, "timeout", portfolio)
+                                closed_symbols.add(trade.symbol)
+                                changed = True
+                                continue
+
                         old_trail = trade.trailing_stop_price
                         reason = self._update_trailing(trade, price)
                         if reason:
@@ -333,7 +370,10 @@ class PaperTradeManager:
                     logger.error("[PaperTrade][%s] batch check hatası: %s", self.strategy, exc, exc_info=True)
 
         try:
-            await run_with_db_timeout(_do_check())
+            # 10s: periyodik/kritik-olmayan bir kontrol — havuzun kendi pool_timeout'una
+            # (30s) daha yakın bir süre, burst anındaki (ör. 500+ sembol aynı anda kapanışı)
+            # normal kısa kuyruklanmaya tahammül eder (bkz. run_with_db_timeout docstring).
+            await run_with_db_timeout(_do_check(), timeout=10.0)
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.error("[PaperTrade][%s] batch check zaman aşımı: %s", self.strategy, exc)
 
@@ -357,8 +397,9 @@ class PaperTradeManager:
         portfolio: Optional["PaperPortfolio"],
     ) -> None:
         pnl_pct = _calc_pnl(trade.signal_type, float(trade.entry_price), exit_price)
-        fee_usd = POSITION_USD * FEE_RATE * 2
-        pnl_usd = (pnl_pct / 100) * POSITION_USD - fee_usd
+        position_usd = float(trade.position_usd) if trade.position_usd else POSITION_USD
+        fee_usd = position_usd * FEE_RATE * 2
+        pnl_usd = (pnl_pct / 100) * position_usd - fee_usd
 
         trade.status       = "closed"
         trade.closed_at    = datetime.now()
@@ -410,8 +451,9 @@ class PaperTradeManager:
             return None
 
 
-paper_trade_manager = PaperTradeManager("conf_100")
-ha_cross_manager    = PaperTradeManager("ha_cross")
-rsi_15m_manager     = PaperTradeManager("rsi_15m")
-manual_manager      = PaperTradeManager("manual")
-do_kirilimi_manager = PaperTradeManager("do_kirilimi")
+paper_trade_manager     = PaperTradeManager("conf_100")
+ha_cross_manager        = PaperTradeManager("ha_cross")
+rsi_15m_manager         = PaperTradeManager("rsi_15m")
+manual_manager          = PaperTradeManager("manual")
+do_kirilimi_manager     = PaperTradeManager("do_kirilimi")
+do_open_streak_manager  = PaperTradeManager("do_open_streak", max_hold_hours=24.0)

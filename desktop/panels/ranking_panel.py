@@ -20,7 +20,6 @@ from PyQt6.QtWidgets import (  # pylint: disable=no-name-in-module
     QWidget,
 )
 
-from config import Config
 from desktop.theme import COLORS
 from desktop.workers.ranking_worker import RankingWorker
 
@@ -156,7 +155,12 @@ class RankingPanel(QWidget):
         )
 
         hh = self._table.horizontalHeader()
-        hh.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        # ResizeToContents sürekli modda HER setItem() çağrısında tüm sütunu yeniden
+        # ölçüyor (O(satır) maliyet × N setItem = O(satır²)) — 550 sembolle bu, ana
+        # thread'i kilitleyip panel kasmasına yol açıyordu. Interactive + _render
+        # sonunda tek seferlik resizeColumnsToContents() aynı görünümü verir, sürekli
+        # yeniden ölçüm olmadan.
+        hh.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         hh.setSectionResizeMode(_COL_SYMBOL, QHeaderView.ResizeMode.Stretch)
 
         layout.addWidget(self._table)
@@ -285,6 +289,7 @@ class RankingPanel(QWidget):
             self._set_vs_btc(row, vs_btc, bg)
 
         self._table.setSortingEnabled(True)
+        self._table.resizeColumnsToContents()
         self._apply_search_filter()
 
     @pyqtSlot(str)

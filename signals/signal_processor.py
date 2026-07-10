@@ -12,13 +12,10 @@ from config import Config
 from indicators.core import calculate_rsi, calculate_atr, calculate_adx
 from signals.vpm_calculator import VPMCalculator
 from utils.preprocessing import (
-    normalize_volume_0_100,
-    normalize_momentum_0_100,
     normalize_volatility_0_100,
-    normalize_price_0_100,
 )
 from utils.redis_client import RedisClient, SAFE_EXTERNAL_TIMEOUT
-from utils.vpmv import compute_pre, directional_volume
+from utils.vpmv import compute_components, compute_pre
 from signals.paper_trade_manager import paper_trade_manager, ha_cross_manager, rsi_15m_manager
 from signals.risk_manager import risk_manager
 
@@ -136,34 +133,6 @@ async def _compute_mtf_score(
         return 100.0
 
     return round(confirmed / checked * 100)
-
-
-def _compute_vpmv_scores(df: pd.DataFrame, signal_type: str) -> tuple[float, float, float, float]:
-    """
-    df üzerinden rolling normalize bileşen skorlarını hesaplar.
-
-    Returns:
-        (vol_score, momentum_score, vlt_score, price_score) — hepsi 0-100
-    """
-    side = 1.0 if signal_type == "Long" else -1.0
-
-    # Volume: log + rolling min-max — yönlü (Long→buy, Short→sell; 3 Tem 2026)
-    vol_score = float(normalize_volume_0_100(directional_volume(df, side)).iloc[-1])
-
-    # Momentum: yönlü RSI delta + z-score sigmoid
-    rsi_series = calculate_rsi(df, period=14)
-    rsi_delta_series = rsi_series.diff().fillna(0.0) * side
-    momentum_score = float(normalize_momentum_0_100(rsi_delta_series).iloc[-1])
-
-    # Volatility: ATR percentile rank
-    atr_series = calculate_atr(df, period=Config.ATR_PERIOD)
-    vlt_score = float(normalize_volatility_0_100(atr_series).iloc[-1])
-
-    # Price: yönlü % değişim + rolling IQR
-    price_pct = df["close"].pct_change().fillna(0.0) * 100.0 * side
-    price_score = float(normalize_price_0_100(price_pct).iloc[-1])
-
-    return vol_score, momentum_score, vlt_score, price_score
 
 
 def _compute_devisso_score(df: pd.DataFrame) -> Optional[float]:
@@ -504,7 +473,7 @@ async def process_and_enrich_signals(
                 # 3. VPMV Hesapla
                 vpms_score: Optional[float] = None
                 try:
-                    vol_s, mom_s, vlt_s, prc_s = _compute_vpmv_scores(df, sig_type)
+                    vol_s, mom_s, vlt_s, prc_s = compute_components(df, sig_type)
                     vpms_score = VPMCalculator.calculate(
                         vol_score=vol_s,
                         momentum_score=mom_s,
