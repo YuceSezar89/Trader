@@ -60,6 +60,7 @@ let stUpSeries, stDownSeries;
 let _priceLines = [];
 let _smcData = null;
 let _smcEnabled = false;
+let _swingEnabled = false;
 let _smcPlugin = null;
 let _signalMarkers = [];
 
@@ -183,6 +184,12 @@ class FVGBoxPlugin {{
 let _phlData = null;
 let _phlEnabled = false;
 let _phlLines = [];
+let _pivotData = null;
+let _pivotEnabled = false;
+let _pivotLines = [];
+let _wmyData = null;
+let _wmyEnabled = false;
+let _wmyLines = [];
 
 function initChart() {{
   const w = container.clientWidth;
@@ -431,6 +438,66 @@ function togglePreviousHL(enabled) {{
   _renderPreviousHL();
 }}
 
+function _renderFibPivots() {{
+  _pivotLines.forEach(pl => {{ try {{ candleSeries.removePriceLine(pl); }} catch(e) {{}} }});
+  _pivotLines = [];
+  if (!_pivotEnabled || !_pivotData) return;
+  const levels = [
+    ['pp', 'PP', '#ffa94d', 0],
+    ['r1', 'R1', '#ff6b6b', 2], ['r2', 'R2', '#ff6b6b', 2], ['r3', 'R3', '#ff6b6b', 2],
+    ['s1', 'S1', '#51cf66', 2], ['s2', 'S2', '#51cf66', 2], ['s3', 'S3', '#51cf66', 2],
+  ];
+  levels.forEach(([key, title, color, style]) => {{
+    const v = _pivotData[key];
+    if (v === undefined || v === null) return;
+    _pivotLines.push(candleSeries.createPriceLine({{
+      price: v, color: color, lineWidth: 1,
+      lineStyle: style, axisLabelVisible: true, title: title,
+    }}));
+  }});
+}}
+
+function loadFibPivots(dataJson, enabled) {{
+  try {{ _pivotData = JSON.parse(dataJson); }} catch(e) {{ _pivotData = null; }}
+  _pivotEnabled = enabled;
+  _renderFibPivots();
+}}
+
+function toggleFibPivots(enabled) {{
+  _pivotEnabled = enabled;
+  _renderFibPivots();
+}}
+
+function _renderWMY() {{
+  _wmyLines.forEach(pl => {{ try {{ candleSeries.removePriceLine(pl); }} catch(e) {{}} }});
+  _wmyLines = [];
+  if (!_wmyEnabled || !_wmyData) return;
+  const levels = [
+    ['w', 'W-Open', '#e599f7', 2],
+    ['m', 'M-Open', '#da77f2', 2],
+    ['y', 'Y-Open', '#be4bdb', 2],
+  ];
+  levels.forEach(([key, title, color, style]) => {{
+    const v = _wmyData[key];
+    if (v === undefined || v === null) return;
+    _wmyLines.push(candleSeries.createPriceLine({{
+      price: v, color: color, lineWidth: 1,
+      lineStyle: style, axisLabelVisible: true, title: title,
+    }}));
+  }});
+}}
+
+function loadWMY(dataJson, enabled) {{
+  try {{ _wmyData = JSON.parse(dataJson); }} catch(e) {{ _wmyData = null; }}
+  _wmyEnabled = enabled;
+  _renderWMY();
+}}
+
+function toggleWMY(enabled) {{
+  _wmyEnabled = enabled;
+  _renderWMY();
+}}
+
 function clearSignalMarkers() {{
   _signalMarkers = [];
   _priceLines.forEach(pl => {{ try {{ candleSeries.removePriceLine(pl); }} catch(e) {{}} }});
@@ -439,8 +506,8 @@ function clearSignalMarkers() {{
 }}
 
 function _refreshAllMarkers() {{
-  const smcM = (_smcEnabled && _smcData) ? (_smcData.markers || []) : [];
-  const all = [..._signalMarkers, ...smcM].sort((a, b) => a.time - b.time);
+  const swingM = (_swingEnabled && _smcData) ? (_smcData.markers || []) : [];
+  const all = [..._signalMarkers, ...swingM].sort((a, b) => a.time - b.time);
   try {{ candleSeries.setMarkers(all); }} catch(e) {{}}
 }}
 
@@ -461,6 +528,11 @@ function loadSMC(dataJson, enabled) {{
 function toggleSMC(enabled) {{
   _smcEnabled = enabled;
   _renderSMC();
+}}
+
+function toggleSwing(enabled) {{
+  _swingEnabled = enabled;
+  _refreshAllMarkers();
 }}
 
 function setPriceFormat(precision, minMove) {{
@@ -532,8 +604,11 @@ class TVChart(QWebEngineView):
         self._pending_signal: Optional[dict] = None
         self._bar_state: Optional[dict] = None
         self._smc_enabled = False
+        self._swing_enabled = False
         self._fvg_enabled = False
         self._phl_enabled = False
+        self._pivot_enabled = False
+        self._wmy_enabled = False
 
         self.loadFinished.connect(self._on_load_finished)
         self.setHtml(_build_html(), QUrl("about:blank"))
@@ -614,6 +689,11 @@ class TVChart(QWebEngineView):
         if self._ready:
             self.page().runJavaScript(f"toggleSMC({'true' if enabled else 'false'})")
 
+    def toggle_swing(self, enabled: bool) -> None:
+        self._swing_enabled = enabled
+        if self._ready:
+            self.page().runJavaScript(f"toggleSwing({'true' if enabled else 'false'})")
+
     def toggle_fvg(self, enabled: bool) -> None:
         self._fvg_enabled = enabled
         if self._ready:
@@ -623,6 +703,16 @@ class TVChart(QWebEngineView):
         self._phl_enabled = enabled
         if self._ready:
             self.page().runJavaScript(f"togglePreviousHL({'true' if enabled else 'false'})")
+
+    def toggle_pivots(self, enabled: bool) -> None:
+        self._pivot_enabled = enabled
+        if self._ready:
+            self.page().runJavaScript(f"toggleFibPivots({'true' if enabled else 'false'})")
+
+    def toggle_wmy(self, enabled: bool) -> None:
+        self._wmy_enabled = enabled
+        if self._ready:
+            self.page().runJavaScript(f"toggleWMY({'true' if enabled else 'false'})")
 
     def set_log_scale(self, enabled: bool) -> None:
         self.page().runJavaScript(f"setLogScale({'true' if enabled else 'false'})")
@@ -727,6 +817,20 @@ class TVChart(QWebEngineView):
             f"loadPreviousHL("
             f"{json.dumps(json.dumps(phl_data))},"
             f"{'true' if self._phl_enabled else 'false'})"
+        )
+
+        pivot_data = self._prepare_fib_pivots(df)
+        self.page().runJavaScript(
+            f"loadFibPivots("
+            f"{json.dumps(json.dumps(pivot_data))},"
+            f"{'true' if self._pivot_enabled else 'false'})"
+        )
+
+        wmy_data = self._prepare_wmy_open(df)
+        self.page().runJavaScript(
+            f"loadWMY("
+            f"{json.dumps(json.dumps(wmy_data))},"
+            f"{'true' if self._wmy_enabled else 'false'})"
         )
 
         last_price = float(df["close"].iloc[-1])
@@ -860,6 +964,51 @@ class TVChart(QWebEngineView):
             }
         except Exception:  # pylint: disable=broad-exception-caught
             return {"high": None, "low": None, "pdo": None, "do_": None, "tf": ""}
+
+    @staticmethod
+    def _prepare_fib_pivots(df: pd.DataFrame) -> dict:
+        """Önceki günün H/L/C'sinden Fibonacci Pivot Point seviyelerini hesaplar
+        (indicators/core.py::calculate_fib_pivots — panel ve ileride pattern_lab
+        backtest'lerinin AYNI fonksiyonu kullanması için orada tutuluyor)."""
+        try:
+            from indicators.core import calculate_fib_pivots  # pylint: disable=import-outside-toplevel
+
+            df_idx = df[["high", "low", "close"]].copy()
+            df_idx.index = pd.to_datetime(df["timestamp"].values, utc=True)
+            for col in df_idx.columns:
+                df_idx[col] = df_idx[col].astype(float)
+
+            daily = df_idx.resample("D").agg({"high": "max", "low": "min", "close": "last"}).dropna()
+            if len(daily) < 2:
+                return {}
+
+            prev = daily.iloc[-2]
+            levels = calculate_fib_pivots(float(prev["high"]), float(prev["low"]), float(prev["close"]))
+            return {k: round(v, 8) for k, v in levels.items()}
+        except Exception:  # pylint: disable=broad-exception-caught
+            return {}
+
+    @staticmethod
+    def _prepare_wmy_open(df: pd.DataFrame) -> dict:
+        """Mevcut haftanın/ayın/yılın açılış seviyelerini hesaplar — DO/PDO'nun
+        (_prepare_previous_hl) günlük resample deseninin W/M/Y'ye genişlemesi.
+        Tlosx'un 'D/W/M/Y open = mıknatıs seviyesi' fikri (bkz. [[project_turtle_traders]])."""
+        try:
+            df_idx = df[["open"]].copy()
+            df_idx.index = pd.to_datetime(df["timestamp"].values, utc=True)
+            df_idx["open"] = df_idx["open"].astype(float)
+
+            w_open = df_idx["open"].resample("W").first().dropna()
+            m_open = df_idx["open"].resample("ME").first().dropna()
+            y_open = df_idx["open"].resample("YE").first().dropna()
+
+            return {
+                "w": round(float(w_open.iloc[-1]), 8) if len(w_open) >= 1 else None,
+                "m": round(float(m_open.iloc[-1]), 8) if len(m_open) >= 1 else None,
+                "y": round(float(y_open.iloc[-1]), 8) if len(y_open) >= 1 else None,
+            }
+        except Exception:  # pylint: disable=broad-exception-caught
+            return {}
 
     @staticmethod
     def _prepare_smc(df: pd.DataFrame, swing_limit: int = 10, level_limit: int = 3) -> dict:

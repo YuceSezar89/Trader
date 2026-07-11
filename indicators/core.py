@@ -647,3 +647,20 @@ def find_support_resistance(df, order=10, tolerance=0.002):
 
     return sorted(support_levels), sorted(resistance_levels)
 
+
+def calculate_fib_pivots(high: float, low: float, close: float) -> dict:
+    """
+    Fibonacci Pivot Point seviyelerini hesaplar (önceki periyodun H/L/C'sinden).
+    Klasik pivot (2*PP-L formülü) DEĞİL — R/S mesafeleri Fibonacci oranlarıyla
+    (0.382/0.618/1.0) ölçekleniyor.
+
+    Döner: {'pp', 'r1','r2','r3', 's1','s2','s3'}
+    """
+    pp = (high + low + close) / 3.0
+    rng = high - low
+    return {
+        "pp": pp,
+        "r1": pp + 0.382 * rng, "r2": pp + 0.618 * rng, "r3": pp + 1.0 * rng,
+        "s1": pp - 0.382 * rng, "s2": pp - 0.618 * rng, "s3": pp - 1.0 * rng,
+    }
+

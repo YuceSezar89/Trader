@@ -102,6 +102,15 @@ class ChartPanel(QWidget):  # pylint: disable=too-many-instance-attributes
         self._smc_btn.clicked.connect(self._on_smc_toggled)
         header.addWidget(self._smc_btn)
 
+        self._swing_btn = QPushButton("Swing")
+        self._swing_btn.setFixedHeight(24)
+        self._swing_btn.setFixedWidth(48)
+        self._swing_btn.setCheckable(True)
+        self._swing_btn.setChecked(False)
+        self._swing_btn.setStyleSheet(self._tf_btn_style(False))
+        self._swing_btn.clicked.connect(self._on_swing_toggled)
+        header.addWidget(self._swing_btn)
+
         self._fvg_btn = QPushButton("FVG")
         self._fvg_btn.setFixedHeight(24)
         self._fvg_btn.setFixedWidth(42)
@@ -119,6 +128,24 @@ class ChartPanel(QWidget):  # pylint: disable=too-many-instance-attributes
         self._phl_btn.setStyleSheet(self._tf_btn_style(False))
         self._phl_btn.clicked.connect(self._on_phl_toggled)
         header.addWidget(self._phl_btn)
+
+        self._pivot_btn = QPushButton("Pivot")
+        self._pivot_btn.setFixedHeight(24)
+        self._pivot_btn.setFixedWidth(48)
+        self._pivot_btn.setCheckable(True)
+        self._pivot_btn.setChecked(False)
+        self._pivot_btn.setStyleSheet(self._tf_btn_style(False))
+        self._pivot_btn.clicked.connect(self._on_pivot_toggled)
+        header.addWidget(self._pivot_btn)
+
+        self._wmy_btn = QPushButton("W/M/Y")
+        self._wmy_btn.setFixedHeight(24)
+        self._wmy_btn.setFixedWidth(52)
+        self._wmy_btn.setCheckable(True)
+        self._wmy_btn.setChecked(False)
+        self._wmy_btn.setStyleSheet(self._tf_btn_style(False))
+        self._wmy_btn.clicked.connect(self._on_wmy_toggled)
+        header.addWidget(self._wmy_btn)
 
         root.addLayout(header)
 
@@ -260,6 +287,10 @@ class ChartPanel(QWidget):  # pylint: disable=too-many-instance-attributes
         self._smc_btn.setStyleSheet(self._tf_btn_style(enabled))
         self._chart.toggle_smc(enabled)
 
+    def _on_swing_toggled(self, enabled: bool) -> None:
+        self._swing_btn.setStyleSheet(self._tf_btn_style(enabled))
+        self._chart.toggle_swing(enabled)
+
     def _on_fvg_toggled(self, enabled: bool) -> None:
         self._fvg_btn.setStyleSheet(self._tf_btn_style(enabled))
         self._chart.toggle_fvg(enabled)
@@ -267,6 +298,14 @@ class ChartPanel(QWidget):  # pylint: disable=too-many-instance-attributes
     def _on_phl_toggled(self, enabled: bool) -> None:
         self._phl_btn.setStyleSheet(self._tf_btn_style(enabled))
         self._chart.toggle_phl(enabled)
+
+    def _on_pivot_toggled(self, enabled: bool) -> None:
+        self._pivot_btn.setStyleSheet(self._tf_btn_style(enabled))
+        self._chart.toggle_pivots(enabled)
+
+    def _on_wmy_toggled(self, enabled: bool) -> None:
+        self._wmy_btn.setStyleSheet(self._tf_btn_style(enabled))
+        self._chart.toggle_wmy(enabled)
 
     def _on_tf_clicked(self, tf: str) -> None:
         """TF butonuna tıklanınca grafiği günceller."""
