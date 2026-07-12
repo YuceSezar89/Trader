@@ -17,6 +17,12 @@ Ablasyon: D-open şartı olmadan SADECE ardışık yeşil mum eşiği de ayrıca
 — D-open koşulunun gerçekten katma değeri var mı, yoksa ardışık yeşil mumun
 kendisi mi taşıyor, ayrıştırmak için (placebo/ablasyon disiplini, bkz. Pattern
 Lab metodoloji dersleri).
+
+MTF onayı (v2-15, 10 Tem 2026): "D-open kırılım + 3 ardışık yeşil" olayları
+ayrıca 1h/4h'nin son kapanmış HA barının bullish olup olmadığına göre de
+kırılıyor — 9420 olayda SADECE tam onay (2/2, "ULTRA") grubu net kârlıydı,
+0/2 ve 1/2 net zarardaydı (bkz. aşağıdaki tablo). Split-period + OOS $ etkisi
+gibi daha derin analiz research/pattern_lab/do_kirilimi_mtf_alignment_bt.py'de.
 """
 import os
 import sys
@@ -32,11 +38,14 @@ import psycopg2  # pylint: disable=wrong-import-position
 from config import Config  # pylint: disable=wrong-import-position
 from signals.do_kirilimi import _daily_open  # pylint: disable=wrong-import-position
 from research.pattern_lab.vol_exhaustion_bt import _fwd_returns, _stats  # pylint: disable=wrong-import-position
+from research.pattern_lab.mtf_helpers import _fetch_dir_data, _confirm_count  # pylint: disable=wrong-import-position
 
 DAYS = 45
 HORIZON_BARS = 96  # 24h @ 15m
 MIN_BARS = 700
 STREAK_THRESHOLDS = [2, 3, 4, 5]
+MTF_CONFIRM_TFS = ["1h", "4h"]
+MTF_STREAK_TARGET = 3  # v2-15: MTF onayı sadece headline eşiği (3) için ölçüldü
 
 
 def _fetch() -> pd.DataFrame:
@@ -108,11 +117,12 @@ def run():
     baseline_fwd = []
     do_streak_fwd = {th: [] for th in STREAK_THRESHOLDS}
     plain_streak_fwd = {th: [] for th in STREAK_THRESHOLDS}
+    mtf_confirm_fwd = {0: [], 1: [], 2: []}
     n_syms = 0
     n_do_events = {th: 0 for th in STREAK_THRESHOLDS}
     n_plain_events = {th: 0 for th in STREAK_THRESHOLDS}
 
-    for _sym, g in df.groupby("symbol"):
+    for sym, g in df.groupby("symbol"):
         g = g.sort_values("ts").reset_index(drop=True)
         if len(g) < MIN_BARS:
             continue
@@ -136,6 +146,17 @@ def run():
             do_streak_fwd[th].append(_fwd_returns(c, do_events[th], HORIZON_BARS))
             plain_streak_fwd[th].append(_fwd_returns(c, plain_events[th], HORIZON_BARS))
 
+        # MTF onayı (v2-15) — sadece headline eşiği (streak==3) için
+        target_events = [i for i in do_events[MTF_STREAK_TARGET] if i < len(c) - HORIZON_BARS]
+        if target_events:
+            dir_data = _fetch_dir_data(sym, MTF_CONFIRM_TFS)
+            if dir_data is not None:
+                for i in target_events:
+                    confirm_count = _confirm_count(dir_data, MTF_CONFIRM_TFS, ts.iloc[i], want_bullish=True)
+                    if confirm_count is not None:
+                        ret = c[i + HORIZON_BARS] / c[i] - 1
+                        mtf_confirm_fwd[confirm_count].append(ret)
+
     baseline_rets = np.concatenate(baseline_fwd) if baseline_fwd else np.array([])
     print(f"analize giren sembol: {n_syms}\n")
     print(f"{'grup':38} {'n':>7} {'WR%':>6} {'ort%':>8} {'PF':>7}")
@@ -157,6 +178,16 @@ def run():
         label = f"[ablasyon] sadece {th} ardışık yeşil"
         print(f"{label:38} {s.get('n',0):>7} {s.get('wr',0):>6} "
               f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}  (olay={n_plain_events[th]})")
+    print()
+
+    print(f"── D-open kırılım + {MTF_STREAK_TARGET} ardışık yeşil, üst TF "
+          f"({'/'.join(MTF_CONFIRM_TFS)}) onayına göre (v2-15) ──")
+    for count in (0, 1, 2):
+        rets = np.array(mtf_confirm_fwd[count])
+        s = _stats(rets)
+        label = f"{count}/{len(MTF_CONFIRM_TFS)}" + (" (ULTRA)" if count == len(MTF_CONFIRM_TFS) else "")
+        print(f"{label:38} {s.get('n',0):>7} {s.get('wr',0):>6} "
+              f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
 
 
 if __name__ == "__main__":

@@ -29,6 +29,17 @@ INTERVALS = ["5m", "15m"]
 CUTOFF = "2026-07-03 19:22:16"  # commit e81aa34
 MIN_HISTORY = 60  # compute_series'in rolling normalizasyonları için makul minimum
 
+_INTERVAL_TIMEDELTA = {"5m": pd.Timedelta(minutes=5), "15m": pd.Timedelta(minutes=15)}
+
+
+def _signal_bar_ts(opened_at, interval: str):
+    """signals.opened_at barın KAPANIŞ zamanı (_create_signal_output — close_local),
+    cagg_*.bucket ise barın AÇILIŞ zamanı — 11 Tem 2026'da bulunan hizalama hatası
+    (bkz. project_pattern_lab v2-24): ts_to_idx.get(opened_at) doğrudan yapılırsa
+    GERÇEK sinyal barının BİR SONRAKİSİ bulunur. Bu fonksiyon opened_at'i bir
+    interval GERİ kaydırıp doğru bar'ı verir."""
+    return opened_at - _INTERVAL_TIMEDELTA[interval]
+
 
 def _fetch_signals(interval: str) -> pd.DataFrame:
     conn = psycopg2.connect(
