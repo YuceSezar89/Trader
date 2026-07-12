@@ -116,6 +116,7 @@ class Signal(Base):
     rank_score       = Column(Float, nullable=True)
     vs_btc           = Column(Float, nullable=True)
     ha_ultra_confirm = Column(SmallInteger, nullable=True)
+    cross_indicator_close = Column(Boolean, nullable=True)
 
     paper_trades = relationship("PaperTrade", back_populates="signal", lazy="noload")
 
