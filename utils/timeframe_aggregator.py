@@ -16,7 +16,6 @@ import pandas as pd
 import numpy as np
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
-from config import Config
 
 from utils.logger import get_logger
 
@@ -98,19 +97,17 @@ class TimeframeAggregator:
         BAŞLANGICINI (epoch ms) döner. 10 Tem 2026, 1m-türetme Adım 4: oluşum
         halindeki (forming/henüz kapanmamış) üst TF barının hangi 1m barlarından
         oluştuğunu bulmak için — is_boundary_aligned ile AYNI hizalama tanımını
-        (yerel saat bazlı 4h/6h/8h/12h dahil) kullanır, tutarsızlık riski yok."""
+        kullanır, tutarsızlık riski yok.
+
+        4h/6h/8h/12h UTC-anchor'lı (12 Tem 2026 düzeltmesi — Binance'in kendi
+        kline'ları ve cagg_4h continuous aggregate'i (migration 006, origin
+        UTC 00:00) native olarak UTC sınırında kapanıyor; TradingView'ın
+        timezone görüntü ayarı sadece etiketleme, bar sınırını değiştirmez.
+        Önceki yerel-saat (Europe/Istanbul) anchor'ı bu iki kaynakla aynı
+        Redis buffer'ında çakışıp örtüşen/çift-sayılan barlar üretiyordu.)"""
         minutes = cls.TIMEFRAME_MINUTES.get(tf)
         if not minutes:
             return ts_ms
-        if tf in ('4h', '6h', '8h', '12h'):
-            hour_mod = {'4h': 4, '6h': 6, '8h': 8, '12h': 12}[tf]
-            tz_name = getattr(Config, 'TIMEZONE', 'Europe/Istanbul')
-            ts_local = pd.Timestamp(ts_ms, unit='ms', tz='UTC').tz_convert(tz_name)
-            period_start_local = ts_local.replace(
-                hour=(ts_local.hour // hour_mod) * hour_mod,
-                minute=0, second=0, microsecond=0, nanosecond=0,
-            )
-            return int(period_start_local.tz_convert('UTC').value // 10**6)
         if tf == '1d':
             # is_boundary_aligned ile tutarlı: 1d burada UTC gün başı (Binance'in
             # kendi 1d kline tanımıyla aynı) — do_kirilimi._daily_open'daki YEREL
@@ -169,15 +166,11 @@ class TimeframeAggregator:
         if tf == '1h':
             return ts.minute == 0 and ts.second == 0
         if tf in ('4h', '6h', '8h', '12h'):
-            # Yerel saate göre hizalama.
-            try:
-                tz_name = getattr(Config, 'TIMEZONE', 'Europe/Istanbul')
-                ts_local = ts.tz_convert(tz_name)
-            except Exception:
-                # Beklenmedik timezone hatalarında UTC ile devam (dakika==0 koşulu korunur)
-                ts_local = ts
+            # UTC'ye göre hizalama (12 Tem 2026 düzeltmesi — bkz. get_period_start
+            # docstring'i: Binance/cagg_4h ile aynı anchor, önceki yerel-saat
+            # hizalaması bu kaynaklarla çakışıyordu).
             hour_mod = {'4h': 4, '6h': 6, '8h': 8, '12h': 12}[tf]
-            return ts_local.minute == 0 and ts_local.second == 0 and (ts_local.hour % hour_mod == 0)
+            return ts.minute == 0 and ts.second == 0 and (ts.hour % hour_mod == 0)
         if tf == '1d':
             return ts.hour == 0 and ts.minute == 0 and ts.second == 0
         # Varsayılan: 1m ve diğerleri için ek şart yok
@@ -276,18 +269,10 @@ class TimeframeAggregator:
         # KENDİ zaman damgasından bağımsız olarak doğru periyoda atanıyor; boşluk
         # varsa o periyot eksik üyeyle oluşur ve aşağıdaki len(group_data)!=ratio
         # kontrolüyle atlanır — takip eden periyotlar ARTIK KAYMIYOR.
+        # 4h/6h/8h/12h dahil hepsi UTC epoch-modulo ile gruplanır (12 Tem 2026 —
+        # bkz. get_period_start docstring'i: Binance/cagg_4h ile aynı UTC anchor).
         period_ms = ratio * 60_000
-        if to_tf in ('4h', '6h', '8h', '12h'):
-            hour_mod = {'4h': 4, '6h': 6, '8h': 8, '12h': 12}[to_tf]
-            tz_name = getattr(Config, 'TIMEZONE', 'Europe/Istanbul')
-            dt_local = pd.to_datetime(df_sorted['open_time'], unit='ms', utc=True).dt.tz_convert(tz_name)
-            period_start_local = dt_local.apply(
-                lambda ts: ts.replace(hour=(ts.hour // hour_mod) * hour_mod,
-                                       minute=0, second=0, microsecond=0, nanosecond=0)
-            )
-            group_key = period_start_local.dt.tz_convert('UTC').astype('int64') // 10**6
-        else:
-            group_key = (df_sorted['open_time'] // period_ms) * period_ms
+        group_key = (df_sorted['open_time'] // period_ms) * period_ms
 
         df_sorted['group'] = group_key
         group_ids = sorted(df_sorted['group'].unique())
