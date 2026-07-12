@@ -115,6 +115,7 @@ class Signal(Base):
     candle_pattern   = Column(String(100), nullable=True)
     rank_score       = Column(Float, nullable=True)
     vs_btc           = Column(Float, nullable=True)
+    ha_ultra_confirm = Column(SmallInteger, nullable=True)
 
     paper_trades = relationship("PaperTrade", back_populates="signal", lazy="noload")
 

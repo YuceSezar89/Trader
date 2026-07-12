@@ -166,6 +166,7 @@ class SignalLifecycleManager:
                         tp_multiplier     = tp_mult,
                         z_score_entry     = signal_data.get("z_score_entry"),
                         is_confluence     = signal_data.get("is_confluence", False),
+                        ha_ultra_confirm  = signal_data.get("ha_ultra_confirm"),
                         vpmv_pre_avg      = signal_data.get("vpmv_pre_avg"),
                         vpmv_pre_proxy    = signal_data.get("vpmv_pre_proxy"),
                         vpmv_pre_total    = signal_data.get("vpmv_pre_total"),

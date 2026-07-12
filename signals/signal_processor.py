@@ -65,6 +65,49 @@ _SIGNAL_GENERATION_TFS = {"5m", "15m"}
 
 _HTF_CONFIRM_TFS = ["4h", "6h", "8h", "12h", "1d"]
 
+# "Ultra hizalama" (research/pattern_lab/ha_cross_mtf_alignment_bt.py, v2-14/v2-15,
+# 10-11 Tem 2026) — YUKARIDAKİ _HTF_CONFIRM_TFS'ten (15m HA_Cross + sadece Long +
+# 4h/6h/8h/12h/1d, hiç backtest edilmemiş) FARKLI, bağımsız ve doğrulanmış bir
+# katman: 5m HA_Cross sinyali + 15m/1h/4h'nin TAMAMININ (3/3) sinyalle aynı yönde
+# olması. Split-period'da sağlam çıktı (PF 1.45→2.35 iki yarıda da baseline üstü,
+# OOS $1683/ay). Sadece ETİKETLEME amaçlı — hiçbir sinyali engellemez/değiştirmez.
+_HA_ULTRA_CONFIRM_TFS = ["15m", "1h", "4h"]
+
+
+async def _count_ha_ultra_confirm(
+    symbol: str,
+    signal_type: str,
+    symbol_buffers: Optional[dict] = None,
+) -> Optional[int]:
+    """15m/1h/4h'nin SON KAPANMIŞ barının HA yönü sinyal yönüyle kaçının
+    uyuştuğunu sayar (0-3). Son satır tick güncellemesiyle henüz kapanmamış
+    (forming) olabileceği için atılır — research/pattern_lab/mtf_helpers.py
+    ile aynı disiplin. Herhangi bir TF için veri yetersizse None (belirsiz,
+    0'dan ayrı tutulur)."""
+    count = 0
+    for tf in _HA_ULTRA_CONFIRM_TFS:
+        try:
+            if symbol_buffers is not None:
+                df = symbol_buffers.get(tf)
+            else:
+                df = await RedisClient.get_mtf_klines(symbol, tf)
+            if df is None or len(df) < 2:
+                return None
+            closed = df.iloc[:-1]
+            if closed.empty or "ha_open" not in closed.columns or "ha_close" not in closed.columns:
+                return None
+            last = closed.iloc[-1]
+            ha_open, ha_close = last["ha_open"], last["ha_close"]
+            if pd.isna(ha_open) or pd.isna(ha_close):
+                return None
+            ha_bull = float(ha_close) > float(ha_open)
+            if (signal_type == "Long" and ha_bull) or (signal_type == "Short" and not ha_bull):
+                count += 1
+        except Exception as exc:
+            logger.debug("HA ULTRA konfirmasyonu [%s %s] atlandı: %s", symbol, tf, exc)
+            return None
+    return count
+
 
 async def _count_htf_ha_bullish(
     symbol: str,
@@ -599,8 +642,11 @@ async def process_and_enrich_signals(
 
                 # HTF HA hizalanması (sadece HA_Cross sinyalleri için)
                 htf_bull_count = 0
+                ha_ultra_confirm: Optional[int] = None
                 if indicators_name == "HA_Cross":
                     htf_bull_count = await _count_htf_ha_bullish(symbol, sig_type, symbol_buffers)
+                    if interval == "5m":
+                        ha_ultra_confirm = await _count_ha_ultra_confirm(symbol, sig_type, symbol_buffers)
 
                 is_confluence = (
                     indicators_name == "HA_Cross" and
@@ -640,6 +686,7 @@ async def process_and_enrich_signals(
                     "z_score_entry":  z_score_entry,
                     "is_confluence":  is_confluence,
                     "htf_bull_count": htf_bull_count,
+                    "ha_ultra_confirm": ha_ultra_confirm,
                 }
 
                 _vpmv_pre_avg = _vpmv_slope = _vpmv_ratio = None
