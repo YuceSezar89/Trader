@@ -17,7 +17,7 @@ import pandas as pd
 # Local imports
 import indicators.core as indicators
 from signals.vpm_calculator import VPMCalculator
-from signals.signal_processor import _compute_vpmv_scores
+from utils.vpmv import compute_components
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -578,8 +578,8 @@ class MTFBackfillEngine:
     def _calculate_vpmv_score(self, df: pd.DataFrame, idx: int) -> float:
         """VPMV (Volume-Price-Momentum-Volatility) skoru hesapla.
 
-        Canlı sistemle (signals/signal_processor.py:_compute_vpmv_scores) BİREBİR
-        AYNI yöntemi kullanır — rolling normalize için idx'e kadar olan tüm dilim
+        Canlı sistemle (utils/vpmv.py:compute_components) BİREBİR AYNI yöntemi
+        kullanır — rolling normalize için idx'e kadar olan tüm dilim
         (df.iloc[:idx+1]) geçilir, tek satırdan basit bir yaklaşıklık yapılmaz."""
         try:
             row = df.iloc[idx]
@@ -587,7 +587,7 @@ class MTFBackfillEngine:
                 "Long" if row.get("close", 0) > row.get("ma200", 0) else "Short"
             )
             df_slice = df.iloc[: idx + 1]
-            vol_score, momentum_score, vlt_score, price_score = _compute_vpmv_scores(
+            vol_score, momentum_score, vlt_score, price_score = compute_components(
                 df_slice, signal_type
             )
             return VPMCalculator.calculate(
