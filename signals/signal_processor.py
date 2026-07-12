@@ -25,6 +25,23 @@ _PT_FLAG_CACHE: dict = {"value": "1", "ts": 0.0}
 _PT_FLAG_TTL = 30.0
 
 
+def trim_to_closed_bar(df: pd.DataFrame, closed_open_time: int) -> pd.DataFrame:
+    """df'yi kapanış event'inin kendi taşıdığı open_time'a göre kırpar — bar
+    kapandıktan birkaç saniye sonra canlı tick akışı bir sonraki barın forming
+    satırını Redis buffer'ına eklemiş olabilir. Bu olmadan farklı modüller
+    df'nin son satırının kapanmış mı forming mi olduğunu birbirinden bağımsız
+    ve çelişkili şekilde tahmin ediyordu (12 Tem 2026 denetimi — sinyal
+    zamanlama/VPMV skor bug'ı). Kırpma sonrası df'nin SON satırı her zaman
+    kesin olarak kapanmış barın kendisidir, çağıran taraflar artık iloc[:-1]
+    ile ayrıca "forming" varsaymamalı."""
+    if df is None or df.empty or "open_time" not in df.columns:
+        return df
+    mask = df["open_time"] <= closed_open_time
+    if not mask.any():
+        return df.iloc[:0]
+    return df.loc[mask]
+
+
 async def _get_pt_flag() -> str:
     now = time.monotonic()
     if now - _PT_FLAG_CACHE["ts"] < _PT_FLAG_TTL:

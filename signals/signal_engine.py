@@ -217,9 +217,11 @@ class SignalEngine:
         """
         fast_col, slow_col = f"rsi_{fast_len}", f"rsi_{slow_len}"
 
-        # Önce temel kolonları doğrula; RSI kolonlarını eksikse burada üreteceğiz
+        # df'nin SON satırı her zaman kesin kapanmış bardır (çağıran taraf
+        # signal_processor.trim_to_closed_bar ile garanti eder) — burada ayrıca
+        # "forming" varsayıp bir satır atmıyoruz (12 Tem 2026 fix).
         base_required = [COL_CLOSE, COL_LOW, COL_HIGH, "open_time"]
-        if not self._validate_dataframe(df, base_required, min_len=3):
+        if not self._validate_dataframe(df, base_required, min_len=2):
             return []
 
         # RSI kolonlarını eksikse hesapla (Wilder/TV uyumlu)
@@ -232,9 +234,9 @@ class SignalEngine:
             self.logger.warning(f"RSI hesaplama hatası: {e}")
             return []
 
-        # Kapanmış barlarda kontrol: [-3] -> önceki kapalı, [-2] -> son kapalı
-        rsi_fast_prev, rsi_slow_prev = df[fast_col].iloc[-3], df[slow_col].iloc[-3]
-        rsi_fast_now, rsi_slow_now = df[fast_col].iloc[-2], df[slow_col].iloc[-2]
+        # [-2] -> önceki kapalı, [-1] -> son kapalı
+        rsi_fast_prev, rsi_slow_prev = df[fast_col].iloc[-2], df[slow_col].iloc[-2]
+        rsi_fast_now, rsi_slow_now = df[fast_col].iloc[-1], df[slow_col].iloc[-1]
 
         # NaN koruması
         if any(pd.isna([rsi_fast_prev, rsi_slow_prev, rsi_fast_now, rsi_slow_now])):
@@ -248,9 +250,9 @@ class SignalEngine:
 
         if signal_type:
             indicator_key = f"RSI_Cross({fast_len},{slow_len})"
-            high = float(df[COL_HIGH].iloc[-2])
-            low  = float(df[COL_LOW].iloc[-2])
-            bar_time = _bar_time_from_open_ms(df["open_time"].iloc[-2])
+            high = float(df[COL_HIGH].iloc[-1])
+            low  = float(df[COL_LOW].iloc[-1])
+            bar_time = _bar_time_from_open_ms(df["open_time"].iloc[-1])
             if symbol and interval and not await self._filter.check(
                 signal_type, high, low, symbol, interval, indicator_key, bar_time
             ):
@@ -259,7 +261,7 @@ class SignalEngine:
                 )
                 return []
             return self._create_signal_output(
-                df=df.iloc[:-1],
+                df=df,
                 signal_type=signal_type,
                 indicators=indicator_key,
                 strength=1,
@@ -275,15 +277,17 @@ class SignalEngine:
         - Sadece close fiyatlarının kesişimine bakar
         - Önceki close bir tarafta, şimdiki close diğer tarafta
         """
+        # df'nin SON satırı her zaman kesin kapanmış bardır (çağıran taraf
+        # signal_processor.trim_to_closed_bar ile garanti eder) — burada ayrıca
+        # "forming" varsayıp bir satır atmıyoruz (12 Tem 2026 fix).
         required_cols = [COL_CLOSE, COL_MA200, "open_time"]
-        if len(df) < 3:
+        if len(df) < 2:
             return []
-        df_closed = df.iloc[:-1]
-        if not self._validate_dataframe(df_closed, required_cols):
+        if not self._validate_dataframe(df, required_cols):
             return []
 
-        prev = df_closed.iloc[-2]
-        curr = df_closed.iloc[-1]
+        prev = df.iloc[-2]
+        curr = df.iloc[-1]
 
         signal_type = ""
         if prev[COL_CLOSE] < prev[COL_MA200] and curr[COL_CLOSE] > curr[COL_MA200]:
@@ -304,7 +308,7 @@ class SignalEngine:
                 )
                 return []
             return self._create_signal_output(
-                df=df_closed, signal_type=signal_type, indicators=indicator_key, strength=1
+                df=df, signal_type=signal_type, indicators=indicator_key, strength=1
             )
         return []
 
@@ -318,20 +322,21 @@ class SignalEngine:
         - SignalFilter'dan geçmeli (high/low filtresi)
         - Son geçerli ST sinyaliyle aynı yönde ise üretilmez (trend devam)
         """
+        # df'nin SON satırı her zaman kesin kapanmış bardır (çağıran taraf
+        # signal_processor.trim_to_closed_bar ile garanti eder) — burada ayrıca
+        # "forming" varsayıp bir satır atmıyoruz (12 Tem 2026 fix).
         required = ["open_time", COL_HIGH, COL_LOW, COL_CLOSE]
-        if not self._validate_dataframe(df, required, min_len=3):
+        if not self._validate_dataframe(df, required, min_len=2):
             return []
 
-        df_closed = df.iloc[:-1]
-
         # st_direction sütunu yoksa hesapla
-        if "st_direction" not in df_closed.columns or df_closed["st_direction"].isna().all():
-            _, direction, _, _ = calculate_supertrend(df_closed)
-            df_closed = df_closed.copy()
-            df_closed["st_direction"] = direction
+        if "st_direction" not in df.columns or df["st_direction"].isna().all():
+            _, direction, _, _ = calculate_supertrend(df)
+            df = df.copy()
+            df["st_direction"] = direction
 
-        dir_now  = df_closed["st_direction"].iloc[-1]
-        dir_prev = df_closed["st_direction"].iloc[-2]
+        dir_now  = df["st_direction"].iloc[-1]
+        dir_prev = df["st_direction"].iloc[-2]
 
         if pd.isna(dir_now) or pd.isna(dir_prev):
             return []
@@ -344,9 +349,9 @@ class SignalEngine:
 
         signal_type   = "Long" if long_signal else "Short"
         indicator_key = "Supertrend(10,3.0)"
-        high = float(df_closed[COL_HIGH].iloc[-1])
-        low  = float(df_closed[COL_LOW].iloc[-1])
-        bar_time = _bar_time_from_open_ms(df_closed["open_time"].iloc[-1])
+        high = float(df[COL_HIGH].iloc[-1])
+        low  = float(df[COL_LOW].iloc[-1])
+        bar_time = _bar_time_from_open_ms(df["open_time"].iloc[-1])
 
         if symbol and interval:
             if not await self._filter.check(signal_type, high, low, symbol, interval, indicator_key, bar_time):
@@ -364,7 +369,7 @@ class SignalEngine:
             self._st_last_valid[key] = signal_type
 
         return self._create_signal_output(
-            df=df_closed,
+            df=df,
             signal_type=signal_type,
             indicators=indicator_key,
             strength=1,
@@ -374,15 +379,17 @@ class SignalEngine:
         self, df: pd.DataFrame, symbol: str = "", interval: str = ""
     ) -> List[Dict[str, Any]]:
         """Heiken Ashi crossover sinyali — kapanmış son barda flip tespiti."""
+        # df'nin SON satırı her zaman kesin kapanmış bardır (çağıran taraf
+        # signal_processor.trim_to_closed_bar ile garanti eder) — burada ayrıca
+        # "forming" varsayıp bir satır atmıyoruz (12 Tem 2026 fix).
         required = ["open_time", "ha_open", "ha_close", COL_HIGH, COL_LOW]
-        if len(df) < 3:
+        if len(df) < 2:
             return []
-        df_closed = df.iloc[:-1]
-        if not self._validate_dataframe(df_closed, required, min_len=2):
+        if not self._validate_dataframe(df, required, min_len=2):
             return []
 
-        curr = df_closed.iloc[-1]
-        prev = df_closed.iloc[-2]
+        curr = df.iloc[-1]
+        prev = df.iloc[-2]
 
         curr_bull = float(curr["ha_close"]) > float(curr["ha_open"])
         prev_bull = float(prev["ha_close"]) > float(prev["ha_open"])
@@ -410,7 +417,7 @@ class SignalEngine:
             return []
 
         return self._create_signal_output(
-            df=df_closed, signal_type=signal_type, indicators=indicator_key, strength=1
+            df=df, signal_type=signal_type, indicators=indicator_key, strength=1
         )
 
     async def calculate_all_signals(

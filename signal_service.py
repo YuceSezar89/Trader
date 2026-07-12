@@ -21,7 +21,7 @@ from utils.redis_client import RedisClient, SAFE_EXTERNAL_TIMEOUT
 from utils.heartbeat import beat, watchdog_loop, record_activity, throughput_watchdog_loop
 from utils.telegram_notify import send_telegram_message
 from indicators.financial_metrics import calculate_metrics
-from signals.signal_processor import process_and_enrich_signals
+from signals.signal_processor import process_and_enrich_signals, trim_to_closed_bar
 from signals.risk_manager import risk_manager
 from signals.paper_trade_manager import (
     paper_trade_manager, ha_cross_manager, rsi_15m_manager, manual_manager,
@@ -157,6 +157,17 @@ async def _process_event(fields: dict) -> None:
     ref_df = await RedisClient.get_mtf_klines(Config.MARKET_REFERENCE_SYMBOL, interval)
     if df is None or ref_df is None or df.empty or ref_df.empty:
         logger.debug("[%s] %s buffer eksik, atlanıyor", symbol, interval)
+        await _incr_metric("metrics:sigsvc:buffer_eksik")
+        return
+
+    try:
+        closed_open_time = int(open_time)
+        df = trim_to_closed_bar(df, closed_open_time)
+        ref_df = trim_to_closed_bar(ref_df, closed_open_time)
+    except (TypeError, ValueError):
+        logger.warning("[%s] %s geçersiz open_time=%r, kırpma atlanıyor", symbol, interval, open_time)
+    if df.empty or ref_df.empty:
+        logger.debug("[%s] %s kırpma sonrası buffer eksik, atlanıyor", symbol, interval)
         await _incr_metric("metrics:sigsvc:buffer_eksik")
         return
 
