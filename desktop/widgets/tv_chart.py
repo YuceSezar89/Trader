@@ -819,7 +819,7 @@ class TVChart(QWebEngineView):
             f"{'true' if self._phl_enabled else 'false'})"
         )
 
-        pivot_data = self._prepare_fib_pivots(df)
+        pivot_data = self._prepare_fib_pivots(df, self._tf)
         self.page().runJavaScript(
             f"loadFibPivots("
             f"{json.dumps(json.dumps(pivot_data))},"
@@ -965,24 +965,37 @@ class TVChart(QWebEngineView):
         except Exception:  # pylint: disable=broad-exception-caught
             return {"high": None, "low": None, "pdo": None, "do_": None, "tf": ""}
 
-    @staticmethod
-    def _prepare_fib_pivots(df: pd.DataFrame) -> dict:
-        """Önceki günün H/L/C'sinden Fibonacci Pivot Point seviyelerini hesaplar
+    _PIVOT_ANCHOR_MAP = {
+        "1m": "D", "5m": "D", "15m": "D",   # TradingView "Auto": intraday, multiplier<=15 → günlük
+        "1h": "W", "4h": "W",               # intraday, multiplier>15 → haftalık
+        "1d": "ME",                          # günlük grafik → aylık
+    }
+
+    @classmethod
+    def _prepare_fib_pivots(cls, df: pd.DataFrame, tf: str = "15m") -> dict:
+        """Önceki periyodun H/L/C'sinden Fibonacci Pivot Point seviyelerini hesaplar
         (indicators/core.py::calculate_fib_pivots — panel ve ileride pattern_lab
-        backtest'lerinin AYNI fonksiyonu kullanması için orada tutuluyor)."""
+        backtest'lerinin AYNI fonksiyonu kullanması için orada tutuluyor).
+
+        Periyot TF'e göre değişir — TradingView'ın resmi "Pivot Points Standard"
+        indikatörünün "Auto" anchor mantığıyla BİREBİR aynı: 1m/5m/15m → günlük,
+        1h/4h → haftalık, 1d → aylık. Önceden HER ZAMAN günlük kullanıyordu (DO/PDO
+        emsaliyle), bu yanlış emsaldi — PDH/PDL'nin TF-bağımlı deseni doğruydu."""
         try:
             from indicators.core import calculate_fib_pivots  # pylint: disable=import-outside-toplevel
+
+            anchor = cls._PIVOT_ANCHOR_MAP.get(tf, "D")
 
             df_idx = df[["high", "low", "close"]].copy()
             df_idx.index = pd.to_datetime(df["timestamp"].values, utc=True)
             for col in df_idx.columns:
                 df_idx[col] = df_idx[col].astype(float)
 
-            daily = df_idx.resample("D").agg({"high": "max", "low": "min", "close": "last"}).dropna()
-            if len(daily) < 2:
+            period = df_idx.resample(anchor).agg({"high": "max", "low": "min", "close": "last"}).dropna()
+            if len(period) < 2:
                 return {}
 
-            prev = daily.iloc[-2]
+            prev = period.iloc[-2]
             levels = calculate_fib_pivots(float(prev["high"]), float(prev["low"]), float(prev["close"]))
             return {k: round(v, 8) for k, v in levels.items()}
         except Exception:  # pylint: disable=broad-exception-caught
