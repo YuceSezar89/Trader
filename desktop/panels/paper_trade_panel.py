@@ -61,7 +61,8 @@ class _FetchWorker(QThread):
                 cur.execute("""
                     SELECT id, symbol, signal_type, interval, strategy, source,
                            entry_price, stop_loss_price, take_profit_price,
-                           trailing_stop_price, opened_at, vpms_score, z_score_entry
+                           trailing_stop_price, opened_at, vpms_score, z_score_entry,
+                           position_usd
                     FROM paper_trades
                     WHERE status = 'open'
                     ORDER BY opened_at DESC
@@ -481,8 +482,9 @@ class PaperTradePanel(QWidget):
             sl    = row["stop_loss_price"]
             tp    = row["take_profit_price"]
 
+            position_usd = float(row.get("position_usd") or 100.0)
             pnl_pct = (live - entry) / entry * 100 if side == "Long" else (entry - live) / entry * 100
-            pnl_usd = pnl_pct / 100 * 100
+            pnl_usd = pnl_pct / 100 * position_usd
 
             if sl and live:
                 sl_dist = (float(sl) - live) / live * 100 if side == "Long" else (live - float(sl)) / live * 100
@@ -574,8 +576,9 @@ class PaperTradePanel(QWidget):
             vpms   = row.get("vpms_score")
 
             live   = self._open_prices.get(sym, entry)
+            position_usd = float(row.get("position_usd") or 100.0)
             pnl_pct = (live - entry) / entry * 100 if side == "Long" else (entry - live) / entry * 100
-            pnl_usd = pnl_pct / 100 * 100
+            pnl_usd = pnl_pct / 100 * position_usd
             total_unrealized += pnl_usd
 
             sl = row["stop_loss_price"]
@@ -796,18 +799,22 @@ class PaperTradePanel(QWidget):
         try:
             conn = psycopg2.connect(**self._db_config)
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute("SELECT signal_type, entry_price FROM paper_trades WHERE id = %s", (trade_id,))
+                cur.execute(
+                    "SELECT signal_type, entry_price, position_usd FROM paper_trades WHERE id = %s",
+                    (trade_id,),
+                )
                 rec = cur.fetchone()
                 if not rec:
                     conn.close()
                     return
                 side  = rec["signal_type"]
                 entry = float(rec["entry_price"])
+                position_usd = float(rec["position_usd"] or 100.0)
                 if price == 0.0:
                     price = entry
                 pnl_pct = (price - entry) / entry * 100 if side == "Long" else (entry - price) / entry * 100
-                fee_usd = 100.0 * 0.0005 * 2
-                pnl_usd = pnl_pct / 100 * 100 - fee_usd
+                fee_usd = position_usd * 0.0005 * 2
+                pnl_usd = pnl_pct / 100 * position_usd - fee_usd
                 cur.execute("""
                     UPDATE paper_trades SET
                         status = 'closed', closed_at = NOW(),
