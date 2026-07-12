@@ -46,6 +46,28 @@ def _diverge_start(z_slice, ts) -> Optional[float]:
     return float(ts[0]) if len(ts) > 0 else None
 
 
+def _truncate_after_gap(df: pd.DataFrame) -> pd.DataFrame:
+    """En büyük iç boşluktan SONRAKİ barları döner. Boşluk öncesi eski fiyat
+    seviyesi EMA/StdDev'e karışırsa z-score haftalarca yanlış/şişkin kalıyor."""
+    col = next((c for c in ("open_time", "timestamp") if c in df.columns), None)
+    if col is None or len(df) < 3:
+        return df
+    raw = df[col].values
+    if pd.api.types.is_integer_dtype(df[col]):
+        ts_sec = raw / 1000.0
+    else:
+        ts_sec = pd.to_datetime(raw).astype("int64").values / 1e9
+    diffs = pd.Series(ts_sec).diff()
+    normal = diffs.median()
+    if not normal or normal <= 0:
+        return df
+    gap_mask = diffs > normal * 3
+    if not gap_mask.any():
+        return df
+    last_gap_idx = gap_mask[gap_mask].index[-1]
+    return df.iloc[last_gap_idx:].reset_index(drop=True)
+
+
 class DivergenceWorker(QThread):  # pylint: disable=too-many-instance-attributes
     """Sinyal coinlerinin Z-score zaman serilerini Redis'ten hesaplayan worker."""
 
@@ -192,7 +214,10 @@ class DivergenceWorker(QThread):  # pylint: disable=too-many-instance-attributes
         for symbol in symbols:
             key = f"live_kline_data:{symbol}:{self._timeframe}".encode()
             df = self._fetch_klines(key)
-            if df is None or len(df) < _MIN_BARS:
+            if df is None:
+                continue
+            df = _truncate_after_gap(df)
+            if len(df) < _MIN_BARS:
                 continue
             z = self._zscore_series(df)
             if z is None:
