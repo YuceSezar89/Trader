@@ -122,7 +122,6 @@ class SignalWorker(QThread):
                     FROM signals
                     WHERE status = 'active'
                     ORDER BY opened_at DESC
-                    LIMIT 500
                 """)
                 rows = [dict(r) for r in cur.fetchall()]
                 cur.execute("SELECT COALESCE(MAX(id), 0) AS max_id FROM signals")
