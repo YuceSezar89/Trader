@@ -677,6 +677,7 @@ def calculate_evol(df: pd.DataFrame, rvol_window: int = 20, rank_window: int = 1
     hacim harcanıp az fiyat hareketi (verimsiz/zorlanıyor).
     """
     try:
+        df = truncate_after_gap(df)
         if len(df) < 30:
             return None
         close = df["close"].astype(float)
@@ -694,4 +695,27 @@ def calculate_evol(df: pd.DataFrame, rvol_window: int = 20, rank_window: int = 1
         return round(rank * 100.0, 2)
     except Exception:  # pylint: disable=broad-exception-caught
         return None
+
+
+def truncate_after_gap(df: pd.DataFrame) -> pd.DataFrame:
+    """En büyük iç boşluktan SONRAKİ barları döner (genel yardımcı). Boşluk
+    öncesi eski fiyat seviyesi EMA/StdDev'e karışırsa z-score haftalarca
+    yanlış/şişkin kalıyor."""
+    col = next((c for c in ("open_time", "timestamp") if c in df.columns), None)
+    if col is None or len(df) < 3:
+        return df
+    raw = df[col].values
+    if pd.api.types.is_integer_dtype(df[col]):
+        ts_sec = raw / 1000.0
+    else:
+        ts_sec = pd.to_datetime(raw).astype("int64").values / 1e9
+    diffs = pd.Series(ts_sec).diff()
+    normal = diffs.median()
+    if not normal or normal <= 0:
+        return df
+    gap_mask = diffs > normal * 3
+    if not gap_mask.any():
+        return df
+    last_gap_idx = gap_mask[gap_mask].index[-1]
+    return df.iloc[last_gap_idx:].reset_index(drop=True)
 

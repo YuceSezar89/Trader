@@ -9,7 +9,7 @@ from signals.signal_engine import signal_engine
 from indicators.financial_metrics import calculate_metrics
 from signals.signal_lifecycle_manager import signal_lifecycle_manager
 from config import Config
-from indicators.core import calculate_rsi, calculate_atr, calculate_adx
+from indicators.core import calculate_rsi, calculate_atr, calculate_adx, truncate_after_gap
 from signals.vpm_calculator import VPMCalculator
 from utils.preprocessing import (
     normalize_volatility_0_100,
@@ -203,6 +203,9 @@ def _compute_devisso_score(df: pd.DataFrame) -> Optional[float]:
     Düşük  → verimsiz (aynı hareket için RSI çok yoruldu, trend zorlanıyor).
     """
     try:
+        if len(df) < 30:
+            return None
+        df = truncate_after_gap(df)
         if len(df) < 30:
             return None
         close = df["close"].astype(float)
@@ -567,15 +570,16 @@ async def process_and_enrich_signals(
                 # CVD slope (normalize, -1..+1)
                 _cvd_slope: Optional[float] = None
                 try:
-                    if "buy_volume" in df.columns and df["buy_volume"].notna().any():
-                        _bv = df["buy_volume"].fillna(
-                            df["volume"] * (df["close"] - df["low"]) / (df["high"] - df["low"]).clip(lower=1e-8)
+                    df_g = truncate_after_gap(df)
+                    if "buy_volume" in df_g.columns and df_g["buy_volume"].notna().any():
+                        _bv = df_g["buy_volume"].fillna(
+                            df_g["volume"] * (df_g["close"] - df_g["low"]) / (df_g["high"] - df_g["low"]).clip(lower=1e-8)
                         )
                     else:
-                        _cvd_hl = (df["high"] - df["low"]).clip(lower=1e-8)
-                        _bv = df["volume"] * (df["close"] - df["low"]) / _cvd_hl
-                    _cvd      = (2 * _bv - df["volume"]).cumsum()
-                    _avg_vol  = df["volume"].rolling(10).mean().clip(lower=1e-8)
+                        _cvd_hl = (df_g["high"] - df_g["low"]).clip(lower=1e-8)
+                        _bv = df_g["volume"] * (df_g["close"] - df_g["low"]) / _cvd_hl
+                    _cvd      = (2 * _bv - df_g["volume"]).cumsum()
+                    _avg_vol  = df_g["volume"].rolling(10).mean().clip(lower=1e-8)
                     _cvd_slope = round(float((_cvd.diff().rolling(10).mean() / _avg_vol).iloc[-1]), 4)
                     logger.info(
                         "CVD | %s | %s | %s | slope=%.4f",
@@ -602,8 +606,9 @@ async def process_and_enrich_signals(
                 # 6. Z-score hesapla (EMA200 ayrışması)
                 z_score_entry = None
                 try:
-                    if len(df) >= 210 and "close" in df.columns:
-                        closes = df["close"].astype(float)
+                    df_g = truncate_after_gap(df)
+                    if len(df_g) >= 210 and "close" in df_g.columns:
+                        closes = df_g["close"].astype(float)
                         ema200 = closes.ewm(span=200, adjust=False).mean()
                         std200 = closes.rolling(200).std()
                         z_score_entry = round(

@@ -15,7 +15,7 @@ from utils.asyncio_ws_client import AsyncioBinanceStreamManager
 
 from binance_client import BinanceClientManager
 from utils.exceptions import BinanceAPIError
-from indicators.core import add_all_indicators
+from indicators.core import add_all_indicators, truncate_after_gap
 from indicators.incremental import IndicatorState, bootstrap_state, update_state, RESYNC_INTERVAL
 from database.crud import (
     bulk_insert_price_data,
@@ -76,6 +76,18 @@ def _merge_tick_row(buf: pd.DataFrame, tick_row: dict, limit: int) -> pd.DataFra
     return pd.concat([base, pd.DataFrame([tick_row])], ignore_index=True).tail(limit)
 
 
+def _has_gap(existing: pd.DataFrame, new_open_time: int) -> bool:
+    """Buffer'ın son barı ile yeni barın open_time'ı arasında tipik bar
+    aralığının 1.5 katından büyük boşluk varsa True döner (zorla resync için)."""
+    if len(existing) < 3 or "open_time" not in existing.columns:
+        return False
+    diffs = existing["open_time"].diff().dropna()
+    typical = diffs.median()
+    if not typical or typical <= 0:
+        return False
+    return (new_open_time - int(existing["open_time"].iloc[-1])) > typical * 1.5
+
+
 def _merge_closed_bar_and_index(
     existing: pd.DataFrame, new_row: dict, limit: int, state: Optional[IndicatorState],
     use_incremental: bool = False,
@@ -105,12 +117,14 @@ def _merge_closed_bar_and_index(
         merged = pd.concat([existing, new_df], ignore_index=True).drop_duplicates(
             subset=["open_time"], keep="last"
         ).tail(limit)
+        merged = truncate_after_gap(merged)
         return add_all_indicators(merged), None
 
     try:
-        if state is None or state.steps_since_bootstrap >= RESYNC_INTERVAL:
+        if state is None or state.steps_since_bootstrap >= RESYNC_INTERVAL or _has_gap(existing, int(new_row["open_time"])):
             # İlk çağrı VEYA periyodik resync — state'in kendi içinde biriken
             # floating-point farkını ground-truth'tan (tam yeniden hesaplama) sıfırlar.
+            existing = truncate_after_gap(existing)
             state = bootstrap_state(existing)
         new_indicators = update_state(state, new_row)
 
@@ -139,6 +153,7 @@ def _merge_closed_bar_and_index(
         merged = pd.concat([existing, new_df], ignore_index=True).drop_duplicates(
             subset=["open_time"], keep="last"
         ).tail(limit)
+        merged = truncate_after_gap(merged)
         return add_all_indicators(merged), None
 
 
