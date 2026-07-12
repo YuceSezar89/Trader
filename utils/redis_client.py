@@ -27,7 +27,7 @@ _ARROW_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="arrow")
 # süre kullanmamalı — aksi halde pool kendi temiz ConnectionError'ını fırlatamadan
 # dıştan iptal edilir, bu da bağlantının yarım kalmış edinme anında sızmasına yol
 # açabilir (7 Tem heartbeat donması kök neden analizinde tespit edilen risk).
-POOL_ACQUIRE_TIMEOUT = 3
+POOL_ACQUIRE_TIMEOUT = 10
 SAFE_EXTERNAL_TIMEOUT = POOL_ACQUIRE_TIMEOUT + 1
 
 

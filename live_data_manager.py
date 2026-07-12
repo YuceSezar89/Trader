@@ -410,7 +410,7 @@ class LiveDataManager:
                 start_time = last_timestamp + 1 if last_timestamp else None
                 if start_time:
                     logger.info(
-                        f"[{symbol}] Son kayıt: {pd.to_datetime(start_time - 1, unit='ms')}. Eksik veriler çekiliyor..."
+                        f"[{symbol}] Son kayıt: {datetime.fromtimestamp((start_time - 1) / 1000)}. Eksik veriler çekiliyor..."
                     )
                 else:
                     logger.info(

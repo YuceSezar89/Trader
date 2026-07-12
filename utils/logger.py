@@ -26,8 +26,14 @@ def _log_filename() -> str:
     olmadığı için) rotasyonlar birbirini bozar: biri dosyayı .log.1'e çevirip
     yeni .log açtığında, diğer process eski (artık unlink edilmiş) dosya
     tanıtıcısına sessizce yazmaya devam eder, o satırlar kaybolur. Her process
-    kendi log dosyasına yazınca bu risk ortadan kalkar."""
-    entry = os.path.splitext(os.path.basename(sys.argv[0]))[0] if sys.argv and sys.argv[0] else ""
+    kendi log dosyasına yazınca bu risk ortadan kalkar. Masaüstü panel
+    (python3 -m desktop.main → argv[0] .../desktop/main.py) de aynı nedenle
+    kendi dosyasına (trader_panel_desktop.log) ayrıldı — 12 Tem gecesi
+    run_services ile çift-rotasyon çakışması 18KB'lık kopuk .log.3 üretmişti."""
+    argv0 = sys.argv[0] if sys.argv and sys.argv[0] else ""
+    if argv0 and os.path.basename(os.path.dirname(os.path.abspath(argv0))) == "desktop":
+        return "trader_panel_desktop.log"
+    entry = os.path.splitext(os.path.basename(argv0))[0] if argv0 else ""
     return _ENTRY_LOG_FILES.get(entry, "trader_panel.log")
 
 
