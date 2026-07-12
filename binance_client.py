@@ -431,30 +431,3 @@ class BinanceClientManager:
         except Exception as e:
             logger.error(f"Unexpected error fetching top volume symbols: {e}")
             raise BinanceAPIError(f"An unexpected error occurred: {e}") from e
-
-
-# For direct testing of this module
-if __name__ == "__main__":
-
-    async def main_test():
-        await BinanceClientManager.initialize()
-        try:
-            # Test fetching top symbols
-            print("--- Testing get_top_volume_symbols_async ---")
-            top_symbols = await BinanceClientManager.get_top_volume_symbols_async(limit=10)
-            print(f"Top 10 symbols: {top_symbols}")
-
-            # Test fetching klines for top symbols
-            if top_symbols:
-                print("\n--- Testing fetch_all_klines ---")
-                async_results = await BinanceClientManager.fetch_all_klines(
-                    top_symbols[:3], "1h", limit=2
-                )
-                for sym, df in async_results:
-                    print(f"{sym} data fetched (async), shape: {df.shape}")
-                    if not df.empty:
-                        print(df.head(2))
-        finally:
-            await BinanceClientManager.close()
-
-    asyncio.run(main_test())

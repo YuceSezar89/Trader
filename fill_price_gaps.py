@@ -256,7 +256,7 @@ async def main(
 
     total_added = 0
     for sym, res in zip(need_fill, results):
-        if isinstance(res, Exception):
+        if isinstance(res, BaseException):
             logger.error("[%s] Hata: %s", sym, res)
         else:
             total_added += res
