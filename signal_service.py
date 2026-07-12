@@ -32,6 +32,7 @@ from signals.do_open_streak import do_open_streak_detector
 from config import Config
 
 _RISK_CHECK_INTERVAL = 5  # saniye — live_data_manager.py::_risk_check_loop ile aynı
+_EVOL_EXIT_CHECK_INTERVAL = 60  # saniye — EVOL anlık fiyat kadar sık değişmiyor
 
 logger = get_logger("SignalService")
 
@@ -229,7 +230,7 @@ async def _check_do_open_streak(symbol: str, df_15m: pd.DataFrame) -> None:
             return
         position_usd = cfg["TARGET_RISK_USD"] * entry["price"] / sl_dist
 
-        opened = await do_open_streak_manager.open_direct(
+        await do_open_streak_manager.open_direct(
             symbol=symbol,
             signal_type="Long",
             interval="15m",
@@ -237,17 +238,9 @@ async def _check_do_open_streak(symbol: str, df_15m: pd.DataFrame) -> None:
             atr=entry["atr"],
             sl_price=entry["sl_price"],
             tp_price=entry["tp_price"],
-            note=f"gauss={entry['gauss_val']:.1f} hareket={entry['long_perc']:+.1f}%",
+            note=f"g={entry['gauss_val']:.0f} h={entry['long_perc']:+.1f}%",
             position_usd=position_usd,
         )
-        if opened:
-            await send_telegram_message(
-                f"📈 DO Streak — {symbol}\n"
-                f"Giriş: {entry['price']:.6g}\n"
-                f"SL: {entry['sl_price']:.6g} (TP yok — 24h timeout)\n"
-                f"Pozisyon: ${position_usd:.0f} · Gauss: {entry['gauss_val']:.1f} · "
-                f"3-mum hareket: {entry['long_perc']:+.1f}%"
-            )
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.error("[DoOpenStreak] %s kanca hatası: %s", symbol, exc, exc_info=True)
 
@@ -279,6 +272,21 @@ async def _risk_check_loop() -> None:
         await do_kirilimi_manager.check_all_prices(prices)
         await do_open_streak_manager.check_all_prices(prices)
         await beat("paper_trading_risk_check")
+
+
+async def _ha_cross_evol_exit_loop() -> None:
+    """HA_Cross Long'a özel EVOL-disiplinli erken çıkış (60s — _risk_check_loop'un
+    5s'lik anlık-fiyat kontrolünden bağımsız, EVOL geçmiş OHLCV+hacim gerektirir,
+    bu kadar sık değişmiyor). [[project_devisso_ersi]] — eşik=25/min_hold=8 bar
+    "güvenilir bölge" olarak doğrulandı, split-period'ın iki yarısında da tutarlı."""
+    while True:
+        await asyncio.sleep(_EVOL_EXIT_CHECK_INTERVAL)
+        try:
+            await ha_cross_manager.check_evol_exits()
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.warning("[EvolExit] ha_cross kontrolü hatası: %s", e)
+            continue
+        await beat("ha_cross_evol_exit")
 
 
 async def _handle_message(client, msg_id: str, fields: dict) -> None:
@@ -403,9 +411,14 @@ async def run_all() -> None:
     risk_check_task = asyncio.create_task(
         _supervised(_risk_check_loop(), "signal_service_risk_check"), name="signal_service_risk_check"
     )
+    evol_exit_task = asyncio.create_task(
+        _supervised(_ha_cross_evol_exit_loop(), "ha_cross_evol_exit"), name="ha_cross_evol_exit"
+    )
     watchdog_task = asyncio.create_task(
         _supervised(
-            watchdog_loop(max_age_seconds={"signal_service": 120, "paper_trading_risk_check": 60}),
+            watchdog_loop(max_age_seconds={
+                "signal_service": 120, "paper_trading_risk_check": 60, "ha_cross_evol_exit": 180,
+            }),
             "signal_service_watchdog",
         ),
         name="signal_service_watchdog",
@@ -423,7 +436,7 @@ async def run_all() -> None:
         ),
         name="signal_service_throughput",
     )
-    tasks = {consume_task, risk_check_task, watchdog_task, queue_lag_task, reclaim_task, throughput_task}
+    tasks = {consume_task, risk_check_task, evol_exit_task, watchdog_task, queue_lag_task, reclaim_task, throughput_task}
 
     def _handler(sig_name: str) -> None:
         logger.info("Sinyal alındı: %s. Signal service kapanıyor...", sig_name)

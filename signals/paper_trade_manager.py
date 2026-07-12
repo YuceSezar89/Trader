@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import Config
 from database.engine import get_session, run_with_db_timeout
 from database.models import PaperTrade, PaperPortfolio, Signal
+from indicators.core import calculate_evol
 from signals.risk_policy import default_policy
 from signals.signal_lifecycle_manager import _calc_pnl
 from signals.trailing import update_trailing
@@ -29,6 +30,13 @@ logger = logging.getLogger(__name__)
 POSITION_USD = 100.0
 FEE_RATE     = 0.0005
 MAX_OPEN     = 10
+
+# EVOL-disiplinli erken çıkış (HA_Cross Long'a özel — [[project_devisso_ersi]],
+# ha_cross_evol_exit_sweep_bt.py'de eşik=25/min_hold=8 "güvenilir bölge" olarak
+# doğrulandı: PF 1.585→1.821, split-period'ın iki yarısında da tutarlı).
+EVOL_EXIT_THRESHOLD  = 25.0
+EVOL_MIN_HOLD_BARS   = 8
+_INTERVAL_MINUTES: dict[str, int] = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440}
 
 _STRATEGY_TRIGGERS: dict[str, Callable[[dict], bool]] = {
     "conf_100": lambda sd: True,
@@ -376,6 +384,82 @@ class PaperTradeManager:
             await run_with_db_timeout(_do_check(), timeout=10.0)
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.error("[PaperTrade][%s] batch check zaman aşımı: %s", self.strategy, exc)
+
+    async def check_evol_exits(
+        self,
+        threshold: float = EVOL_EXIT_THRESHOLD,
+        min_hold_bars: int = EVOL_MIN_HOLD_BARS,
+    ) -> None:
+        """
+        EVOL (hacim verimliliği) eşiğin altına düşerse SL/TP'yi beklemeden erken
+        çıkış — SADECE Long pozisyonlar (short hiç test edilmedi). Pozisyon en az
+        `min_hold_bars` bar (kendi interval'ine göre dakikaya çevrilmiş) açık
+        kalmadan kontrol edilmez — ham/tek-barlık RVOL denemesi bu şart olmadan
+        neredeyse anında tetikleniyordu (artefakt), bkz. [[project_devisso_ersi]].
+
+        check_all_prices'tan bağımsız, daha YAVAŞ bir döngüden (ör. 60s)
+        çağrılmalı — EVOL geçmiş OHLCV+hacim gerektirir, anlık fiyattan ucuz
+        değil, bu kadar sık değişmiyor.
+        """
+
+        async def _do_check() -> None:
+            async with get_session() as session:
+                try:
+                    trades_result = await session.execute(
+                        select(PaperTrade).where(
+                            PaperTrade.strategy == self.strategy,
+                            PaperTrade.status == "open",
+                            PaperTrade.signal_type == "Long",
+                        )
+                    )
+                    trades = trades_result.scalars().all()
+                    if not trades:
+                        return
+
+                    pf_result = await session.execute(
+                        select(PaperPortfolio).where(PaperPortfolio.strategy == self.strategy)
+                    )
+                    portfolio = pf_result.scalars().first()
+
+                    changed = False
+                    closed_symbols: set[str] = set()
+                    for trade in trades:
+                        interval_min = _INTERVAL_MINUTES.get(trade.interval, 15)
+                        age_minutes = (datetime.now() - trade.opened_at).total_seconds() / 60
+                        if age_minutes < min_hold_bars * interval_min:
+                            continue
+
+                        df = await RedisClient.get_mtf_klines(trade.symbol, trade.interval, limit=150)
+                        if df is None or len(df) < 30:
+                            continue
+
+                        evol = calculate_evol(df)
+                        if evol is None or evol >= threshold:
+                            continue
+
+                        price = float(df["close"].iloc[-1])
+                        self._apply_close(trade, price, "evol_decay", portfolio)
+                        closed_symbols.add(trade.symbol)
+                        changed = True
+
+                    if changed:
+                        if portfolio:
+                            session.add(portfolio)
+                        await session.commit()
+
+                    open_syms = {t.symbol for t in trades if t.status == "open"}
+                    for sym in closed_symbols:
+                        if sym not in open_syms:
+                            self._open_symbols.discard(sym)
+
+                except Exception as exc:
+                    await session.rollback()
+                    logger.error("[PaperTrade][%s] EVOL-exit check hatası: %s", self.strategy, exc, exc_info=True)
+
+        try:
+            await run_with_db_timeout(_do_check(), timeout=10.0)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.error("[PaperTrade][%s] EVOL-exit check zaman aşımı: %s", self.strategy, exc)
 
     @staticmethod
     def _trail_distance(trade: PaperTrade) -> float:

@@ -664,3 +664,34 @@ def calculate_fib_pivots(high: float, low: float, close: float) -> dict:
         "s1": pp - 0.382 * rng, "s2": pp - 0.618 * rng, "s3": pp - 1.0 * rng,
     }
 
+
+def calculate_evol(df: pd.DataFrame, rvol_window: int = 20, rank_window: int = 100) -> "float | None":
+    """
+    EVOL (Hacim Verimliliği) — ΔPrice% / RVOL, RVOL = Volume / SMA(Volume, rvol_window).
+    EMA(7) ile yumuşatılıp son `rank_window` barın dağılımına göre percentile-rank'e
+    (0-100) çevrilir. research/pattern_lab/evol_bt.py::_compute_evol ile AYNI
+    formül/disiplin — canlı (paper_trade_manager) ve backtest AYNI hesabı kullanmalı
+    (train/serve skew'den kaçınmak için, bkz. DevisSoTrader dersi).
+
+    Yüksek EVOL → az hacimle çok fiyat hareketi (verimli). Düşük EVOL → çok
+    hacim harcanıp az fiyat hareketi (verimsiz/zorlanıyor).
+    """
+    try:
+        if len(df) < 30:
+            return None
+        close = df["close"].astype(float)
+        volume = df["volume"].astype(float)
+        price_pct = close.pct_change() * 100.0
+        rvol = volume / volume.rolling(rvol_window).mean()
+        raw = price_pct / rvol.replace(0.0, np.nan)
+        smoothed = raw.ewm(span=7, adjust=False).mean()
+        valid = smoothed.replace([np.inf, -np.inf], np.nan).dropna()
+        if len(valid) < 20:
+            return None
+        recent = valid.iloc[-rank_window:]
+        current = float(valid.iloc[-1])
+        rank = float((recent < current).sum()) / len(recent)
+        return round(rank * 100.0, 2)
+    except Exception:  # pylint: disable=broad-exception-caught
+        return None
+
