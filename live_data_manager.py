@@ -315,6 +315,13 @@ class LiveDataManager:
         self._startup_lookback_days: float = 1.0
         self._startup_fill_end_ms: int = 0
         self._gap_start_ms: Dict[str, int] = {}
+        # 12 Tem 2026 gap-mekanizması konsolidasyonu: sembol -> "bu zamana kadar
+        # internal-gap taraması temiz doğrulandı" (epoch ms). _startup_gap_fill
+        # tarama penceresinin başlangıcıyla set eder, _continuous_gap_heal_loop
+        # her turda ilerletir (bkz. o metottaki watermark mantığı).
+        self._gap_watermark_ms: Dict[str, int] = {}
+        self._gap_retry_count: Dict[str, int] = {}  # sembol -> ardışık kapanmamış-gap tur sayısı
+        self._startup_complete_event: asyncio.Event = asyncio.Event()
         self._oi_cache: Dict[str, dict] = {}  # OI in-memory cache
 
         # Multi-WebSocket configuration
@@ -378,11 +385,14 @@ class LiveDataManager:
         # Paralel işleme - maksimum hız için
         # Semaphore ile eşzamanlı istek sayısını kontrol et
         semaphore = asyncio.Semaphore(2)  # Aynı anda max 2 istek (arka plan görevi, rate limit dostu)
+        fill_starts: Dict[str, int] = {}
 
         async def sync_with_semaphore(symbol):
             async with semaphore:
                 try:
-                    await self._sync_symbol_data(symbol)
+                    _, first_fill_ms = await self._sync_symbol_data(symbol)
+                    if first_fill_ms is not None:
+                        fill_starts[symbol] = first_fill_ms
                     logger.info(f"[{symbol}] Tarihsel veri senkronizasyonu tamamlandı.")
                     return True
                 except Exception as e:
@@ -402,8 +412,20 @@ class LiveDataManager:
             f"Tarihsel veri senkronizasyonu tamamlandı. Başarılı: {successful_count}, Başarısız: {failed_count}"
         )
 
-    async def _sync_symbol_data(self, symbol: str):
-        """Helper method to sync historical data for a single symbol."""
+        # Düzeltme #4 (12 Tem 2026): BackgroundStartup'ın kendi replay'i henüz
+        # olmadıysa (event set değilse) burada replay yapma — startup gap fill'in
+        # _replay_filter_state_for_gaps çağrısıyla çakışıp aynı (sembol, TF)
+        # çiftlerini gereksiz iki kere çekmeyi önler.
+        if fill_starts and self._startup_complete_event.is_set():
+            await self._replay_filter_state_for_gaps(fill_starts, source="HistoricalSync")
+
+    async def _sync_symbol_data(self, symbol: str) -> Tuple[bool, Optional[int]]:
+        """Helper method to sync historical data for a single symbol.
+
+        Döndürür: (başarı, ilk-eklenen-barın open_time'ı veya None) — çağıran
+        (sync_historical_data) bunu SignalFilter replay'i için toplar (düzeltme #4,
+        12 Tem 2026)."""
+        first_fill_open_time: Optional[int] = None
         try:
             _INTERVAL_MS_MAP = {
                 "1m": 60_000, "3m": 180_000, "5m": 300_000, "15m": 900_000,
@@ -454,6 +476,9 @@ class LiveDataManager:
                 if df_missing.empty:
                     break
 
+                if first_fill_open_time is None:
+                    first_fill_open_time = int(df_missing["open_time"].iloc[0])
+
                 async with self.db_lock:
                     await bulk_insert_price_data(
                         symbol, df_missing, interval=self.interval
@@ -474,6 +499,8 @@ class LiveDataManager:
                 logger.warning(f"[{symbol}] Ban cooldown aktifken senkronizasyon denendi, sonuç belirsiz (gap-heal telafi edecek).")
             else:
                 logger.info(f"[{symbol}] Yeni veri bulunamadı, sistem güncel.")
+
+            return True, first_fill_open_time
 
         except DatabaseError as e:
             logger.error(f"[{symbol}] Veritabanı hatası oluştu: {e}")
@@ -1343,85 +1370,6 @@ class LiveDataManager:
         logger.info(f"🔄 Tarihsel veri senkronizasyonu başlatılıyor (arka plan, {delay_seconds}s sonra)...")
         await self.sync_historical_data()
 
-    async def _deferred_internal_gap_check(self, delay_seconds: int = 90) -> None:
-        """WebSocket bağlantısından sonra son 1 saatte oluşan iç gap'leri doldurur.
-
-        _deferred_sync_historical sadece kuyruktan doldurur; WebSocket başlamadan önce
-        oluşan iç gap'leri (örn. PostInit penceresi) bu metot yakalar.
-        """
-        await asyncio.sleep(delay_seconds)
-        logger.info("[DeferredGapCheck] Son 1 saatin iç gap analizi başlıyor...")
-        symbols_list = list(self.symbols)
-        _INTERVAL_MS = 60_000
-
-        try:
-            async with get_session() as session:
-                r = await session.execute(
-                    text("""
-                        SELECT symbol, prev_ts, curr_ts
-                        FROM (
-                            SELECT symbol, timestamp AS curr_ts,
-                                   LAG(timestamp) OVER (PARTITION BY symbol ORDER BY timestamp) AS prev_ts
-                            FROM price_data
-                            WHERE symbol = ANY(:syms) AND interval = '1m'
-                              AND timestamp >= NOW() AT TIME ZONE 'Europe/Istanbul' - INTERVAL '1 hour'
-                        ) t
-                        WHERE prev_ts IS NOT NULL
-                          AND EXTRACT(EPOCH FROM (curr_ts - prev_ts)) * 1000 > 90000
-                        ORDER BY symbol, prev_ts
-                    """),
-                    {"syms": symbols_list},
-                )
-                rows = r.fetchall()
-        except Exception as exc:
-            logger.warning("[DeferredGapCheck] Sorgu hatası: %s", exc)
-            return
-
-        gaps_by_sym: dict = {}
-        for sym, prev_dt, curr_dt in rows:
-            g_start = int(prev_dt.timestamp() * 1000)
-            g_end = int(curr_dt.timestamp() * 1000)
-            gaps_by_sym.setdefault(sym, []).append((g_start, g_end))
-
-        if not gaps_by_sym:
-            logger.info("[DeferredGapCheck] Gap yok, sistem temiz.")
-            return
-
-        total_gaps = sum(len(g) for g in gaps_by_sym.values())
-        logger.info("[DeferredGapCheck] %d sembolde %d gap bulundu.", len(gaps_by_sym), total_gaps)
-        total_filled = 0
-
-        for sym, gaps in gaps_by_sym.items():
-            sym_filled = 0
-            for gap_start_ms, gap_end_ms in gaps:
-                fetch_start = gap_start_ms + _INTERVAL_MS
-                while fetch_start < gap_end_ms:
-                    await asyncio.sleep(0.5)
-                    try:
-                        df = await BinanceClientManager.fetch_klines(
-                            symbol=sym, interval="1m", limit=1000, startTime=fetch_start,
-                        )
-                    except Exception:
-                        break
-                    if df is None or df.empty:
-                        break
-                    df = df[df["open_time"] < gap_end_ms]
-                    if df.empty:
-                        break
-                    async with self.db_lock:
-                        await bulk_insert_price_data(sym, df, interval="1m")
-                    sym_filled += len(df)
-                    last_ts = int(df["open_time"].iloc[-1])
-                    if last_ts <= fetch_start or len(df) < 1000:
-                        break
-                    fetch_start = last_ts + _INTERVAL_MS
-
-            if sym_filled > 0 and self.mtf_enabled:
-                await self._refresh_mtf_redis(sym)
-            total_filled += sym_filled
-
-        logger.info("[DeferredGapCheck] Tamamlandı: %d bar eklendi.", total_filled)
-
     async def _startup_gap_fill(self) -> set[str]:
         """Startup gap fill: 1m için dinamik lookback ile gap doldurur.
         Gap doldurulan sembollerin setini döndürür (MTF init optimizasyonu için)."""
@@ -1590,6 +1538,14 @@ class LiveDataManager:
         # (bkz. _background_startup — sinyal filtresi referans noktalarını bu
         # zamandan itibaren geçmiş fiyat hareketiyle senkronize eder).
         self._gap_start_ms = {sym: min(gs for gs, _ in gaps) for sym, gaps in all_gaps.items()}
+
+        # Düzeltme #1 (12 Tem 2026): watermark = taranan pencerenin BAŞLANGICI (fill
+        # bitiş zamanı DEĞİL) — _continuous_gap_heal_loop buradan itibaren ilerleyecek,
+        # fill sırasında oluşabilecek yeni gap'ler de bir sonraki turda yakalanır.
+        scan_start_ms = now_ms - int(lookback_days * 86_400_000)
+        for sym in symbols_list:
+            self._gap_watermark_ms[sym] = scan_start_ms
+
         return set(all_gaps.keys())
 
     async def _replay_filter_state_for_gaps(self, gap_starts: Dict[str, int], source: str = "") -> None:
@@ -1676,20 +1632,52 @@ class LiveDataManager:
         )
 
     async def _continuous_gap_heal_loop(self) -> None:
-        """Her 5 dakikada bir son 1 saatin 1m gap'lerini ve kuyruk gap'lerini tarar ve doldurur."""
+        """Merkezi sürekli gap-doldurma mekanizması (12 Tem 2026 konsolidasyonu:
+        eski _deferred_internal_gap_check/_post_init_catchup/_health_loop'un işlevini
+        de kapsıyor). Sabit 1 saatlik pencere yerine sembol başına watermark
+        (self._gap_watermark_ms — bkz. __init__ ve _startup_gap_fill) kullanılır:
+        "bu sembol için buraya kadar internal-gap taraması temiz doğrulandı" noktası.
+
+        Watermark ilerletme kuralı: bir sembolün o turdaki TÜM gap'leri kapandıysa
+        (veya hiç gap yoksa) watermark tur başlangıcına ilerler. Ban/hata yüzünden
+        kapanmayan gap varsa watermark İLERLEMEZ — ban ne kadar sürerse sürsün, kalkınca
+        watermark'tan itibaren tüm boşluk taranır (eski sabit-1-saat kör noktası kapandı).
+        Art arda _MAX_RETRY_TURNS tur kapanmazsa (örn. delisted sembol), watermark yine de
+        zorla ilerletilir — aksi halde tek sorunlu sembol min-watermark floor'unu sonsuza
+        dek geriye çekip her turun sorgusunu gereksiz genişletir."""
         import time as _t
 
         _INTERVAL_MS = 60_000
         _THRESHOLD_MS = _INTERVAL_MS * 2
         _TAIL_THRESHOLD_MS = _INTERVAL_MS * 3  # son bar 3dk'dan eskiyse tail gap
+        _MAX_RETRY_TURNS = 12  # ~1 saat (5dk tur) ardışık başarısızlıktan sonra pes et
+
+        # Startup'ta oluşan gap'ler _startup_gap_fill/_background_startup tarafından
+        # zaten ele alınıyor — ilk tur, startup bitiş sinyalini bekleyip hemen başlar
+        # (eski sabit 300s bekleme, startup-bitişi ile ilk tur arasında kör pencere
+        # bırakıyordu; bu pencereyi eskiden _post_init_catchup kapatıyordu).
+        try:
+            await asyncio.wait_for(self._startup_complete_event.wait(), timeout=600)
+        except asyncio.TimeoutError:
+            logger.warning("[GapHeal] Startup tamamlanma sinyali 600s'de gelmedi, yine de başlanıyor.")
 
         while True:
-            await asyncio.sleep(300)
+            scan_start_ms = int(_t.time() * 1000)
             try:
-                now_ms = int(_t.time() * 1000)
                 symbols_list = list(self.symbols)
 
-                # İç gap tespiti (LAG)
+                def _watermark_for(sym: str) -> int:
+                    if sym in self._gap_watermark_ms:
+                        return self._gap_watermark_ms[sym]
+                    if self._startup_fill_end_ms:
+                        return scan_start_ms - int(self._startup_lookback_days * 86_400_000)
+                    return scan_start_ms - 3_600_000  # mevcut eski davranış: ~1 saat
+
+                floor_ms = min((_watermark_for(s) for s in symbols_list), default=scan_start_ms - 3_600_000)
+                floor_dt = datetime.fromtimestamp(floor_ms / 1000)
+
+                # İç gap tespiti (LAG) — tek batched sorgu (en eski watermark'tan itibaren),
+                # per-symbol watermark filtresi Python tarafında uygulanır.
                 async def _fetch_lag_gaps():
                     async with get_session() as session:
                         result = await session.execute(
@@ -1701,13 +1689,13 @@ class LiveDataManager:
                                            LAG(timestamp) OVER (PARTITION BY symbol ORDER BY timestamp) AS prev_ts
                                     FROM price_data
                                     WHERE symbol = ANY(:syms) AND interval = '1m'
-                                      AND timestamp >= NOW() AT TIME ZONE 'Europe/Istanbul' - INTERVAL '1 hour'
+                                      AND timestamp >= :floor
                                 ) t
                                 WHERE prev_ts IS NOT NULL
                                   AND EXTRACT(EPOCH FROM (curr_ts - prev_ts)) * 1000 > :thresh
                                 ORDER BY symbol, prev_ts
                             """),
-                            {"syms": symbols_list, "thresh": _THRESHOLD_MS},
+                            {"syms": symbols_list, "floor": floor_dt, "thresh": _THRESHOLD_MS},
                         )
                         return result.fetchall()
 
@@ -1717,6 +1705,8 @@ class LiveDataManager:
                 for sym, prev_dt, curr_dt in rows:
                     g_start = int(prev_dt.timestamp() * 1000)
                     g_end = int(curr_dt.timestamp() * 1000)
+                    if g_start < _watermark_for(sym):
+                        continue  # bu sembol için zaten temiz doğrulanmış aralık
                     gaps.setdefault(sym, []).append((g_start, g_end))
 
                 # Kuyruk gap tespiti: son bar'dan şu ana kadar boşluk var mı?
@@ -1739,53 +1729,97 @@ class LiveDataManager:
                     if last_dt is None:
                         continue
                     tail_ms = int(last_dt.timestamp() * 1000)
-                    if (now_ms - tail_ms) > _TAIL_THRESHOLD_MS:
+                    if (scan_start_ms - tail_ms) > _TAIL_THRESHOLD_MS:
                         existing = gaps.get(sym, [])
                         if not any(gs >= tail_ms for gs, _ in existing):
-                            gaps.setdefault(sym, []).append((tail_ms, now_ms - _INTERVAL_MS))
+                            gaps.setdefault(sym, []).append((tail_ms, scan_start_ms - _INTERVAL_MS))
 
-                if not gaps:
-                    logger.debug("[GapHeal] Gap yok.")
-                    continue
+                async def _fill_gap(sym: str, gap_start_ms: int, gap_end_ms: int) -> tuple[int, bool]:
+                    """Gap'i doldurur, (eklenen bar sayısı, tamamen kapandı mı) döner.
+                    "Kapandı" = son eklenen bar gap_end_ms'e ulaştı — ban/boş-yanıt/
+                    hata yüzünden erken kesilirse False (watermark ilerlemez)."""
+                    filled = 0
+                    fetch_start = gap_start_ms + _INTERVAL_MS
+                    closed = fetch_start >= gap_end_ms
+                    while fetch_start < gap_end_ms:
+                        await asyncio.sleep(0.3)
+                        try:
+                            df = await BinanceClientManager.fetch_klines(
+                                symbol=sym, interval="1m", limit=1000, startTime=fetch_start,
+                            )
+                        except Exception:
+                            closed = False
+                            break
+                        if df is None or df.empty:
+                            closed = False
+                            break
+                        df = df[df["open_time"] < gap_end_ms]
+                        if df.empty:
+                            closed = False
+                            break
+                        async with self.db_lock:
+                            await bulk_insert_price_data(sym, df, interval="1m")
+                        filled += len(df)
+                        last_ts = int(df["open_time"].iloc[-1])
+                        closed = (last_ts + _INTERVAL_MS) >= gap_end_ms
+                        if last_ts <= fetch_start or len(df) < 1000:
+                            break
+                        fetch_start = last_ts + _INTERVAL_MS
+                    return filled, closed
 
-                logger.warning("[GapHeal] %d sembolde gap bulundu, dolduruluyor...", len(gaps))
+                if gaps:
+                    logger.warning("[GapHeal] %d sembolde gap bulundu, dolduruluyor...", len(gaps))
+
                 total_filled = 0
+                gap_starts: Dict[str, int] = {}
+                mtf_refresh_syms: list[str] = []
 
                 for sym, sym_gaps in gaps.items():
+                    sym_filled = 0
+                    sym_all_closed = True
                     for gap_start_ms, gap_end_ms in sym_gaps:
-                        fetch_start = gap_start_ms + _INTERVAL_MS
-                        while fetch_start < gap_end_ms:
-                            await asyncio.sleep(0.3)
-                            try:
-                                df = await BinanceClientManager.fetch_klines(
-                                    symbol=sym, interval="1m", limit=1000, startTime=fetch_start,
-                                )
-                            except Exception:
-                                break
-                            if df is None or df.empty:
-                                break
-                            df = df[df["open_time"] < gap_end_ms]
-                            if df.empty:
-                                break
-                            async with self.db_lock:
-                                await bulk_insert_price_data(sym, df, interval="1m")
-                            total_filled += len(df)
-                            last_ts = int(df["open_time"].iloc[-1])
-                            if last_ts <= fetch_start or len(df) < 1000:
-                                break
-                            fetch_start = last_ts + _INTERVAL_MS
+                        filled, closed = await _fill_gap(sym, gap_start_ms, gap_end_ms)
+                        sym_filled += filled
+                        sym_all_closed = sym_all_closed and closed
+                    total_filled += sym_filled
+                    if sym_filled:
+                        gap_starts[sym] = min(gs for gs, _ in sym_gaps)
+                        mtf_refresh_syms.append(sym)
+
+                    if sym_all_closed:
+                        self._gap_watermark_ms[sym] = scan_start_ms
+                        self._gap_retry_count[sym] = 0
+                    else:
+                        retry = self._gap_retry_count.get(sym, 0) + 1
+                        self._gap_retry_count[sym] = retry
+                        if retry >= _MAX_RETRY_TURNS:
+                            logger.warning(
+                                "[GapHeal] %s %d turdur gap kapanmadı, watermark zorla ilerletiliyor (pes edildi).",
+                                sym, retry,
+                            )
+                            self._gap_watermark_ms[sym] = scan_start_ms
+                            self._gap_retry_count[sym] = 0
+
+                # Gap'i olmayan (bu turda temiz taranmış) semboller için watermark ilerler.
+                for sym in symbols_list:
+                    if sym not in gaps:
+                        self._gap_watermark_ms[sym] = scan_start_ms
+                        self._gap_retry_count[sym] = 0
 
                 if total_filled:
                     logger.info("[GapHeal] %d bar dolduruldu.", total_filled)
                     if self.mtf_enabled:
-                        for sym in gaps:
+                        for sym in mtf_refresh_syms:
                             await self._refresh_mtf_redis(sym)
-                        logger.info("[GapHeal] %d sembol MTF Redis yenilendi.", len(gaps))
-                    gap_starts = {sym: min(gs for gs, _ in sym_gaps) for sym, sym_gaps in gaps.items()}
+                        logger.info("[GapHeal] %d sembol MTF Redis yenilendi.", len(mtf_refresh_syms))
                     await self._replay_filter_state_for_gaps(gap_starts, source="GapHeal")
+                else:
+                    logger.debug("[GapHeal] Gap yok.")
 
             except Exception as exc:
                 logger.error("[GapHeal] Hata: %s", exc)
+
+            await asyncio.sleep(300)
 
     async def _refresh_mtf_redis(self, symbol: str) -> None:
         """Tüm TF'leri Binance REST / CA'dan yenileyerek Redis ve buffer'ı günceller."""
@@ -1817,107 +1851,6 @@ class LiveDataManager:
                 await RedisClient.set_mtf_klines(symbol, ca_tf, self.mtf_buffers[symbol][ca_tf])
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.debug("[MTF-Refresh] %s hata: %s", symbol, exc)
-
-    async def _post_init_catchup(self) -> None:
-        """MTF init sonrası startup penceresindeki 1m gap'leri doldurur ve MTF Redis'i günceller."""
-        if not self._startup_fill_end_ms:
-            return
-
-        now_ms = int(time.time() * 1000)
-        window_ms = now_ms - self._startup_fill_end_ms
-        if window_ms < 60_000:
-            return
-
-        logger.info("[PostInit] Startup penceresi gap fill başlıyor (%.1f dk)...", window_ms / 60_000)
-        symbols_list = list(self.symbols)
-
-        try:
-            async with get_session() as session:
-                result = await session.execute(
-                    text("""
-                        SELECT symbol, prev_ts, curr_ts
-                        FROM (
-                            SELECT symbol,
-                                   timestamp AS curr_ts,
-                                   LAG(timestamp) OVER (PARTITION BY symbol ORDER BY timestamp) AS prev_ts
-                            FROM price_data
-                            WHERE symbol = ANY(:syms) AND interval = '1m'
-                              AND timestamp >= NOW() AT TIME ZONE 'Europe/Istanbul' - INTERVAL '2 hours'
-                        ) t
-                        WHERE prev_ts IS NOT NULL
-                          AND EXTRACT(EPOCH FROM (curr_ts - prev_ts)) * 1000 > 90000
-                        ORDER BY symbol, prev_ts
-                    """),
-                    {"syms": symbols_list},
-                )
-                gap_rows = result.fetchall()
-
-                result2 = await session.execute(
-                    text("""
-                        SELECT symbol, MAX(timestamp)
-                        FROM price_data
-                        WHERE symbol = ANY(:syms) AND interval = '1m'
-                        GROUP BY symbol
-                    """),
-                    {"syms": symbols_list},
-                )
-                tail_rows = {row[0]: int(row[1].timestamp() * 1000) for row in result2.fetchall() if row[1]}
-        except Exception as exc:
-            logger.warning("[PostInit] Gap sorgusu başarısız: %s", exc)
-            return
-
-        catchup_gaps: dict[str, list[tuple[int, int]]] = {}
-        for sym, prev_dt, curr_dt in gap_rows:
-            g_start = int(prev_dt.timestamp() * 1000)
-            g_end = int(curr_dt.timestamp() * 1000)
-            catchup_gaps.setdefault(sym, []).append((g_start, g_end))
-
-        for sym, last_ms in tail_rows.items():
-            if (now_ms - last_ms) > 90_000:
-                existing = catchup_gaps.get(sym, [])
-                if not any(gs >= last_ms for gs, _ in existing):
-                    catchup_gaps.setdefault(sym, []).append((last_ms, now_ms))
-
-        if not catchup_gaps:
-            logger.info("[PostInit] Startup penceresi temiz, gap yok.")
-            return
-
-        total_gaps = sum(len(g) for g in catchup_gaps.values())
-        logger.info("[PostInit] %d sembolde %d gap bulundu, dolduruluyor...", len(catchup_gaps), total_gaps)
-
-        _INTERVAL_MS = 60_000
-        total = 0
-
-        for sym, gaps in catchup_gaps.items():
-            sym_filled = 0
-            for gap_start_ms, gap_end_ms in gaps:
-                fetch_start = gap_start_ms + _INTERVAL_MS
-                while fetch_start < gap_end_ms:
-                    await asyncio.sleep(0.5)
-                    try:
-                        df = await BinanceClientManager.fetch_klines(
-                            symbol=sym, interval="1m", limit=1000, startTime=fetch_start,
-                        )
-                    except Exception:
-                        break
-                    if df is None or df.empty:
-                        break
-                    df = df[df["open_time"] < gap_end_ms]
-                    if df.empty:
-                        break
-                    async with self.db_lock:
-                        await bulk_insert_price_data(sym, df, interval="1m")
-                    sym_filled += len(df)
-                    last_ts = int(df["open_time"].iloc[-1])
-                    if last_ts <= fetch_start or len(df) < 1000:
-                        break
-                    fetch_start = last_ts + _INTERVAL_MS
-
-            if sym_filled > 0 and self.mtf_enabled:
-                await self._refresh_mtf_redis(sym)
-            total += sym_filled
-
-        logger.info("[PostInit] Tamamlandı: %d bar eklendi", total)
 
     async def _ticker_refresh_loop(self) -> None:
         """Her 60 saniyede bir Binance 24h ticker REST API'sini çağırır.
@@ -2119,51 +2052,6 @@ class LiveDataManager:
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.debug("[ManualTrade] refresh kontrolü başarısız: %s", exc)
 
-    async def _health_loop(self):
-        """Her 15 dakikada price_data tazeliğini kontrol eder; gap tespit ederse doldurur.
-
-        Sembol başına DB sorgusu (get_last_timestamp) birbirinden bağımsız — semaphore'lu
-        asyncio.gather ile paralel çalıştırılıyor (Binance REST çağrısı değil, saf DB
-        okuma olduğu için rate-limit kısıtı yok; DB pool kapasitesiyle (20+30 overflow,
-        database/engine.py) paylaşılan bir üst sınır yeterli)."""
-        _CHECK_INTERVAL = 15 * 60
-        _MAX_GAP_MS = 10 * 60 * 1000  # 10 dakika (ms cinsinden)
-        _GAP_SCAN_CONCURRENCY = 15
-
-        await asyncio.sleep(60)  # Başlangıç stabilizasyonu için bekle
-        semaphore = asyncio.Semaphore(_GAP_SCAN_CONCURRENCY)
-
-        async def _check_symbol(symbol: str, now_ms: float) -> Optional[str]:
-            async with semaphore:
-                try:
-                    last_ts = await get_last_timestamp(symbol, interval="1m")
-                    if last_ts is None:
-                        return None
-                    if now_ms - last_ts > _MAX_GAP_MS:
-                        gap_min = (now_ms - last_ts) / 60_000
-                        logger.warning(
-                            "[Health] %s — %.1f dakika gap tespit edildi, dolduruluyor",
-                            symbol, gap_min,
-                        )
-                        return symbol
-                except Exception as exc:  # pylint: disable=broad-exception-caught
-                    logger.debug("[Health] %s timestamp kontrolü hatası: %s", symbol, exc)
-                return None
-
-        while True:
-            await asyncio.sleep(_CHECK_INTERVAL)
-            now_ms = time.time() * 1000
-            results = await asyncio.gather(*[_check_symbol(s, now_ms) for s in list(self.symbols)])
-            stale = [s for s in results if s]
-
-            for symbol in stale:
-                asyncio.create_task(self._sync_symbol_data(symbol))
-
-            if stale:
-                logger.info("[Health] %d sembol için gap fill başlatıldı", len(stale))
-            else:
-                logger.debug("[Health] Tüm semboller güncel")
-
     async def _startup_signal_reconciliation(self) -> None:
         """MTF buffer'lar hazır olduktan sonra aktif sinyalleri kontrol eder.
 
@@ -2235,11 +2123,15 @@ class LiveDataManager:
         recon_log.info("Reconciliation tamamlandı: %d sinyal kapatıldı.", closed)
 
     async def _background_startup(self) -> None:
-        """WebSocket başladıktan sonra gap fill → MTF init → post_init sırayla çalışır.
+        """WebSocket başladıktan sonra gap fill → MTF init → sinyal reconciliation sırayla çalışır.
 
         Sıralı çalışma zorunlu: MTF init gap fill bitmeden DB'den okursa kirli buffer yüklenir.
         WS zaten ayakta olduğu için sıralama chart'a herhangi bir gap yaratmaz.
-        """
+
+        Bitişte (başarılı/başarısız fark etmeksizin) _startup_complete_event set edilir —
+        _continuous_gap_heal_loop bu sinyali bekleyip ilk turunu hemen ardından başlatır
+        (eski _post_init_catchup'ın kapsadığı startup-sonrası pencereyi artık bu kapsıyor,
+        bkz. o metodun docstring'i, 12 Tem 2026)."""
         try:
             logger.info("[BackgroundStartup] Başladı (WebSocket zaten aktif).")
             filled_symbols = await self._startup_gap_fill()
@@ -2248,11 +2140,12 @@ class LiveDataManager:
                 await self._replay_filter_state_for_gaps(gap_starts, source="BackgroundStartup")
             if self.mtf_enabled:
                 await self._initialize_mtf_dataframes(reload_symbols=filled_symbols)
-            await self._post_init_catchup()
             await self._startup_signal_reconciliation()
             logger.info("[BackgroundStartup] Tamamlandı.")
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.error("[BackgroundStartup] Hata: %s", exc, exc_info=True)
+        finally:
+            self._startup_complete_event.set()
 
     async def run(self):
         """Ana çalıştırma döngüsü."""
@@ -2263,11 +2156,11 @@ class LiveDataManager:
             asyncio.create_task(self._background_startup())
             # 3. 30s sonra kuyruk gap fill (son timestamp → şu an)
             asyncio.create_task(self._deferred_sync_historical(delay_seconds=30))
-            # 4. 120s sonra iç gap kontrolü (startup penceresi LAG analizi)
-            asyncio.create_task(self._deferred_internal_gap_check(delay_seconds=240))
             # Python 3.10+ weak ref fix: periyodik loop task'larını sakla
+            # (12 Tem 2026 konsolidasyonu: _deferred_internal_gap_check/_post_init_catchup/
+            # _health_loop kaldırıldı — hepsi _continuous_gap_heal_loop'a birleşti, bkz. o
+            # metodun docstring'i)
             self._bg_tasks: list[asyncio.Task] = [
-                asyncio.create_task(self._health_loop()),
                 asyncio.create_task(self._continuous_gap_heal_loop()),
                 asyncio.create_task(self._ticker_refresh_loop()),
                 asyncio.create_task(self._oi_refresh_loop()),
