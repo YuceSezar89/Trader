@@ -166,16 +166,18 @@ async def _process_event(fields: dict) -> None:
     except Exception as e:  # pylint: disable=broad-exception-caught
         logger.debug("oi_data okunamadı [%s]: %s", symbol, e)
 
+    dry_run = Config.SIGNAL_SOURCE != "yeni"
     loop = asyncio.get_running_loop()
     t0 = loop.time()
     await process_and_enrich_signals(
         symbol, df, ref_df, interval,
         oi_data=oi_data_json,
         metrics_calculator=_calculate_metrics_via_pool,
-        dry_run=(Config.SIGNAL_SOURCE != "yeni"),
+        dry_run=dry_run,
     )
     elapsed_ms = (loop.time() - t0) * 1000
-    logger.info("[DRY-RUN] [%s] %s işlendi (%.1fms)", symbol, interval, elapsed_ms)
+    tag = "[DRY-RUN] " if dry_run else ""
+    logger.info("%s[%s] %s işlendi (%.1fms)", tag, symbol, interval, elapsed_ms)
 
     if interval == "5m":
         await _check_do_kirilimi(symbol, df, ref_df)
@@ -451,7 +453,10 @@ async def run_all() -> None:
         except NotImplementedError:
             pass
 
-    logger.info("Signal service başlatıldı (dry-run mod — DB'ye yazmıyor, paper trade tetiklemiyor).")
+    if Config.SIGNAL_SOURCE != "yeni":
+        logger.info("Signal service başlatıldı (dry-run mod — DB'ye yazmıyor, paper trade tetiklemiyor).")
+    else:
+        logger.info("Signal service başlatıldı (canlı mod — DB'ye yazıyor, paper trade tetikliyor).")
     try:
         await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
     except asyncio.CancelledError:
