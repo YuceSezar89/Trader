@@ -19,56 +19,57 @@ import pandas as pd
 
 sys.path.insert(0, ".")
 
+from sqlalchemy import text
+
 from binance_client import BinanceClientManager
+from config import Config
 from database.engine import get_session
-from indicators.core import calculate_atr
+from indicators.core import calculate_atr, calculate_rsi
 from utils.preprocessing import (
     normalize_momentum_0_100,
     normalize_price_0_100,
     normalize_volatility_0_100,
     normalize_volume_0_100,
 )
-from config import Config
-from indicators.core import calculate_rsi
-from signals.vpm_calculator import VPMCalculator
-from sqlalchemy import text
 
-PRE_BARS   = 5   # sinyal öncesi kaç bar
-POST_BARS  = 4   # sonuç için kaç bar sonrası
+PRE_BARS = 5  # sinyal öncesi kaç bar
+POST_BARS = 4  # sonuç için kaç bar sonrası
 
 
 def _compute_vpmv_series(df: pd.DataFrame, signal_type: str) -> pd.Series:
     """Tüm df için bar bazlı VPMV serisi üretir."""
     side = 1.0 if signal_type == "Long" else -1.0
 
-    vol_series  = normalize_volume_0_100(df["volume"])
-    rsi_s       = calculate_rsi(df, period=14)
-    mom_series  = normalize_momentum_0_100(rsi_s.diff().fillna(0.0) * side)
-    atr_s       = calculate_atr(df, period=Config.ATR_PERIOD)
-    vlt_series  = normalize_volatility_0_100(atr_s)
-    prc_pct     = df["close"].pct_change().fillna(0.0) * 100.0 * side
-    prc_series  = normalize_price_0_100(prc_pct)
+    vol_series = normalize_volume_0_100(df["volume"])
+    rsi_s = calculate_rsi(df, period=14)
+    mom_series = normalize_momentum_0_100(rsi_s.diff().fillna(0.0) * side)
+    atr_s = calculate_atr(df, period=Config.ATR_PERIOD)
+    vlt_series = normalize_volatility_0_100(atr_s)
+    prc_pct = df["close"].pct_change().fillna(0.0) * 100.0 * side
+    prc_series = normalize_price_0_100(prc_pct)
 
-    scores = (
-        0.35 * vol_series +
-        0.35 * mom_series +
-        0.20 * vlt_series +
-        0.10 * prc_series
-    ).clip(0, 100)
+    scores = (0.35 * vol_series + 0.35 * mom_series + 0.20 * vlt_series + 0.10 * prc_series).clip(
+        0, 100
+    )
     return scores
 
 
 async def fetch_signals(symbols: list[str]) -> list[dict]:
     since = datetime.now() - timedelta(hours=72)
     async with get_session() as s:
-        rows = await s.execute(text("""
+        rows = await s.execute(
+            text(
+                """
             SELECT symbol, signal_type, interval, opened_at, open_price, vpms_score, indicators
             FROM signals
             WHERE symbol = ANY(:syms)
               AND opened_at >= :since
               AND status IN ('active', 'closed')
             ORDER BY opened_at DESC
-        """), {"syms": symbols, "since": since})
+        """
+            ),
+            {"syms": symbols, "since": since},
+        )
         return [dict(r._mapping) for r in rows.all()]
 
 
@@ -82,12 +83,11 @@ async def analyze(symbols: list[str]) -> None:
 
     results = []
     for sig in signals:
-        symbol     = sig["symbol"]
-        sig_type   = sig["signal_type"]
-        interval   = sig["interval"]
-        opened_at  = sig["opened_at"]
+        symbol = sig["symbol"]
+        sig_type = sig["signal_type"]
+        interval = sig["interval"]
+        opened_at = sig["opened_at"]
         open_price = float(sig["open_price"] or 0)
-        vpmv_db    = sig["vpms_score"]
 
         if interval not in tf_limit:
             continue
@@ -99,7 +99,11 @@ async def analyze(symbols: list[str]) -> None:
             print(f"  {symbol} kline hatası: {e}")
             continue
 
-        df["dt"] = pd.to_datetime(df["open_time"], unit="ms", utc=True).dt.tz_convert(Config.TIMEZONE).dt.tz_localize(None)
+        df["dt"] = (
+            pd.to_datetime(df["open_time"], unit="ms", utc=True)
+            .dt.tz_convert(Config.TIMEZONE)
+            .dt.tz_localize(None)
+        )
 
         # Sinyal barını bul
         if opened_at.tzinfo is not None:
@@ -128,7 +132,7 @@ async def analyze(symbols: list[str]) -> None:
         # Pre-signal: pos-PRE_BARS .. pos-1
         pre_scores = [float(vals[pos - i]) for i in range(PRE_BARS, 0, -1)]
         vpmv_pre_avg = sum(pre_scores) / len(pre_scores)
-        vpmv_slope   = pre_scores[-1] - pre_scores[0]
+        vpmv_slope = pre_scores[-1] - pre_scores[0]
 
         # Post-signal
         post_pos = pos + POST_BARS
@@ -137,26 +141,41 @@ async def analyze(symbols: list[str]) -> None:
         post_delta = None
         if post_pos < len(df):
             post_price = float(df.iloc[post_pos]["close"])
-            outcome_pct = (post_price - open_price) / open_price * 100 if sig_type == "Long" else (open_price - post_price) / open_price * 100
-            post_scores = [float(vals[pos + i]) for i in range(1, POST_BARS + 1) if pos + i < len(vals)]
+            outcome_pct = (
+                (post_price - open_price) / open_price * 100
+                if sig_type == "Long"
+                else (open_price - post_price) / open_price * 100
+            )
+            post_scores = [
+                float(vals[pos + i]) for i in range(1, POST_BARS + 1) if pos + i < len(vals)
+            ]
             if post_scores:
                 post_avg = sum(post_scores) / len(post_scores)
                 post_delta = post_avg - vpmv_signal
 
-        results.append({
-            "Sembol":      symbol,
-            "Tip":         sig_type,
-            "TF":          interval,
-            "Saat":        opened_at.strftime("%H:%M"),
-            "İnd":         (sig["indicators"] or "").replace("RSI_Cross(9,24)", "RSI").replace("Supertrend(10,3.0)", "ST").replace("MA200_Cross", "MA200"),
-            "pre_avg":     round(vpmv_pre_avg, 1),
-            "slope":       round(vpmv_slope, 1),
-            "→signal":     round(vpmv_signal, 1),
-            "post_avg":    round(post_avg, 1) if post_avg is not None else None,
-            "post_delta":  round(post_delta, 1) if post_delta is not None else None,
-            "sonuç%":      round(outcome_pct, 2) if outcome_pct is not None else None,
-            "✓":           ("✅" if outcome_pct and outcome_pct > 0 else "❌") if outcome_pct is not None else "…",
-        })
+        results.append(
+            {
+                "Sembol": symbol,
+                "Tip": sig_type,
+                "TF": interval,
+                "Saat": opened_at.strftime("%H:%M"),
+                "İnd": (sig["indicators"] or "")
+                .replace("RSI_Cross(9,24)", "RSI")
+                .replace("Supertrend(10,3.0)", "ST")
+                .replace("MA200_Cross", "MA200"),
+                "pre_avg": round(vpmv_pre_avg, 1),
+                "slope": round(vpmv_slope, 1),
+                "→signal": round(vpmv_signal, 1),
+                "post_avg": round(post_avg, 1) if post_avg is not None else None,
+                "post_delta": round(post_delta, 1) if post_delta is not None else None,
+                "sonuç%": round(outcome_pct, 2) if outcome_pct is not None else None,
+                "✓": (
+                    ("✅" if outcome_pct and outcome_pct > 0 else "❌")
+                    if outcome_pct is not None
+                    else "…"
+                ),
+            }
+        )
 
     if not results:
         print("Analiz edilecek veri yok.")
@@ -173,7 +192,9 @@ async def analyze(symbols: list[str]) -> None:
     ev = df_out.dropna(subset=["sonuç%"])
     for grp, sub in ev.groupby("Tip"):
         wr = (sub["sonuç%"] > 0).mean() * 100
-        print(f"  {grp}: {len(sub)} sinyal | pre_avg={sub['pre_avg'].mean():.1f} | signal={sub['→signal'].mean():.1f} | post_avg={sub['post_avg'].mean():.1f} | post_delta={sub['post_delta'].mean():+.1f} | win=%{wr:.0f}")
+        print(
+            f"  {grp}: {len(sub)} sinyal | pre_avg={sub['pre_avg'].mean():.1f} | signal={sub['→signal'].mean():.1f} | post_avg={sub['post_avg'].mean():.1f} | post_delta={sub['post_delta'].mean():+.1f} | win=%{wr:.0f}"
+        )
 
 
 async def filter_test(symbols: list[str]) -> None:
@@ -187,10 +208,16 @@ async def filter_test(symbols: list[str]) -> None:
         if interval not in tf_limit:
             continue
         try:
-            df = await BinanceClientManager.fetch_klines(symbol, interval, limit=tf_limit[interval] + POST_BARS + 10)
+            df = await BinanceClientManager.fetch_klines(
+                symbol, interval, limit=tf_limit[interval] + POST_BARS + 10
+            )
         except Exception:
             continue
-        df["dt"] = pd.to_datetime(df["open_time"], unit="ms", utc=True).dt.tz_convert(Config.TIMEZONE).dt.tz_localize(None)
+        df["dt"] = (
+            pd.to_datetime(df["open_time"], unit="ms", utc=True)
+            .dt.tz_convert(Config.TIMEZONE)
+            .dt.tz_localize(None)
+        )
         if opened_at.tzinfo is not None:
             opened_at = opened_at.replace(tzinfo=None)
         interval_map = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240}
@@ -209,11 +236,27 @@ async def filter_test(symbols: list[str]) -> None:
         post_avg = None
         if post_pos < len(df):
             post_price = float(df.iloc[post_pos]["close"])
-            outcome = (post_price - open_price) / open_price * 100 if sig_type == "Long" else (open_price - post_price) / open_price * 100
-            post_scores = [float(vals[pos + i]) for i in range(1, POST_BARS + 1) if pos + i < len(vals)]
+            outcome = (
+                (post_price - open_price) / open_price * 100
+                if sig_type == "Long"
+                else (open_price - post_price) / open_price * 100
+            )
+            post_scores = [
+                float(vals[pos + i]) for i in range(1, POST_BARS + 1) if pos + i < len(vals)
+            ]
             if post_scores:
                 post_avg = sum(post_scores) / len(post_scores)
-        rows.append({"tip": sig_type, "pre_avg": pre_avg, "vpmv_signal": vpmv_signal, "slope": slope, "post_avg": post_avg, "post_delta": (post_avg - vpmv_signal) if post_avg is not None else None, "outcome": outcome})
+        rows.append(
+            {
+                "tip": sig_type,
+                "pre_avg": pre_avg,
+                "vpmv_signal": vpmv_signal,
+                "slope": slope,
+                "post_avg": post_avg,
+                "post_delta": (post_avg - vpmv_signal) if post_avg is not None else None,
+                "outcome": outcome,
+            }
+        )
 
     df_all = pd.DataFrame(rows)
     df_ev = df_all.dropna(subset=["outcome"])
@@ -226,7 +269,7 @@ async def filter_test(symbols: list[str]) -> None:
         print(f"  {label:40s} {len(sub):3d} sinyal | win=%{wr:4.0f} | ort={avg:+.2f}%")
 
     print("\n=== FİLTRESİZ ===")
-    stats(df_ev[df_ev["tip"] == "Long"],  "Long")
+    stats(df_ev[df_ev["tip"] == "Long"], "Long")
     stats(df_ev[df_ev["tip"] == "Short"], "Short")
 
     # Post-signal VPMV delta analizi
@@ -238,35 +281,51 @@ async def filter_test(symbols: list[str]) -> None:
         grp = longs[(longs["vpmv_signal"] >= lo) & (longs["vpmv_signal"] < hi)]
         if len(grp) == 0:
             continue
-        wr  = (grp["outcome"] > 0).mean() * 100
+        wr = (grp["outcome"] > 0).mean() * 100
         avg = grp["outcome"].mean()
         pd_avg = grp["post_delta"].mean()
-        print(f"  signal {lo}-{hi}:  {len(grp):4d} sinyal | win=%{wr:.0f} | ort={avg:+.2f}% | post_delta={pd_avg:+.1f}")
-        rising  = grp[grp["post_delta"] > 0]
+        print(
+            f"  signal {lo}-{hi}:  {len(grp):4d} sinyal | win=%{wr:.0f} | ort={avg:+.2f}% | post_delta={pd_avg:+.1f}"
+        )
+        rising = grp[grp["post_delta"] > 0]
         falling = grp[grp["post_delta"] <= 0]
         if len(rising):
-            print(f"    ↑ post_delta>0 : {len(rising):3d} | win=%{(rising['outcome']>0).mean()*100:.0f} | ort={rising['outcome'].mean():+.2f}%")
+            print(
+                f"    ↑ post_delta>0 : {len(rising):3d} | win=%{(rising['outcome']>0).mean()*100:.0f} | ort={rising['outcome'].mean():+.2f}%"
+            )
         if len(falling):
-            print(f"    ↓ post_delta≤0 : {len(falling):3d} | win=%{(falling['outcome']>0).mean()*100:.0f} | ort={falling['outcome'].mean():+.2f}%")
+            print(
+                f"    ↓ post_delta≤0 : {len(falling):3d} | win=%{(falling['outcome']>0).mean()*100:.0f} | ort={falling['outcome'].mean():+.2f}%"
+            )
 
     print(f"\n=== EŞİK KARŞILAŞTIRMA ===")
     print(f"  {'Filtre':40s} {'Adet':>5}  {'WinRate':>8}  {'Ort%':>7}  {'Elenme%':>8}")
-    total = len(df_ev)
     for tip in ["Long", "Short"]:
         base = df_ev[df_ev["tip"] == tip]
-        for pre_t, sig_t, oran_t in [(0,0,9),(50,45,2.0),(55,50,1.8),(55,55,1.5),(60,55,1.5),(55,55,1.3)]:
+        for pre_t, sig_t, oran_t in [
+            (0, 0, 9),
+            (50, 45, 2.0),
+            (55, 50, 1.8),
+            (55, 55, 1.5),
+            (60, 55, 1.5),
+            (55, 55, 1.3),
+        ]:
             if pre_t == 0:
-                m = pd.Series([True]*len(base), index=base.index)
+                m = pd.Series([True] * len(base), index=base.index)
                 label = f"{tip} [baseline]"
             else:
-                m = (base["pre_avg"]>pre_t) & (base["vpmv_signal"]>sig_t) & (base["vpmv_signal"]/base["pre_avg"]<oran_t)
+                m = (
+                    (base["pre_avg"] > pre_t)
+                    & (base["vpmv_signal"] > sig_t)
+                    & (base["vpmv_signal"] / base["pre_avg"] < oran_t)
+                )
                 label = f"{tip} pre>{pre_t} sig>{sig_t} oran<{oran_t}"
             sub = base[m]
             if len(sub) == 0:
                 continue
             wr = (sub["outcome"] > 0).mean() * 100
             avg = sub["outcome"].mean()
-            elenme = (1 - len(sub)/len(base)) * 100
+            elenme = (1 - len(sub) / len(base)) * 100
             print(f"  {label:40s} {len(sub):5d}  %{wr:6.0f}    {avg:+.2f}%  %{elenme:5.0f} elendi")
         print()
 
@@ -277,7 +336,7 @@ async def timeline(symbols: list[str]) -> None:
     interval_map = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240}
 
     # Başlık
-    pre_cols  = [f"p{i}" for i in range(PRE_BARS, 0, -1)]
+    pre_cols = [f"p{i}" for i in range(PRE_BARS, 0, -1)]
     post_cols = [f"+{i}" for i in range(1, POST_BARS + 1)]
     header = (
         f"{'Sembol':>12} {'Tip':>5} {'TF':>3} {'Saat':>5} {'İnd':>8}  "
@@ -296,10 +355,16 @@ async def timeline(symbols: list[str]) -> None:
         if interval not in tf_limit:
             continue
         try:
-            df = await BinanceClientManager.fetch_klines(symbol, interval, limit=tf_limit[interval] + POST_BARS + 10)
+            df = await BinanceClientManager.fetch_klines(
+                symbol, interval, limit=tf_limit[interval] + POST_BARS + 10
+            )
         except Exception:
             continue
-        df["dt"] = pd.to_datetime(df["open_time"], unit="ms", utc=True).dt.tz_convert(Config.TIMEZONE).dt.tz_localize(None)
+        df["dt"] = (
+            pd.to_datetime(df["open_time"], unit="ms", utc=True)
+            .dt.tz_convert(Config.TIMEZONE)
+            .dt.tz_localize(None)
+        )
         if opened_at.tzinfo is not None:
             opened_at = opened_at.replace(tzinfo=None)
         bar_open = opened_at - timedelta(minutes=interval_map[interval])
@@ -309,21 +374,33 @@ async def timeline(symbols: list[str]) -> None:
             continue
 
         vals = _compute_vpmv_series(df, sig_type).values
-        pre_vals  = [int(vals[pos - i]) for i in range(PRE_BARS, 0, -1)]
-        sig_val   = int(vals[pos])
-        post_vals = [int(vals[pos + i]) if pos + i < len(vals) else None for i in range(1, POST_BARS + 1)]
+        pre_vals = [int(vals[pos - i]) for i in range(PRE_BARS, 0, -1)]
+        sig_val = int(vals[pos])
+        post_vals = [
+            int(vals[pos + i]) if pos + i < len(vals) else None for i in range(1, POST_BARS + 1)
+        ]
 
         outcome = None
         post_pos = pos + POST_BARS
         if post_pos < len(df):
             post_price = float(df.iloc[post_pos]["close"])
-            outcome = (post_price - open_price) / open_price * 100 if sig_type == "Long" else (open_price - post_price) / open_price * 100
+            outcome = (
+                (post_price - open_price) / open_price * 100
+                if sig_type == "Long"
+                else (open_price - post_price) / open_price * 100
+            )
 
-        ind = (sig["indicators"] or "").replace("RSI_Cross(9,24)", "RSI").replace("Supertrend(10,3.0)", "ST").replace("MA200_Cross", "MA200").replace("HA_Cross", "HA")
-        pre_str  = "  ".join(f"{v:>4}" for v in pre_vals)
+        ind = (
+            (sig["indicators"] or "")
+            .replace("RSI_Cross(9,24)", "RSI")
+            .replace("Supertrend(10,3.0)", "ST")
+            .replace("MA200_Cross", "MA200")
+            .replace("HA_Cross", "HA")
+        )
+        pre_str = "  ".join(f"{v:>4}" for v in pre_vals)
         post_str = "  ".join(f"{v:>4}" if v is not None else "   …" for v in post_vals)
-        sonuc    = f"{outcome:+6.1f}%" if outcome is not None else "     …"
-        ok       = ("✅" if outcome and outcome > 0 else "❌") if outcome is not None else "…"
+        sonuc = f"{outcome:+6.1f}%" if outcome is not None else "     …"
+        ok = ("✅" if outcome and outcome > 0 else "❌") if outcome is not None else "…"
 
         print(
             f"{symbol:>12} {sig_type:>5} {interval:>3} {opened_at.strftime('%H:%M'):>5} {ind:>8}  "
@@ -333,11 +410,14 @@ async def timeline(symbols: list[str]) -> None:
 
 if __name__ == "__main__":
     import sys as _sys
+
     args = _sys.argv[1:]
     flags = {a for a in args if a.startswith("--")}
     symbols = [a.upper() for a in args if not a.startswith("--")]
     if not symbols:
-        print("Kullanım: python scripts/analyze_vpmv_presignal.py [--filter|--timeline] BTCUSDT ...")
+        print(
+            "Kullanım: python scripts/analyze_vpmv_presignal.py [--filter|--timeline] BTCUSDT ..."
+        )
         _sys.exit(1)
     if "--filter" in flags:
         asyncio.run(filter_test(symbols))

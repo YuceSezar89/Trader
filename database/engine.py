@@ -1,9 +1,9 @@
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
-from contextlib import asynccontextmanager
-from typing import AsyncGenerator
-from sqlalchemy import text
 import asyncio
 import os
+from contextlib import asynccontextmanager
+
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from .models import Base
 
@@ -32,6 +32,7 @@ async def run_with_db_timeout(coro, timeout: float = DB_CALL_TIMEOUT):
     except asyncio.TimeoutError:
         raise TimeoutError(f"DB çağrısı {timeout}s içinde tamamlanmadı") from None
 
+
 # PostgreSQL connection URL - Direct PostgreSQL connection
 _db_host = os.getenv("DB_HOST", "localhost")
 _db_port = os.getenv("DB_PORT", "6432")
@@ -40,8 +41,7 @@ _db_user = os.getenv("DB_USER", "yusuf")
 _db_pass = os.getenv("DB_PASSWORD", "")
 
 DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    f"postgresql+asyncpg://{_db_user}:{_db_pass}@{_db_host}:{_db_port}/{_db_name}"
+    "DATABASE_URL", f"postgresql+asyncpg://{_db_user}:{_db_pass}@{_db_host}:{_db_port}/{_db_name}"
 )
 
 async_engine = create_async_engine(
@@ -65,50 +65,66 @@ async_engine = create_async_engine(
 
 # Asenkron oturum yöneticisi
 async_session_maker = async_sessionmaker(
-    bind=async_engine,
-    class_=AsyncSession,
-    expire_on_commit=False
+    bind=async_engine, class_=AsyncSession, expire_on_commit=False
 )
+
 
 async def init_db():
     """Veritabanı tablolarını (modelleri) oluşturur ve TimescaleDB hypertables kurar."""
     async with async_engine.begin() as conn:
         # PostgreSQL tabloları oluştur
         await conn.run_sync(Base.metadata.create_all)
-        
+
         # TimescaleDB hypertables oluştur
         try:
             # price_data tablosunu hypertable'a çevir
-            await conn.execute(text("""
+            await conn.execute(
+                text(
+                    """
                 SELECT create_hypertable('price_data', 'timestamp', 
                     chunk_time_interval => INTERVAL '1 day',
                     if_not_exists => TRUE);
-            """))
-            
+            """
+                )
+            )
+
             # signals tablosunu hypertable'a çevir
-            await conn.execute(text("""
+            await conn.execute(
+                text(
+                    """
                 SELECT create_hypertable('signals', 'timestamp', 
                     chunk_time_interval => INTERVAL '1 day',
                     if_not_exists => TRUE);
-            """))
-            
+            """
+                )
+            )
+
             # Performans için indexler oluştur
-            await conn.execute(text("""
+            await conn.execute(
+                text(
+                    """
                 CREATE INDEX IF NOT EXISTS idx_price_data_symbol_interval 
                 ON price_data (symbol, interval, timestamp DESC);
-            """))
-            
-            await conn.execute(text("""
+            """
+                )
+            )
+
+            await conn.execute(
+                text(
+                    """
                 CREATE INDEX IF NOT EXISTS idx_signals_symbol_signal_type 
                 ON signals (symbol, signal_type, timestamp DESC);
-            """))
-            
+            """
+                )
+            )
+
         except Exception as e:
             # Hypertable zaten varsa veya başka bir hata varsa devam et
             print(f"Hypertable creation warning: {e}")
-            pass
+
 
 from contextlib import asynccontextmanager
+
 
 @asynccontextmanager
 async def get_session():

@@ -71,11 +71,11 @@ class DivergenceWorker(QThread):  # pylint: disable=too-many-instance-attributes
         self._wake = threading.Event()
 
         self._symbols: set[str] = set()
-        self._directions: dict[str, str] = {}   # symbol → "long" | "short"
-        self._offsets: dict[str, float] = {}    # symbol → z-score at reset
+        self._directions: dict[str, str] = {}  # symbol → "long" | "short"
+        self._offsets: dict[str, float] = {}  # symbol → z-score at reset
         self._pending_resets: set[str] = set()  # sıradaki hesaplamada offset alınacak
-        self._indicators: dict[str, str] = {}   # symbol → indicators string
-        self._vpmv: dict[str, float] = {}       # symbol → vpmv_pre_avg
+        self._indicators: dict[str, str] = {}  # symbol → indicators string
+        self._vpmv: dict[str, float] = {}  # symbol → vpmv_pre_avg
 
     def set_timeframe(self, tf: str) -> None:
         """Aktif zaman dilimini günceller ve hemen yeniden hesaplar."""
@@ -114,9 +114,7 @@ class DivergenceWorker(QThread):  # pylint: disable=too-many-instance-attributes
             if current_dir and current_dir != new_dir:
                 # Ters sinyal → bir sonraki hesaplamada offset sıfırlanacak
                 self._pending_resets.add(sym)
-                logger.info(
-                    "Divergence reset: %s  %s → %s", sym, current_dir, new_dir
-                )
+                logger.info("Divergence reset: %s  %s → %s", sym, current_dir, new_dir)
             self._directions[sym] = new_dir
         self._wake.set()
 
@@ -166,9 +164,7 @@ class DivergenceWorker(QThread):  # pylint: disable=too-many-instance-attributes
                 if result:
                     self.divergence_updated.emit(result)
                     n = len(result["current"])
-                    self.status_updated.emit(
-                        f"{n} sembol  •  TF: {self._timeframe}"
-                    )
+                    self.status_updated.emit(f"{n} sembol  •  TF: {self._timeframe}")
                 else:
                     self.status_updated.emit(f"Veri yok ({self._timeframe})")
             except Exception as exc:  # pylint: disable=broad-exception-caught
@@ -250,6 +246,7 @@ class DivergenceWorker(QThread):  # pylint: disable=too-many-instance-attributes
         try:
             if raw[:4] == _ARROW_MAGIC:
                 import pyarrow as pa  # pylint: disable=import-outside-toplevel
+
                 reader = pa.ipc.open_stream(raw[4:])
                 return reader.read_pandas()
             return pd.read_json(StringIO(raw.decode()), orient="split")

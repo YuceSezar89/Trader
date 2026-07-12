@@ -3,6 +3,7 @@ Telegram bildirimleri — Bot API'ye doğrudan HTTP isteği (ekstra kütüphane 
 
 Trading akışını asla bloklamaz/çökertmez: hata sessizce loglanır.
 """
+
 import logging
 
 import aiohttp
@@ -23,7 +24,9 @@ async def send_telegram_message(text: str) -> None:
     payload = {"chat_id": Config.TELEGRAM_CHAT_ID, "text": text}
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            async with session.post(
+                url, json=payload, timeout=aiohttp.ClientTimeout(total=10)
+            ) as resp:
                 if resp.status != 200:
                     body = await resp.text()
                     logger.warning("[Telegram] gönderim başarısız (%s): %s", resp.status, body)

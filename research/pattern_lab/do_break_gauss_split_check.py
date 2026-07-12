@@ -5,6 +5,7 @@ yarıda BAĞIMSIZ tekrarlanıyor mu? Gauss tercil eşikleri (q1/q2) TAM SERİDEN
 (45 günün tamamından) hesaplanıp sabit tutuluyor — sadece olaylar sonradan
 zaman damgasına göre iki kovaya ayrılıyor (vol_exh_split_check.py deseni).
 """
+
 import os
 import sys
 
@@ -13,14 +14,24 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from signals.do_kirilimi import _daily_open  # pylint: disable=wrong-import-position
-from research.pattern_lab.vol_exhaustion_bt import _fwd_returns, _stats  # pylint: disable=wrong-import-position
 from research.pattern_lab.do_open_streak_bt import (  # pylint: disable=wrong-import-position
-    DAYS, HORIZON_BARS, MIN_BARS, _fetch, _do_break_gate,
+    DAYS,
+    HORIZON_BARS,
+    MIN_BARS,
+    _do_break_gate,
+    _fetch,
 )
 from research.pattern_lab.do_open_touch_gauss_bt import (  # pylint: disable=wrong-import-position
-    GAUSS_STREAK_THRESHOLD, _gauss_sum, _streak_state, _threshold_events,
+    GAUSS_STREAK_THRESHOLD,
+    _gauss_sum,
+    _streak_state,
+    _threshold_events,
 )
+from research.pattern_lab.vol_exhaustion_bt import (  # pylint: disable=wrong-import-position
+    _fwd_returns,
+    _stats,
+)
+from signals.do_kirilimi import _daily_open  # pylint: disable=wrong-import-position
 
 
 def run():
@@ -54,8 +65,11 @@ def run():
 
         ev3 = _threshold_events(count_long, gate, GAUSS_STREAK_THRESHOLD)
         gauss_perc = _gauss_sum(np.round(long_perc[ev3], 2))
-        valid = [(i, gv) for i, gv in zip(ev3, gauss_perc)
-                 if np.isfinite(gv) and i < len(c) - HORIZON_BARS]
+        valid = [
+            (i, gv)
+            for i, gv in zip(ev3, gauss_perc)
+            if np.isfinite(gv) and i < len(c) - HORIZON_BARS
+        ]
         all_gauss_vals.extend(gv for _, gv in valid)
 
         all_idx = list(range(200, len(c) - HORIZON_BARS, 4))
@@ -69,6 +83,7 @@ def run():
     res = {half: {g: [] for g in groups} for half in halves}
 
     for ts_np, c, all_idx, valid in per_symbol:
+
         def half_of(i):
             return 0 if pd.Timestamp(ts_np[i]) < mid else 1
 
@@ -91,8 +106,10 @@ def run():
         for gname in groups:
             rets = np.concatenate(res[half][gname]) if res[half][gname] else np.array([])
             s = _stats(rets)
-            print(f"{gname:16} {s.get('n',0):>7} {s.get('wr',0):>6} "
-                  f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+            print(
+                f"{gname:16} {s.get('n',0):>7} {s.get('wr',0):>6} "
+                f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+            )
         print()
 
 

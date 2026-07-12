@@ -19,6 +19,7 @@ merge_asof'a opened_at yerine (opened_at - 15dk) veriliyor — bar kapanmadan
 divergence durumu kullanılmıyor. Disiplin: threshold_optimizer'ın 3 kapısı
 (IS/OOS + split-period + placebo) — regime_matrix_bt.py ile aynı desen.
 """
+
 import os
 import sys
 
@@ -30,9 +31,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from config import Config  # pylint: disable=wrong-import-position
 from research.pattern_lab.rsi_cross_volbreakout_regime_bt import (  # pylint: disable=wrong-import-position
-    INDICATOR, _fetch_signals, _merge_regime,
+    INDICATOR,
+    _fetch_signals,
+    _merge_regime,
 )
-from research.pattern_lab.threshold_optimizer import _run_single_var_on_df  # pylint: disable=wrong-import-position
+from research.pattern_lab.threshold_optimizer import (
+    _run_single_var_on_df,  # pylint: disable=wrong-import-position
+)
 
 DAYS = 60
 N = 20
@@ -42,8 +47,11 @@ BAR_DURATION = pd.Timedelta(minutes=15)
 
 def _fetch_15m_with_volume(symbols: list) -> pd.DataFrame:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     q = f"""
         SELECT symbol, time_bucket('15 minutes', timestamp) AS ts,
@@ -92,8 +100,14 @@ def _fetch_cvd_regime(symbols: list) -> pd.DataFrame:
         if len(g) < 50:
             continue
         state = _divergence_state(g)
-        out.append(pd.DataFrame({"symbol": sym, "ts": g["ts"], "cvd_divergence": state.astype(float)}))
-    return pd.concat(out, ignore_index=True) if out else pd.DataFrame(columns=["symbol", "ts", "cvd_divergence"])
+        out.append(
+            pd.DataFrame({"symbol": sym, "ts": g["ts"], "cvd_divergence": state.astype(float)})
+        )
+    return (
+        pd.concat(out, ignore_index=True)
+        if out
+        else pd.DataFrame(columns=["symbol", "ts", "cvd_divergence"])
+    )
 
 
 def run() -> None:
@@ -112,11 +126,13 @@ def run() -> None:
         wanted = 1 if direction == "Long" else -1
         merged["divergence_match"] = (merged["cvd_divergence"] == wanted).astype(float)
 
-        print(f"{INDICATOR} — {direction}: {len(sig_df):,} sinyal, {len(merged):,} CVD durumuyla eşleşti "
-              f"(bullish={len(merged[merged['cvd_divergence']==1])}, "
-              f"bearish={len(merged[merged['cvd_divergence']==-1])}, "
-              f"nötr={len(merged[merged['cvd_divergence']==0])}, "
-              f"yöne-uygun-divergence={int(merged['divergence_match'].sum())})")
+        print(
+            f"{INDICATOR} — {direction}: {len(sig_df):,} sinyal, {len(merged):,} CVD durumuyla eşleşti "
+            f"(bullish={len(merged[merged['cvd_divergence']==1])}, "
+            f"bearish={len(merged[merged['cvd_divergence']==-1])}, "
+            f"nötr={len(merged[merged['cvd_divergence']==0])}, "
+            f"yöne-uygun-divergence={int(merged['divergence_match'].sum())})"
+        )
 
         label = f"{INDICATOR} — {direction} — divergence_match (yöne özel, gerçek taker buy/sell)"
         _run_single_var_on_df(label, merged, "divergence_match")

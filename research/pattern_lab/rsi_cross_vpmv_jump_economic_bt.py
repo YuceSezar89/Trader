@@ -8,6 +8,7 @@ yarıya (out-of-sample) uygulanıyor — look-ahead'siz, "geçmiş veriyle kalib
 edip bugünden itibaren canlıya alsaydık" senaryosu. $ dönüşümü de aynı
 konvansiyon: POSITION_USD=100, FEE_RATE=0.0005/taraf (round-trip %0.1).
 """
+
 import os
 import sys
 
@@ -16,13 +17,18 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from utils.vpmv import compute_series  # pylint: disable=wrong-import-position
-from research.pattern_lab.rsi_cross_vpmv_jump_bt import (  # pylint: disable=wrong-import-position
-    MIN_HISTORY, INTERVALS, _fetch_signals, _fetch_symbol_history,
-)
 from research.pattern_lab.do_break_gauss_economic_bt import (  # pylint: disable=wrong-import-position
-    POSITION_USD, ROUND_TRIP_FEE, _dollar_stats,
+    POSITION_USD,
+    ROUND_TRIP_FEE,
+    _dollar_stats,
 )
+from research.pattern_lab.rsi_cross_vpmv_jump_bt import (  # pylint: disable=wrong-import-position
+    INTERVALS,
+    MIN_HISTORY,
+    _fetch_signals,
+    _fetch_symbol_history,
+)
+from utils.vpmv import compute_series  # pylint: disable=wrong-import-position
 
 
 def run():
@@ -51,11 +57,13 @@ def run():
                 post_v = series.iloc[i + 1]
                 if not (np.isfinite(pre_v) and np.isfinite(post_v)):
                     continue
-                all_pairs.append({
-                    "jump": post_v - pre_v,
-                    "realized_pnl": row["realized_pnl"],
-                    "opened_at": row["opened_at"],
-                })
+                all_pairs.append(
+                    {
+                        "jump": post_v - pre_v,
+                        "realized_pnl": row["realized_pnl"],
+                        "opened_at": row["opened_at"],
+                    }
+                )
 
     df = pd.DataFrame(all_pairs)
     print(f"\ntoplam eşleşen sinyal: {len(df):,}\n")
@@ -78,13 +86,17 @@ def run():
         return
 
     oos_threshold = float(is_df["jump"].quantile(0.667))
-    print(f"in-sample olay: {len(is_df)} | SABİT (OOS'a uygulanan) sıçrama eşiği: {oos_threshold:.2f}\n")
+    print(
+        f"in-sample olay: {len(is_df)} | SABİT (OOS'a uygulanan) sıçrama eşiği: {oos_threshold:.2f}\n"
+    )
 
     oos_high = oos_df[oos_df["jump"] >= oos_threshold]
     oos_rest = oos_df[oos_df["jump"] < oos_threshold]
 
-    print(f"── Out-of-sample ekonomik etki (${POSITION_USD:.0f} pozisyon, "
-          f"round-trip fee ${ROUND_TRIP_FEE:.2f}) ──")
+    print(
+        f"── Out-of-sample ekonomik etki (${POSITION_USD:.0f} pozisyon, "
+        f"round-trip fee ${ROUND_TRIP_FEE:.2f}) ──"
+    )
     print(f"{'grup':32} {'n':>6} {'WR%':>6} {'ort $/işlem':>12} {'toplam $':>10} {'$/ay':>10}")
     for name, sub in (
         ("baseline (OOS, tüm RSI_Cross)", oos_df),
@@ -96,8 +108,10 @@ def run():
         if s.get("n", 0) == 0:
             print(f"{name:32} {'0':>6}")
             continue
-        print(f"{name:32} {s['n']:>6} {s['wr']:>6} {s['avg_usd']:>12} "
-              f"{s['total_usd']:>10} {s['usd_per_month']:>10}")
+        print(
+            f"{name:32} {s['n']:>6} {s['wr']:>6} {s['avg_usd']:>12} "
+            f"{s['total_usd']:>10} {s['usd_per_month']:>10}"
+        )
 
 
 if __name__ == "__main__":

@@ -37,13 +37,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from sqlalchemy import text
 
 import config  # noqa: F401  # .env yüklemesini (load_dotenv) tetikler — database.engine'den önce import edilmeli
-from database.engine import get_session
 from database.crud import get_cagg_klines
+from database.engine import get_session
 from indicators.core import add_all_indicators
 from signals.signal_engine import SignalEngine
 
 _TFS = ["5m", "15m"]
-_MAX_BARS = 200_000  # tüm geçmişi kapsayacak kadar büyük (en eski sembol bile bu kadar bar biriktirmedi)
+_MAX_BARS = (
+    200_000  # tüm geçmişi kapsayacak kadar büyük (en eski sembol bile bu kadar bar biriktirmedi)
+)
 
 
 async def _get_all_symbols() -> list[str]:
@@ -60,14 +62,20 @@ async def _get_populated_pairs() -> set[tuple[str, str]]:
     sayılır, tekrar replay edilmez."""
     async with get_session() as session:
         result = await session.execute(
-            text("SELECT DISTINCT symbol, interval FROM signal_filter_events WHERE interval = ANY(:tfs)"),
+            text(
+                "SELECT DISTINCT symbol, interval FROM signal_filter_events WHERE interval = ANY(:tfs)"
+            ),
             {"tfs": _TFS},
         )
         return {(r[0], r[1]) for r in result.fetchall()}
 
 
 async def _replay_one(
-    engine: SignalEngine, symbol: str, tf: str, semaphore: asyncio.Semaphore, loop: asyncio.AbstractEventLoop
+    engine: SignalEngine,
+    symbol: str,
+    tf: str,
+    semaphore: asyncio.Semaphore,
+    loop: asyncio.AbstractEventLoop,
 ) -> int:
     async with semaphore:
         try:
@@ -118,7 +126,9 @@ async def main() -> None:
         )
         total_events = result.scalar()
 
-    print(f"Replay tamamlandı: {total_bars} bar işlendi, signal_filter_events'te toplam {total_events} olay.")
+    print(
+        f"Replay tamamlandı: {total_bars} bar işlendi, signal_filter_events'te toplam {total_events} olay."
+    )
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ sinyal yönüne göre hizalar:
 
 Kullanım: python -m research.pattern_lab.test_vpmv_divergence [n]
 """
+
 import sys
 import warnings
 
@@ -18,7 +19,7 @@ import psycopg2
 warnings.filterwarnings("ignore")
 
 from config import Config
-from indicators.core import calculate_atr, calculate_rsi
+from indicators.core import calculate_rsi
 from utils.preprocessing import normalize_momentum_0_100, normalize_volume_0_100
 
 _CAGG = {"5m": "cagg_5m", "15m": "cagg_15m", "1h": "cagg_1h", "4h": "cagg_4h"}
@@ -71,8 +72,11 @@ def _classify(df: pd.DataFrame, signal_type: str) -> tuple[str, float, float] | 
 
 def main(n: int = 5000, close_reason: str | None = None) -> None:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     cur = conn.cursor()
     reason_filter = "AND close_reason = %s" if close_reason else ""
@@ -104,11 +108,15 @@ def main(n: int = 5000, close_reason: str | None = None) -> None:
             skipped += 1
             continue
         cls, vol_score, momentum_aligned = out
-        results.append({
-            "signal_type": signal_type, "cls": cls,
-            "vol_score": vol_score, "momentum_aligned": momentum_aligned,
-            "pnl": float(pnl),
-        })
+        results.append(
+            {
+                "signal_type": signal_type,
+                "cls": cls,
+                "vol_score": vol_score,
+                "momentum_aligned": momentum_aligned,
+                "pnl": float(pnl),
+            }
+        )
         if i % 500 == 0:
             print(f"  ... {i}/{len(rows)} işlendi")
 

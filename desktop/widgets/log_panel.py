@@ -12,17 +12,32 @@ from desktop.theme import COLORS
 _LOG_PATH = os.path.join("logs", "trader_panel.log")
 
 _INFO_KEYWORDS = (
-    "sinyal", "filtreden", "senkronizasyon", "websocket", "bağlantı",
-    "bağlandı", "koptu", "mum kaydedildi", "tamamlandı", "başlatılıyor",
-    "yüklendi", "mtf batch", "signal", "connected", "disconnected",
-    "initialization", "✅", "❌", "🚀",
+    "sinyal",
+    "filtreden",
+    "senkronizasyon",
+    "websocket",
+    "bağlantı",
+    "bağlandı",
+    "koptu",
+    "mum kaydedildi",
+    "tamamlandı",
+    "başlatılıyor",
+    "yüklendi",
+    "mtf batch",
+    "signal",
+    "connected",
+    "disconnected",
+    "initialization",
+    "✅",
+    "❌",
+    "🚀",
 )
 
 _LEVEL_COLORS = {
-    "ERROR":   "#ef5350",
+    "ERROR": "#ef5350",
     "WARNING": "#ffa726",
-    "INFO":    "#c9d1d9",
-    "DEBUG":   "#6e7681",
+    "INFO": "#c9d1d9",
+    "DEBUG": "#6e7681",
 }
 
 
@@ -46,7 +61,7 @@ class LogPanel(QWidget):
     """Log dosyasını tail ederek logları gösteren panel."""
 
     _MAX_LINES = 400
-    _POLL_MS   = 800
+    _POLL_MS = 800
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)

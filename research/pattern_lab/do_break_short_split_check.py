@@ -5,6 +5,7 @@ işe yaramadığı için sadece streak ekseni test ediliyor) 45 günlük dönemi
 ikiye bölünce HER İKİ yarıda BAĞIMSIZ tekrarlanıyor mu? do_open_streak_split_check.py
 ile aynı desen (Long tarafının split-period testi), Short'a aynalanmış.
 """
+
 import os
 import sys
 
@@ -13,15 +14,23 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from signals.do_kirilimi import _daily_open  # pylint: disable=wrong-import-position
-from research.pattern_lab.vol_exhaustion_bt import _stats  # pylint: disable=wrong-import-position
-from research.pattern_lab.do_open_streak_bt import (  # pylint: disable=wrong-import-position
-    DAYS, HORIZON_BARS, MIN_BARS, STREAK_THRESHOLDS, _fetch,
-)
-from research.pattern_lab.do_open_touch_gauss_bt import _threshold_events  # pylint: disable=wrong-import-position
 from research.pattern_lab.do_break_gauss_short_bt import (  # pylint: disable=wrong-import-position
-    _do_break_gate_down, _fwd_returns_neg, _streak_state_down,
+    _do_break_gate_down,
+    _fwd_returns_neg,
+    _streak_state_down,
 )
+from research.pattern_lab.do_open_streak_bt import (  # pylint: disable=wrong-import-position
+    DAYS,
+    HORIZON_BARS,
+    MIN_BARS,
+    STREAK_THRESHOLDS,
+    _fetch,
+)
+from research.pattern_lab.do_open_touch_gauss_bt import (
+    _threshold_events,  # pylint: disable=wrong-import-position
+)
+from research.pattern_lab.vol_exhaustion_bt import _stats  # pylint: disable=wrong-import-position
+from signals.do_kirilimi import _daily_open  # pylint: disable=wrong-import-position
 
 
 def run():
@@ -78,8 +87,10 @@ def run():
         for gname in groups:
             rets = np.concatenate(res[half][gname]) if res[half][gname] else np.array([])
             s = _stats(rets)
-            print(f"{gname:20} {s.get('n',0):>7} {s.get('wr',0):>6} "
-                  f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+            print(
+                f"{gname:20} {s.get('n',0):>7} {s.get('wr',0):>6} "
+                f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+            )
         print()
 
 

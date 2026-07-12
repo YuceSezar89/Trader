@@ -12,19 +12,13 @@ Modüller:
 - models: Database modelleri
 """
 
+from .analyzer import PerformanceAnalyzer
 from .engine import BacktestEngine
 from .paper_trader import PaperTrader
 from .risk_manager import RiskManager
-from .analyzer import PerformanceAnalyzer
 from .strategy_tester import StrategyTester
 
 __version__ = "1.0.0"
 __author__ = "TRader Panel"
 
-__all__ = [
-    "BacktestEngine",
-    "PaperTrader", 
-    "RiskManager",
-    "PerformanceAnalyzer",
-    "StrategyTester"
-]
+__all__ = ["BacktestEngine", "PaperTrader", "RiskManager", "PerformanceAnalyzer", "StrategyTester"]

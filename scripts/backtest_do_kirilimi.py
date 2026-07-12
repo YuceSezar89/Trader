@@ -17,45 +17,53 @@ Kullanım:
 import argparse
 import os
 import sys
-from datetime import timedelta
 
 import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import psycopg2
 import pandas_ta_classic as pta
+import psycopg2
 
 from config import Config
 
 # ── Strateji parametreleri (Pine default'ları) ───────────────────────────────
-DO_HOUR          = 3          # Daily Open saati (İstanbul)
-SESSION_HOURS    = 24
-HTF_MINUTES      = [90, 180, 360, 540, 720]
-MIN_ONAY         = 3          # HTF HA bullish eşiği
-MARKOV_KEEP      = 0.7
-MARKOV_ADD       = 0.3
-ST_LEN, ST_MULT  = 10, 3.0
+DO_HOUR = 3  # Daily Open saati (İstanbul)
+SESSION_HOURS = 24
+HTF_MINUTES = [90, 180, 360, 540, 720]
+MIN_ONAY = 3  # HTF HA bullish eşiği
+MARKOV_KEEP = 0.7
+MARKOV_ADD = 0.3
+ST_LEN, ST_MULT = 10, 3.0
 ADX_LEN, ADX_MIN = 14, 25.0
-MARU_BODY        = 0.70
-MARU_WICK        = 0.20
-FVG_INVALIDATE   = True
-SL_MULT, TP_MULT = 1.5, 3.0   # canlı risk kuralları
-SIM_MAX_BARS     = 1000
-HORIZON_BARS     = 50
+MARU_BODY = 0.70
+MARU_WICK = 0.20
+FVG_INVALIDATE = True
+SL_MULT, TP_MULT = 1.5, 3.0  # canlı risk kuralları
+SIM_MAX_BARS = 1000
+HORIZON_BARS = 50
 
 FUNNEL_KEYS = [
-    "session_bar", "t_ok_bar", "sdf_long_bar",
-    "c10c20_do_event", "armed_event", "fvg_event",
-    "setup_candle", "after_st_gate", "entry",
+    "session_bar",
+    "t_ok_bar",
+    "sdf_long_bar",
+    "c10c20_do_event",
+    "armed_event",
+    "fvg_event",
+    "setup_candle",
+    "after_st_gate",
+    "entry",
 ]
 
 
 def load_data(tf: str, min_bars: int, max_symbols: int, days: int) -> dict[str, pd.DataFrame]:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     where_days = f"WHERE bucket > NOW() - INTERVAL '{days} days'" if days else ""
     q = f"""
@@ -126,8 +134,10 @@ def crossover(s: pd.Series, level: float) -> np.ndarray:
 
 def prepare(df: pd.DataFrame) -> dict:
     """Vektörize edilebilen her şey: indikatörler, bayraklar, DO/session."""
-    o = df["open"].to_numpy(); h = df["high"].to_numpy()
-    l = df["low"].to_numpy();  c = df["close"].to_numpy()
+    o = df["open"].to_numpy()
+    h = df["high"].to_numpy()
+    l = df["low"].to_numpy()
+    c = df["close"].to_numpy()
     n = len(df)
 
     st = pta.supertrend(df["high"], df["low"], df["close"], length=ST_LEN, multiplier=ST_MULT)
@@ -157,7 +167,8 @@ def prepare(df: pd.DataFrame) -> dict:
 
     # DO koşulları
     do_touch = (l <= dailyOpen) & (h >= dailyOpen)
-    prev_c = np.roll(c, 1); prev_c[0] = np.nan
+    prev_c = np.roll(c, 1)
+    prev_c[0] = np.nan
     do_break = (c > dailyOpen) & (prev_c <= dailyOpen)
     do_lift = (l <= dailyOpen) & (c > dailyOpen)
     do_any = do_touch | do_break | do_lift
@@ -169,17 +180,27 @@ def prepare(df: pd.DataFrame) -> dict:
     up_wick = h - c
     lo_wick = o - l
     with np.errstate(divide="ignore", invalid="ignore"):
-        marubozu = (c > o) & (rng > 0) & (body / rng >= MARU_BODY) & \
-                   (up_wick / rng <= MARU_WICK) & (lo_wick / rng <= MARU_WICK)
-    prev_o = np.roll(o, 1); prev_o[0] = np.nan
-    prev_h = np.roll(h, 1); prev_l = np.roll(l, 1)
+        marubozu = (
+            (c > o)
+            & (rng > 0)
+            & (body / rng >= MARU_BODY)
+            & (up_wick / rng <= MARU_WICK)
+            & (lo_wick / rng <= MARU_WICK)
+        )
+    prev_o = np.roll(o, 1)
+    prev_o[0] = np.nan
+    prev_h = np.roll(h, 1)
+    prev_l = np.roll(l, 1)
     engulf = (c > o) & (prev_c < prev_o) & (l < prev_l) & (h > prev_h)
 
     # 3 yeşil mum FVG
     bull = c > o
-    bull1 = np.roll(bull, 2); bull2 = np.roll(bull, 1)
-    bull1[:2] = False; bull2[:1] = False
-    h2 = np.roll(h, 2); h2[:2] = np.nan
+    bull1 = np.roll(bull, 2)
+    bull2 = np.roll(bull, 1)
+    bull1[:2] = False
+    bull2[:1] = False
+    h2 = np.roll(h, 2)
+    h2[:2] = np.nan
     fvg3 = bull1 & bull2 & bull & (l > h2)
     fvg_above_do = (h2 > dailyOpen) & (l > dailyOpen)
     setup_above_do = (o > dailyOpen) & (c > dailyOpen)
@@ -197,12 +218,26 @@ def prepare(df: pd.DataFrame) -> dict:
     t_ok = t_state > 0.5
 
     return dict(
-        o=o, h=h, l=l, c=c, n=n, ts=ts.to_numpy(),
-        st_dir=st_dir, adx_ok=adx_ok, atr=atr,
-        c10c20_do=c10c20_do, session_ok=session_ok, new_day=new_day,
-        dailyOpen=dailyOpen, marubozu=marubozu, engulf=engulf,
-        fvg3=fvg3, fvg_above_do=fvg_above_do, setup_above_do=setup_above_do,
-        t_ok=t_ok, h2=h2,
+        o=o,
+        h=h,
+        l=l,
+        c=c,
+        n=n,
+        ts=ts.to_numpy(),
+        st_dir=st_dir,
+        adx_ok=adx_ok,
+        atr=atr,
+        c10c20_do=c10c20_do,
+        session_ok=session_ok,
+        new_day=new_day,
+        dailyOpen=dailyOpen,
+        marubozu=marubozu,
+        engulf=engulf,
+        fvg3=fvg3,
+        fvg_above_do=fvg_above_do,
+        setup_above_do=setup_above_do,
+        t_ok=t_ok,
+        h2=h2,
     )
 
 
@@ -265,8 +300,7 @@ def run_state_machine(p: dict, funnel: dict) -> list[dict]:
             fvg_bar = -1
 
         # ── FVG oluşumu ──
-        fvg_core = (do_setup and sess and sdf_long and t_ok
-                    and p["fvg3"][i] and p["fvg_above_do"][i])
+        fvg_core = do_setup and sess and sdf_long and t_ok and p["fvg3"][i] and p["fvg_above_do"][i]
         if fvg_core:
             funnel["fvg_event"] += 1
             fvg_mem = True
@@ -274,16 +308,26 @@ def run_state_machine(p: dict, funnel: dict) -> list[dict]:
             fvg_bar = i
 
         # ── FVG iptali (alt bant kırılırsa; aynı bar hariç) ──
-        if (FVG_INVALIDATE and fvg_mem and not np.isnan(fvg_lower)
-                and i > fvg_bar and p["l"][i] < fvg_lower):
+        if (
+            FVG_INVALIDATE
+            and fvg_mem
+            and not np.isnan(fvg_lower)
+            and i > fvg_bar
+            and p["l"][i] < fvg_lower
+        ):
             fvg_mem = False
             fvg_lower = np.nan
             fvg_bar = -1
 
         # ── Setup mumu (Marubozu/Engulfing, DO üstü) ──
-        setup_candle = (fvg_mem and sess and sdf_long and t_ok
-                        and p["setup_above_do"][i]
-                        and (p["marubozu"][i] or p["engulf"][i]))
+        setup_candle = (
+            fvg_mem
+            and sess
+            and sdf_long
+            and t_ok
+            and p["setup_above_do"][i]
+            and (p["marubozu"][i] or p["engulf"][i])
+        )
         if setup_candle:
             funnel["setup_candle"] += 1
             do_setup = False
@@ -296,11 +340,16 @@ def run_state_machine(p: dict, funnel: dict) -> list[dict]:
                 funnel["after_st_gate"] += 1
                 if p["adx_ok"][i]:
                     funnel["entry"] += 1
-                    entries.append(dict(
-                        bar=i, ts=p["ts"][i], price=p["c"][i],
-                        atr=p["atr"][i], do=p["dailyOpen"][i],
-                        pattern="MARU" if p["marubozu"][i] else "ENGULF",
-                    ))
+                    entries.append(
+                        dict(
+                            bar=i,
+                            ts=p["ts"][i],
+                            price=p["c"][i],
+                            atr=p["atr"][i],
+                            do=p["dailyOpen"][i],
+                            pattern="MARU" if p["marubozu"][i] else "ENGULF",
+                        )
+                    )
     return entries
 
 
@@ -323,10 +372,10 @@ def simulate_trades(p: dict, entries: list[dict]) -> list[dict]:
 
         for j in range(i0 + 1, min(i0 + SIM_MAX_BARS, n)):
             if np.isnan(trail):
-                if l[j] <= sl:                      # SL önce (muhafazakâr)
+                if l[j] <= sl:  # SL önce (muhafazakâr)
                     exit_px, exit_reason, exit_bar = sl, "stop_loss", j
                     break
-                if h[j] >= tp:                      # TP → trailing aktive
+                if h[j] >= tp:  # TP → trailing aktive
                     trail = tp - dist
             else:
                 new_trail = h[j] - dist
@@ -348,16 +397,24 @@ def simulate_trades(p: dict, entries: list[dict]) -> list[dict]:
             hor[f"t{k}_atr"] = (c[jj] - entry) / atr if jj < n else np.nan
         win_end = min(i0 + HORIZON_BARS + 1, n)
         if win_end > i0 + 1:
-            mfe = (h[i0 + 1:win_end].max() - entry) / atr
-            mae = (l[i0 + 1:win_end].min() - entry) / atr
+            mfe = (h[i0 + 1 : win_end].max() - entry) / atr
+            mae = (l[i0 + 1 : win_end].min() - entry) / atr
         else:
             mfe = mae = np.nan
 
-        results.append(dict(
-            ts=e["ts"], price=entry, pattern=e["pattern"],
-            pnl_pct=pnl_pct, exit_reason=exit_reason,
-            bars_held=exit_bar - i0, mfe_atr=mfe, mae_atr=mae, **hor,
-        ))
+        results.append(
+            dict(
+                ts=e["ts"],
+                price=entry,
+                pattern=e["pattern"],
+                pnl_pct=pnl_pct,
+                exit_reason=exit_reason,
+                bars_held=exit_bar - i0,
+                mfe_atr=mfe,
+                mae_atr=mae,
+                **hor,
+            )
+        )
     return results
 
 
@@ -419,15 +476,21 @@ def main() -> None:
     print(f"  Profit factor      : {g / b:.2f}" if b > 0 else "  Profit factor      : ∞")
     print(f"  Ort. MFE / MAE     : {tr['mfe_atr'].mean():+.2f} / {tr['mae_atr'].mean():+.2f} ATR")
     print(f"  Ort. tutma süresi  : {tr['bars_held'].mean():.0f} bar")
-    print(f"  T+3 / T+5 / T+10   : {tr['t3_atr'].mean():+.3f} / {tr['t5_atr'].mean():+.3f} / {tr['t10_atr'].mean():+.3f} ATR")
+    print(
+        f"  T+3 / T+5 / T+10   : {tr['t3_atr'].mean():+.3f} / {tr['t5_atr'].mean():+.3f} / {tr['t10_atr'].mean():+.3f} ATR"
+    )
 
     print("\n── Çıkış nedenleri ──")
     for reason, gdf in tr.groupby("exit_reason"):
-        print(f"  {reason:<14} n={len(gdf):>5}  ort={gdf['pnl_pct'].mean():+.3f}%  wr={(gdf['pnl_pct']>0).mean()*100:.0f}%")
+        print(
+            f"  {reason:<14} n={len(gdf):>5}  ort={gdf['pnl_pct'].mean():+.3f}%  wr={(gdf['pnl_pct']>0).mean()*100:.0f}%"
+        )
 
     print("\n── Pattern bazında ──")
     for pat, gdf in tr.groupby("pattern"):
-        print(f"  {pat:<8} n={len(gdf):>5}  ort={gdf['pnl_pct'].mean():+.3f}%  wr={(gdf['pnl_pct']>0).mean()*100:.0f}%")
+        print(
+            f"  {pat:<8} n={len(gdf):>5}  ort={gdf['pnl_pct'].mean():+.3f}%  wr={(gdf['pnl_pct']>0).mean()*100:.0f}%"
+        )
 
     top = sorted(sym_entry_counts.items(), key=lambda x: -x[1])[:10]
     print("\n── En çok entry üreten semboller ──")

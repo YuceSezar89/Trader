@@ -6,6 +6,7 @@ kontrolü) — artık cevaplanabilir. 4 sinyal ailesi × Long/Short baseline
 PF/WR/n karşılaştırması, kronolojik ilk/ikinci yarı ile sağlamlık notu
 (placebo/OOS değil — bu bir eşik ARAMASI değil, ham baseline karşılaştırması).
 """
+
 import os
 import sys
 
@@ -23,8 +24,11 @@ DIRECTIONS = ["Long", "Short"]
 
 def _fetch(indicator: str, direction: str) -> pd.DataFrame:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     q = """
         SELECT opened_at, realized_pnl FROM signals
@@ -52,11 +56,18 @@ def run() -> None:
             second = df[df["opened_at"] >= mid]["realized_pnl"].to_numpy() / 100
             s1, s2 = _stats(first), _stats(second)
 
-            rows.append({
-                "indikator": ind, "yön": d, "n": s["n"], "WR%": s["wr"],
-                "ort%": s["ort_%"], "PF": s["pf"],
-                "PF_ilk_yari": s1.get("pf", 0), "PF_ikinci_yari": s2.get("pf", 0),
-            })
+            rows.append(
+                {
+                    "indikator": ind,
+                    "yön": d,
+                    "n": s["n"],
+                    "WR%": s["wr"],
+                    "ort%": s["ort_%"],
+                    "PF": s["pf"],
+                    "PF_ilk_yari": s1.get("pf", 0),
+                    "PF_ikinci_yari": s2.get("pf", 0),
+                }
+            )
 
     out = pd.DataFrame(rows).sort_values("PF", ascending=False)
     print(out.to_string(index=False))

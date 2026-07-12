@@ -11,6 +11,7 @@ adayı olabilir, çok farklı davranabilirler.
 Look-ahead yok: V, sadece geçmiş 50 barla (rolling min/max) hesaplanıyor,
 ileri getiri ayrı ölçülüyor. Baseline = ilgili TF'deki TÜM barlar.
 """
+
 import os
 import sys
 
@@ -28,13 +29,22 @@ DAYS = 60
 MIN_BARS = 250
 WARMUP = 200
 V_WINDOW = 50
-HORIZONS = {"15dk": 1, "30dk": 2, "1s": 4, "2s": 8, "4s": 16}  # 15m bar cinsinden — 5m/15m sinyallerin gerçek tutma süresine yakın
+HORIZONS = {
+    "15dk": 1,
+    "30dk": 2,
+    "1s": 4,
+    "2s": 8,
+    "4s": 16,
+}  # 15m bar cinsinden — 5m/15m sinyallerin gerçek tutma süresine yakın
 
 
 def _fetch() -> pd.DataFrame:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     q = f"""
         SELECT symbol, bucket AS ts, open, high, low, close, volume
@@ -51,8 +61,10 @@ def run() -> None:
     df = _fetch()
     t_min, t_max = df["ts"].min(), df["ts"].max()
     mid = t_min + (t_max - t_min) / 2
-    print(f"{df['symbol'].nunique()} sembol, {len(df):,} 15m bar ({DAYS} gün)\n"
-          f"dönem: {t_min} .. {t_max} | orta nokta: {mid}\n")
+    print(
+        f"{df['symbol'].nunique()} sembol, {len(df):,} 15m bar ({DAYS} gün)\n"
+        f"dönem: {t_min} .. {t_max} | orta nokta: {mid}\n"
+    )
 
     labels = ["baseline", "V100_yesil", "V100_kirmizi"]
     halves = ["tum", "ilk_yari", "ikinci_yari"]
@@ -95,7 +107,9 @@ def run() -> None:
                 res[h_name][lbl]["ilk_yari"].append(rets[first_mask])
                 res[h_name][lbl]["ikinci_yari"].append(rets[~first_mask])
 
-    print(f"analiz edilen sembol: {n_syms} | V100-yeşil olay: {n_v100_yesil} | V100-kırmızı olay: {n_v100_kirmizi}\n")
+    print(
+        f"analiz edilen sembol: {n_syms} | V100-yeşil olay: {n_v100_yesil} | V100-kırmızı olay: {n_v100_kirmizi}\n"
+    )
     for h_name in HORIZONS:
         print(f"── ufuk: {h_name} ──")
         print(f"{'grup':14} {'dönem':12} {'n':>8} {'WR%':>6} {'ort%':>8} {'PF':>7}")
@@ -104,8 +118,10 @@ def run() -> None:
                 arrs = res[h_name][lbl][half]
                 rets = np.concatenate(arrs) if arrs else np.array([])
                 s = _stats(rets)
-                print(f"{lbl:14} {half:12} {s.get('n',0):>8} {s.get('wr',0):>6} "
-                      f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+                print(
+                    f"{lbl:14} {half:12} {s.get('n',0):>8} {s.get('wr',0):>6} "
+                    f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+                )
         print()
 
 

@@ -11,6 +11,7 @@ look-ahead yok) + minimum bekleme süresi (min_hold) ekleyerek aynı artefaktı
 eşiğin (varsayılan <35, evol_bt.py'nin "düşük" bandı) altına düşerse ERKEN çık.
 SL/TP mevcut ATR-bazlı politika (risk_policy.py), değişmiyor.
 """
+
 import os
 import sys
 
@@ -22,12 +23,14 @@ from numpy.lib.stride_tricks import sliding_window_view
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from config import Config  # pylint: disable=wrong-import-position
-from research.pattern_lab.ha_cross_pivot_tp_bt import _fetch_signals  # pylint: disable=wrong-import-position
+from research.pattern_lab.ha_cross_pivot_tp_bt import (
+    _fetch_signals,  # pylint: disable=wrong-import-position
+)
 from research.pattern_lab.vol_exhaustion_bt import _stats  # pylint: disable=wrong-import-position
 
 DAYS = 60
-SL_MULT = Config.RISK_SL_MULTIPLIER   # 1.5
-TP_MULT = Config.RISK_TP_MULTIPLIER   # 3.0
+SL_MULT = Config.RISK_SL_MULTIPLIER  # 1.5
+TP_MULT = Config.RISK_TP_MULTIPLIER  # 3.0
 HORIZON_HOURS = 24.0
 HORIZON_BARS = {"5m": int(HORIZON_HOURS * 12), "15m": int(HORIZON_HOURS * 4)}
 RVOL_WINDOW = 20
@@ -47,7 +50,7 @@ def _rolling_percentile_rank(values: np.ndarray, window: int) -> np.ndarray:
     last_vals = windows[:, -1]
     with np.errstate(invalid="ignore"):
         ranks = (windows < last_vals[:, None]).mean(axis=1) * 100
-    out[window - 1:] = ranks
+    out[window - 1 :] = ranks
     return out
 
 
@@ -65,8 +68,11 @@ def _evol_series(df: pd.DataFrame) -> np.ndarray:
 
 def _fetch_execution_bars(symbols: list, interval: str) -> dict:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     q = f"""
         SELECT symbol, bucket AS ts, high, low, close, volume
@@ -95,7 +101,9 @@ def _simulate_baseline(high, low, close, entry_idx, entry_price, sl, tp, horizon
     return close[last_i] / entry_price - 1
 
 
-def _simulate_evol_exit(high, low, close, evol, entry_idx, entry_price, sl, tp, horizon, threshold, min_hold):
+def _simulate_evol_exit(
+    high, low, close, evol, entry_idx, entry_price, sl, tp, horizon, threshold, min_hold
+):
     n = len(close)
     last_i = min(entry_idx + horizon, n - 1)
     for i in range(entry_idx + 1, last_i + 1):
@@ -151,17 +159,25 @@ def run() -> None:
                 last_i = min(idx + horizon, n0 - 1)
                 held = last_i - idx
                 for i in range(idx + 1, last_i + 1):
-                    if low[i] <= sl or ((i - idx) >= MIN_HOLD_BARS and not np.isnan(evol[i]) and evol[i] < th) or high[i] >= tp:
+                    if (
+                        low[i] <= sl
+                        or ((i - idx) >= MIN_HOLD_BARS and not np.isnan(evol[i]) and evol[i] < th)
+                        or high[i] >= tp
+                    ):
                         held = i - idx
                         break
                 bars_held[th].append(held)
                 evol_rets[th].append(
-                    _simulate_evol_exit(high, low, close, evol, idx, entry, sl, tp, horizon, th, MIN_HOLD_BARS)
+                    _simulate_evol_exit(
+                        high, low, close, evol, idx, entry, sl, tp, horizon, th, MIN_HOLD_BARS
+                    )
                 )
             opened_ats.append(opened_at)
 
-    print(f"\n{'='*70}\nHA_Cross — Long — EVOL-disiplinli erken çıkış (min_hold={MIN_HOLD_BARS} bar)  "
-          f"(n={len(baseline_rets)})\n{'='*70}")
+    print(
+        f"\n{'='*70}\nHA_Cross — Long — EVOL-disiplinli erken çıkış (min_hold={MIN_HOLD_BARS} bar)  "
+        f"(n={len(baseline_rets)})\n{'='*70}"
+    )
 
     ts_arr = pd.Series(opened_ats)
     mid = ts_arr.min() + (ts_arr.max() - ts_arr.min()) / 2
@@ -172,15 +188,23 @@ def run() -> None:
 
     def _print_row(name, rets):
         arr = np.array(rets)
-        for label, mask in (("tum", np.ones(len(arr), dtype=bool)), ("ilk_yari", first_mask), ("ikinci_yari", ~first_mask)):
+        for label, mask in (
+            ("tum", np.ones(len(arr), dtype=bool)),
+            ("ilk_yari", first_mask),
+            ("ikinci_yari", ~first_mask),
+        ):
             s = _stats(arr[mask])
-            print(f"{name:24} {label:12} {s.get('n',0):>6} {s.get('wr',0):>6} {s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+            print(
+                f"{name:24} {label:12} {s.get('n',0):>6} {s.get('wr',0):>6} {s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+            )
 
     _print_row("ATR-baz-SL/TP (mevcut)", baseline_rets)
     for th in EVOL_THRESHOLDS:
         _print_row(f"+ EVOL-çıkış <{th}", evol_rets[th])
         held_arr = np.array(bars_held[th])
-        print(f"  (medyan tutma={np.median(held_arr):.1f} bar, 1-2 barda kapanan oran={(held_arr<=2).mean():.1%})")
+        print(
+            f"  (medyan tutma={np.median(held_arr):.1f} bar, 1-2 barda kapanan oran={(held_arr<=2).mean():.1%})"
+        )
 
 
 if __name__ == "__main__":

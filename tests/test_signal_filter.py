@@ -73,22 +73,36 @@ def _bar_times(n: int):
 async def test_first_long_invalid(f, sym):
     """İlk long sinyali — önceki short high yok, geçersiz."""
     t = _bar_times(1)
-    assert await f.check("Long", high=105.0, low=100.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[0]) is False
+    assert (
+        await f.check(
+            "Long", high=105.0, low=100.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[0]
+        )
+        is False
+    )
 
 
 @pytest.mark.asyncio
 async def test_first_short_invalid(f, sym):
     """İlk short sinyali — önceki long low yok, geçersiz."""
     t = _bar_times(1)
-    assert await f.check("Short", high=105.0, low=100.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[0]) is False
+    assert (
+        await f.check(
+            "Short", high=105.0, low=100.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[0]
+        )
+        is False
+    )
 
 
 @pytest.mark.asyncio
 async def test_long_valid_after_short(f, sym):
     """Short sonrası long: high > short high → geçerli."""
     t = _bar_times(2)
-    await f.check("Short", high=100.0, low=90.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[0])
-    result = await f.check("Long", high=101.0, low=95.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[1])
+    await f.check(
+        "Short", high=100.0, low=90.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[0]
+    )
+    result = await f.check(
+        "Long", high=101.0, low=95.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[1]
+    )
     assert result is True
 
 
@@ -96,8 +110,12 @@ async def test_long_valid_after_short(f, sym):
 async def test_long_invalid_after_short(f, sym):
     """Short sonrası long: high <= short high → geçersiz."""
     t = _bar_times(2)
-    await f.check("Short", high=100.0, low=90.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[0])
-    result = await f.check("Long", high=100.0, low=95.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[1])
+    await f.check(
+        "Short", high=100.0, low=90.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[0]
+    )
+    result = await f.check(
+        "Long", high=100.0, low=95.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[1]
+    )
     assert result is False
 
 
@@ -105,8 +123,12 @@ async def test_long_invalid_after_short(f, sym):
 async def test_long_invalid_after_short_below(f, sym):
     """Short sonrası long: high < short high → geçersiz."""
     t = _bar_times(2)
-    await f.check("Short", high=100.0, low=90.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[0])
-    result = await f.check("Long", high=99.0, low=95.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[1])
+    await f.check(
+        "Short", high=100.0, low=90.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[0]
+    )
+    result = await f.check(
+        "Long", high=99.0, low=95.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[1]
+    )
     assert result is False
 
 
@@ -114,8 +136,12 @@ async def test_long_invalid_after_short_below(f, sym):
 async def test_short_valid_after_long(f, sym):
     """Long sonrası short: low < long low → geçerli."""
     t = _bar_times(2)
-    await f.check("Long", high=110.0, low=100.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[0])
-    result = await f.check("Short", high=105.0, low=99.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[1])
+    await f.check(
+        "Long", high=110.0, low=100.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[0]
+    )
+    result = await f.check(
+        "Short", high=105.0, low=99.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[1]
+    )
     assert result is True
 
 
@@ -123,8 +149,12 @@ async def test_short_valid_after_long(f, sym):
 async def test_short_invalid_after_long(f, sym):
     """Long sonrası short: low >= long low → geçersiz."""
     t = _bar_times(2)
-    await f.check("Long", high=110.0, low=100.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[0])
-    result = await f.check("Short", high=105.0, low=100.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[1])
+    await f.check(
+        "Long", high=110.0, low=100.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[0]
+    )
+    result = await f.check(
+        "Short", high=105.0, low=100.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[1]
+    )
     assert result is False
 
 
@@ -132,10 +162,16 @@ async def test_short_invalid_after_long(f, sym):
 async def test_sequence_long_short_long(f, sym):
     """Long → Short (geçerli) → Long (geçerli) ardışık dizi."""
     t = _bar_times(3)
-    await f.check("Long", high=110.0, low=100.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[0])
-    short_valid = await f.check("Short", high=108.0, low=99.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[1])
+    await f.check(
+        "Long", high=110.0, low=100.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[0]
+    )
+    short_valid = await f.check(
+        "Short", high=108.0, low=99.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[1]
+    )
     assert short_valid is True
-    long_valid = await f.check("Long", high=109.0, low=97.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[2])
+    long_valid = await f.check(
+        "Long", high=109.0, low=97.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[2]
+    )
     assert long_valid is True
 
 
@@ -144,14 +180,30 @@ async def test_consecutive_short_updates_reference(f, sym):
     """Ardışık iki short: ikinci short, birinci short'un high'ını referans olarak kullanır."""
     t = _bar_times(5)
     # İlk long (state başlatmak için)
-    await f.check("Long", high=110.0, low=100.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[0])
+    await f.check(
+        "Long", high=110.0, low=100.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[0]
+    )
     # İlk short — low=99 < long_low=100 → geçerli, last_short_high=105 güncellenir
-    await f.check("Short", high=105.0, low=99.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[1])
+    await f.check(
+        "Short", high=105.0, low=99.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[1]
+    )
     # İkinci short — low=98 < long_low=100 → geçerli, last_short_high=107 güncellenir
-    await f.check("Short", high=107.0, low=98.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[2])
+    await f.check(
+        "Short", high=107.0, low=98.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[2]
+    )
     # Long: high > last_short_high (107) gerekiyor
-    assert await f.check("Long", high=106.0, low=95.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[3]) is False
-    assert await f.check("Long", high=108.0, low=95.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[4]) is True
+    assert (
+        await f.check(
+            "Long", high=106.0, low=95.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[3]
+        )
+        is False
+    )
+    assert (
+        await f.check(
+            "Long", high=108.0, low=95.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[4]
+        )
+        is True
+    )
 
 
 @pytest.mark.asyncio
@@ -160,9 +212,19 @@ async def test_independent_keys(f, sym):
     t = _bar_times(2)
     other_sym = f"{sym}_OTHER"
     try:
-        await f.check("Short", high=100.0, low=90.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[0])
+        await f.check(
+            "Short", high=100.0, low=90.0, symbol=sym, interval=IV, indicator=IND, bar_time=t[0]
+        )
         # other_sym için ayrı state — ilk long geçersiz olmalı
-        result = await f.check("Long", high=101.0, low=95.0, symbol=other_sym, interval=IV, indicator=IND, bar_time=t[1])
+        result = await f.check(
+            "Long",
+            high=101.0,
+            low=95.0,
+            symbol=other_sym,
+            interval=IV,
+            indicator=IND,
+            bar_time=t[1],
+        )
         assert result is False
     finally:
         async with get_session() as session:

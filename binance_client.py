@@ -1,6 +1,7 @@
-import pandas as pd
+from typing import Any, Dict, List, Optional, Tuple
+
 import aiohttp
-from typing import Optional, List, Tuple, Dict, Any
+import pandas as pd
 
 # Config import
 from config import Config
@@ -8,9 +9,9 @@ from config import Config
 # Error handling
 from utils.exceptions import (
     BinanceAPIError,
-    BinanceRateLimitError,
     BinanceInvalidParamsError,
-    DataError
+    BinanceRateLimitError,
+    DataError,
 )
 from utils.kline_schema import check_kline_schema
 from utils.logger import get_logger
@@ -44,17 +45,18 @@ def _check_binance_error_code(data: Any, endpoint: str) -> None:
         raise BinanceInvalidParamsError(f"Geçersiz parametre: {msg}", endpoint=endpoint)
     raise BinanceAPIError(f"Binance API hatası {code}: {msg}", endpoint=endpoint)
 
+
 def get_live_binance(
-    symbol: str, 
-    interval: str, 
-    limit: int = 1000, 
-    api_key: Optional[str] = None, 
-    api_secret: Optional[str] = None, 
-    **kwargs: Any
+    symbol: str,
+    interval: str,
+    limit: int = 1000,
+    api_key: Optional[str] = None,
+    api_secret: Optional[str] = None,
+    **kwargs: Any,
 ) -> pd.DataFrame:
     """
     Binance API'dan OHLCV verisi çeker. Sadece ham veri ve temel teknik göstergeler hesaplanır.
-    
+
     Args:
         symbol: Trading sembolü (örn: 'BTCUSDT')
         interval: Zaman aralığı (örn: '1h', '4h', '1d')
@@ -62,12 +64,13 @@ def get_live_binance(
         api_key: Binance API anahtarı (opsiyonel)
         api_secret: Binance API gizli anahtarı (opsiyonel)
         **kwargs: Ek parametreler
-        
+
     Returns:
         pd.DataFrame: OHLCV verisi içeren DataFrame
     """
     try:
         import requests
+
         symbol = symbol.upper()
         url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}"
         try:
@@ -80,13 +83,22 @@ def get_live_binance(
             print(f"Binance APIError: {api_err}")
             return pd.DataFrame()
         expected_cols = [
-            "open_time", "open", "high", "low", "close", "volume",
-            "close_time", "quote_volume", "trades", "taker_buy_base",
-            "taker_buy_quote", "ignore"
+            "open_time",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "close_time",
+            "quote_volume",
+            "trades",
+            "taker_buy_base",
+            "taker_buy_quote",
+            "ignore",
         ]
         df = pd.DataFrame(klines)
         if df.shape[1] > len(expected_cols):
-            df = df.iloc[:, :len(expected_cols)]
+            df = df.iloc[:, : len(expected_cols)]
         df.columns = expected_cols  # type: ignore
         df["open_time"] = pd.to_datetime(df["open_time"], unit="ms")
         df["close"] = pd.to_numeric(df["close"])
@@ -100,12 +112,15 @@ def get_live_binance(
         print(f"Veri çekilemedi! Hata: {e}")
         return pd.DataFrame()
 
+
 import asyncio
 import re
 import time
+
 import aiohttp
 
 # --- Central Asynchronous Client Manager ---
+
 
 class BinanceClientManager:
     """
@@ -131,6 +146,7 @@ class BinanceClientManager:
     @classmethod
     async def _throttle_global_rate(cls) -> None:
         from utils.redis_client import RedisClient
+
         await RedisClient.throttle_external_api("binance", cls._MAX_REQUESTS_PER_MIN)
 
     @classmethod
@@ -141,11 +157,15 @@ class BinanceClientManager:
         return time.time() < cls._banned_until
 
     @classmethod
-    async def fetch_klines(cls, symbol: str, interval: str, limit: int = 500, startTime: Optional[int] = None) -> pd.DataFrame:
+    async def fetch_klines(
+        cls, symbol: str, interval: str, limit: int = 500, startTime: Optional[int] = None
+    ) -> pd.DataFrame:
         """Fetches historical klines for a single symbol."""
         if time.time() < cls._banned_until:
             remaining = cls._banned_until - time.time()
-            logger.warning(f"[{symbol}] IP ban cooldown aktif, istek atlanıyor ({remaining:.0f}s kaldı)")
+            logger.warning(
+                f"[{symbol}] IP ban cooldown aktif, istek atlanıyor ({remaining:.0f}s kaldı)"
+            )
             return pd.DataFrame()
 
         await cls._throttle_global_rate()
@@ -154,10 +174,12 @@ class BinanceClientManager:
         if startTime:
             url += f"&startTime={startTime}"
         try:
+
             async def request():
                 async with aiohttp.ClientSession() as session:
                     async with session.get(url) as resp:
                         return resp.status, resp.headers, await resp.json()
+
             status, headers, data = await asyncio.wait_for(request(), timeout=30)
 
             if status in (418, 429):
@@ -174,13 +196,34 @@ class BinanceClientManager:
                 except BinanceAPIError as e:
                     logger.warning(f"[{symbol}] {e}")
                 return pd.DataFrame()
-            df = pd.DataFrame(data, columns=[
-                "open_time", "open", "high", "low", "close", "volume",
-                "close_time", "quote_asset_volume", "number_of_trades",
-                "taker_buy_base_asset_volume", "taker_buy_quote_asset_volume", "ignore"
-            ])
-            df = df.astype({"open": float, "high": float, "low": float, "close": float, "volume": float,
-                            "taker_buy_base_asset_volume": float, "taker_buy_quote_asset_volume": float})
+            df = pd.DataFrame(
+                data,
+                columns=[
+                    "open_time",
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "volume",
+                    "close_time",
+                    "quote_asset_volume",
+                    "number_of_trades",
+                    "taker_buy_base_asset_volume",
+                    "taker_buy_quote_asset_volume",
+                    "ignore",
+                ],
+            )
+            df = df.astype(
+                {
+                    "open": float,
+                    "high": float,
+                    "low": float,
+                    "close": float,
+                    "volume": float,
+                    "taker_buy_base_asset_volume": float,
+                    "taker_buy_quote_asset_volume": float,
+                }
+            )
             # endTime verilmediğinde Binance son elemanı oluşum halindeki (henüz
             # kapanmamış) mum olarak döndürür — bu satır filtrelenmezse "kapanmış"
             # gibi indikatörlenip DB'ye/buffer'a yazılıyordu (12 Tem 2026 fix).
@@ -223,15 +266,19 @@ class BinanceClientManager:
             cls._banned_until = cooldown_until
             logger.error(
                 "🚫 Binance %s — IP cooldown %.0f saniye (kadar: %s)",
-                status, cooldown_until - time.time(), msg or "detay yok",
+                status,
+                cooldown_until - time.time(),
+                msg or "detay yok",
             )
 
     @classmethod
-    async def fetch_all_klines(cls, symbols: List[str], interval: str, limit: int = 500) -> List[Tuple[str, pd.DataFrame]]:
+    async def fetch_all_klines(
+        cls, symbols: List[str], interval: str, limit: int = 500
+    ) -> List[Tuple[str, pd.DataFrame]]:
         """Asynchronously fetches klines for a list of symbols."""
         tasks = [cls.fetch_klines(symbol, interval, limit) for symbol in symbols]
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        
+
         processed_results: List[Tuple[str, pd.DataFrame]] = []
         for symbol, result in zip(symbols, results):
             if isinstance(result, pd.DataFrame):
@@ -250,11 +297,13 @@ class BinanceClientManager:
         url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
         logger.info("Fetching 24hr ticker stats asynchronously...")
         try:
+
             async def request():
                 async with aiohttp.ClientSession() as session:
                     async with session.get(url) as response:
                         response.raise_for_status()
                         return await response.json()
+
             data = await asyncio.wait_for(request(), timeout=Config.API_TIMEOUT)
             if not isinstance(data, list):
                 _check_binance_error_code(data, url)
@@ -271,11 +320,13 @@ class BinanceClientManager:
         """Tüm sembollerin güncel funding rate verisini çeker (/fapi/v1/premiumIndex)."""
         url = "https://fapi.binance.com/fapi/v1/premiumIndex"
         try:
+
             async def request():
                 async with aiohttp.ClientSession() as session:
                     async with session.get(url) as response:
                         response.raise_for_status()
                         return await response.json()
+
             data = await asyncio.wait_for(request(), timeout=Config.API_TIMEOUT)
             if not isinstance(data, list):
                 _check_binance_error_code(data, url)
@@ -300,7 +351,9 @@ class BinanceClientManager:
                 try:
                     await cls._throttle_global_rate()
                     async with aiohttp.ClientSession() as session:
-                        async with session.get(url, params={"symbol": sym}, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                        async with session.get(
+                            url, params={"symbol": sym}, timeout=aiohttp.ClientTimeout(total=5)
+                        ) as resp:
                             data = await resp.json()
                             if resp.status == 200:
                                 result[sym] = float(data.get("openInterest", 0))
@@ -325,19 +378,22 @@ class BinanceClientManager:
         atlanır, sembol listesi eskisi gibi tam kalır)."""
         url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
         try:
+
             async def request():
                 async with aiohttp.ClientSession() as session:
                     async with session.get(url) as response:
                         response.raise_for_status()
                         return await response.json()
+
             data = await asyncio.wait_for(request(), timeout=Config.API_TIMEOUT)
             if "symbols" not in data:
                 _check_binance_error_code(data, url)
             equity_symbols = {
-                s["symbol"] for s in data.get("symbols", [])
-                if s.get("underlyingType") == "EQUITY"
+                s["symbol"] for s in data.get("symbols", []) if s.get("underlyingType") == "EQUITY"
             }
-            logger.info(f"exchangeInfo: {len(equity_symbols)} EQUITY (tokenize hisse) sembolü bulundu.")
+            logger.info(
+                f"exchangeInfo: {len(equity_symbols)} EQUITY (tokenize hisse) sembolü bulundu."
+            )
             return equity_symbols
         except Exception as e:  # pylint: disable=broad-exception-caught
             logger.warning(f"exchangeInfo çekilemedi, EQUITY filtresi atlanıyor: {e}")
@@ -352,32 +408,34 @@ class BinanceClientManager:
             equity_symbols = await cls.get_equity_underlying_symbols()
             # Filter for USDT pairs with a minimum volume threshold
             initial_usdt_pairs = [
-                s for s in stats
-                if s['symbol'].endswith('USDT') and s['symbol'] not in equity_symbols
+                s
+                for s in stats
+                if s["symbol"].endswith("USDT") and s["symbol"] not in equity_symbols
             ]
             volume_threshold = Config.MIN_VOLUME_THRESHOLD  # Minimum 24hr volume in USDT
 
             valid_symbols = [
-                s for s in initial_usdt_pairs
-                if float(s.get('quoteVolume', 0)) > volume_threshold
+                s for s in initial_usdt_pairs if float(s.get("quoteVolume", 0)) > volume_threshold
             ]
-            
-            logger.info(f"{len(initial_usdt_pairs) - len(valid_symbols)} symbols were filtered out due to low volume (under {volume_threshold} USDT).")
+
+            logger.info(
+                f"{len(initial_usdt_pairs) - len(valid_symbols)} symbols were filtered out due to low volume (under {volume_threshold} USDT)."
+            )
 
             sorted_symbols = sorted(
-                valid_symbols,
-                key=lambda x: float(x.get('quoteVolume', 0)),
-                reverse=True
+                valid_symbols, key=lambda x: float(x.get("quoteVolume", 0)), reverse=True
             )
-            top_symbols = [s['symbol'] for s in sorted_symbols[:limit]]
+            top_symbols = [s["symbol"] for s in sorted_symbols[:limit]]
             logger.info(f"✅ Successfully identified top {limit} symbols by volume.")
             return top_symbols
         except Exception as e:
             logger.error(f"Unexpected error fetching top volume symbols: {e}")
             raise BinanceAPIError(f"An unexpected error occurred: {e}") from e
 
+
 # For direct testing of this module
 if __name__ == "__main__":
+
     async def main_test():
         await BinanceClientManager.initialize()
         try:
@@ -389,7 +447,9 @@ if __name__ == "__main__":
             # Test fetching klines for top symbols
             if top_symbols:
                 print("\n--- Testing fetch_all_klines ---")
-                async_results = await BinanceClientManager.fetch_all_klines(top_symbols[:3], "1h", limit=2)
+                async_results = await BinanceClientManager.fetch_all_klines(
+                    top_symbols[:3], "1h", limit=2
+                )
                 for sym, df in async_results:
                     print(f"{sym} data fetched (async), shape: {df.shape}")
                     if not df.empty:

@@ -23,9 +23,9 @@ _ASSETS_DIR = Path(__file__).parent.parent / "assets"
 _JS_PATH = _ASSETS_DIR / "lightweight-charts.js"
 
 _EMA_SPAN = 21
-_EMA_ALPHA = 2 / (_EMA_SPAN + 1)   # ≈ 0.0909
+_EMA_ALPHA = 2 / (_EMA_SPAN + 1)  # ≈ 0.0909
 _RSI_PERIOD = 14
-_RSI_ALPHA = 1 / _RSI_PERIOD        # ≈ 0.0714
+_RSI_ALPHA = 1 / _RSI_PERIOD  # ≈ 0.0714
 _ST_PERIOD = 10
 _ST_MULT = 3.0
 
@@ -569,8 +569,11 @@ function updateLastBar(candleJson, emaJson, volJson, rsiJson) {{
 
 def _build_html() -> str:
     js_code = _JS_PATH.read_text(encoding="utf-8") if _JS_PATH.exists() else ""
-    js_tag = f"<script>{js_code}</script>" if js_code else \
-             '<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>'
+    js_tag = (
+        f"<script>{js_code}</script>"
+        if js_code
+        else '<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>'
+    )
     return _HTML_TEMPLATE.format(
         bg=COLORS["bg_primary"],
         bg2=COLORS["bg_secondary"],
@@ -630,7 +633,9 @@ class TVChart(QWebEngineView):
             if w > 10 and h > 10:
                 self.page().runJavaScript(f"resizeChart({w},{h})")
 
-    def load_df(self, df: pd.DataFrame, symbol: str = "", tf: str = "", signal: Optional[dict] = None) -> None:
+    def load_df(
+        self, df: pd.DataFrame, symbol: str = "", tf: str = "", signal: Optional[dict] = None
+    ) -> None:
         self._symbol = symbol
         self._tf = tf
         if df is None or df.empty:
@@ -656,24 +661,27 @@ class TVChart(QWebEngineView):
         # Son bar için incremental EMA + RSI — 200 bar hesaplama yok
         t = int(ts_series.iloc[-1])
         row = df.iloc[-1]
-        o = float(row["open"]); h = float(row["high"])
-        l = float(row["low"]);  c = float(row["close"]); v = float(row["volume"])
+        o = float(row["open"])
+        h = float(row["high"])
+        l = float(row["low"])
+        c = float(row["close"])
+        v = float(row["volume"])
 
         ema_val = _EMA_ALPHA * c + (1 - _EMA_ALPHA) * self._bar_state["ema"]
 
         delta = c - self._bar_state["close"]
-        g  = max(delta, 0.0)
+        g = max(delta, 0.0)
         lo = max(-delta, 0.0)
         avg_gain = (1 - _RSI_ALPHA) * self._bar_state["avg_gain"] + _RSI_ALPHA * g
         avg_loss = (1 - _RSI_ALPHA) * self._bar_state["avg_loss"] + _RSI_ALPHA * lo
-        rsi_val  = 100.0 - 100.0 / (1.0 + avg_gain / (avg_loss + 1e-9))
+        rsi_val = 100.0 - 100.0 / (1.0 + avg_gain / (avg_loss + 1e-9))
 
         green = COLORS["green"]
-        red   = COLORS["red"]
-        candle  = {"time": t, "open": o, "high": h, "low": l, "close": c}
-        ema_pt  = {"time": t, "value": round(ema_val, 6)}
-        vol_pt  = {"time": t, "value": v, "color": (green + "99") if c >= o else (red + "99")}
-        rsi_pt  = {"time": t, "value": round(rsi_val, 2)}
+        red = COLORS["red"]
+        candle = {"time": t, "open": o, "high": h, "low": l, "close": c}
+        ema_pt = {"time": t, "value": round(ema_val, 6)}
+        vol_pt = {"time": t, "value": v, "color": (green + "99") if c >= o else (red + "99")}
+        rsi_pt = {"time": t, "value": round(rsi_val, 2)}
 
         js = (
             f"updateLastBar("
@@ -742,24 +750,27 @@ class TVChart(QWebEngineView):
         trail = signal_data.get("trailing_stop_price")
 
         green = COLORS["green"]
-        red   = COLORS["red"]
+        red = COLORS["red"]
 
         markers = []
         if opened_at is not None and entry is not None:
             try:
                 from datetime import datetime  # pylint: disable=import-outside-toplevel
+
                 if isinstance(opened_at, str):
                     opened_at = datetime.fromisoformat(opened_at)
                 t = int(opened_at.timestamp()) + 3 * 3600
                 is_long = str(sig_type).upper() == "LONG"
-                markers.append({
-                    "time": t,
-                    "position": "belowBar" if is_long else "aboveBar",
-                    "color": green if is_long else red,
-                    "shape": "arrowUp" if is_long else "arrowDown",
-                    "text": f"{'▲' if is_long else '▼'} {float(entry):.4f}",
-                    "size": 1,
-                })
+                markers.append(
+                    {
+                        "time": t,
+                        "position": "belowBar" if is_long else "aboveBar",
+                        "color": green if is_long else red,
+                        "shape": "arrowUp" if is_long else "arrowDown",
+                        "text": f"{'▲' if is_long else '▼'} {float(entry):.4f}",
+                        "size": 1,
+                    }
+                )
             except Exception:  # pylint: disable=broad-exception-caught
                 pass
 
@@ -778,7 +789,9 @@ class TVChart(QWebEngineView):
         )
         self.page().runJavaScript(js)
 
-    def _send_data(self, df: pd.DataFrame, _symbol: str, _tf: str, signal: Optional[dict] = None) -> None:
+    def _send_data(
+        self, df: pd.DataFrame, _symbol: str, _tf: str, signal: Optional[dict] = None
+    ) -> None:
         candles, ema_data, vol_data, rsi_data = self._prepare(df)
         st_up, st_dn = self._prepare_supertrend(df)
         self._bar_state = self._compute_state(df)
@@ -846,10 +859,10 @@ class TVChart(QWebEngineView):
     def _prepare_supertrend(df: pd.DataFrame) -> tuple[list, list]:
         """Supertrend(10,3) — uptrend (yeşil, lower band) ve downtrend (kırmızı, upper band)."""
         try:
-            high  = df["high"].astype(float).values
-            low   = df["low"].astype(float).values
+            high = df["high"].astype(float).values
+            low = df["low"].astype(float).values
             close = df["close"].astype(float).values
-            ts    = (df["timestamp"].astype("int64") // 10**9 + 3 * 3600).values
+            ts = (df["timestamp"].astype("int64") // 10**9 + 3 * 3600).values
             n = len(close)
             if n < _ST_PERIOD + 5:
                 return [], []
@@ -858,11 +871,13 @@ class TVChart(QWebEngineView):
             tr = np.zeros(n)
             tr[0] = high[0] - low[0]
             for i in range(1, n):
-                tr[i] = max(high[i] - low[i], abs(high[i] - close[i-1]), abs(low[i] - close[i-1]))
+                tr[i] = max(
+                    high[i] - low[i], abs(high[i] - close[i - 1]), abs(low[i] - close[i - 1])
+                )
             atr = np.zeros(n)
             atr[_ST_PERIOD - 1] = tr[:_ST_PERIOD].mean()
             for i in range(_ST_PERIOD, n):
-                atr[i] = (atr[i-1] * (_ST_PERIOD - 1) + tr[i]) / _ST_PERIOD
+                atr[i] = (atr[i - 1] * (_ST_PERIOD - 1) + tr[i]) / _ST_PERIOD
 
             hl2 = (high + low) / 2.0
             bu = hl2 + _ST_MULT * atr
@@ -871,23 +886,23 @@ class TVChart(QWebEngineView):
             fu = bu.copy()
             fl = bl.copy()
             for i in range(1, n):
-                fu[i] = bu[i] if bu[i] < fu[i-1] or close[i-1] > fu[i-1] else fu[i-1]
-                fl[i] = bl[i] if bl[i] > fl[i-1] or close[i-1] < fl[i-1] else fl[i-1]
+                fu[i] = bu[i] if bu[i] < fu[i - 1] or close[i - 1] > fu[i - 1] else fu[i - 1]
+                fl[i] = bl[i] if bl[i] > fl[i - 1] or close[i - 1] < fl[i - 1] else fl[i - 1]
 
             # Supertrend line: fl = uptrend, fu = downtrend
             st = fu.copy()
             for i in range(1, n):
-                if abs(st[i-1] - fu[i-1]) < 1e-12:   # was downtrend
+                if abs(st[i - 1] - fu[i - 1]) < 1e-12:  # was downtrend
                     st[i] = fl[i] if close[i] > fu[i] else fu[i]
-                else:                                   # was uptrend
+                else:  # was uptrend
                     st[i] = fu[i] if close[i] < fl[i] else fl[i]
 
             st_up, st_dn = [], []
             for i in range(_ST_PERIOD, n):
                 t = int(ts[i])
-                if abs(st[i] - fl[i]) < 1e-12:   # uptrend
+                if abs(st[i] - fl[i]) < 1e-12:  # uptrend
                     st_up.append({"time": t, "value": round(float(fl[i]), 8)})
-                else:                              # downtrend
+                else:  # downtrend
                     st_dn.append({"time": t, "value": round(float(fu[i]), 8)})
             return st_up, st_dn
         except Exception:  # pylint: disable=broad-exception-caught
@@ -899,14 +914,14 @@ class TVChart(QWebEngineView):
         try:
             from smartmoneyconcepts import smc as _smc  # pylint: disable=import-outside-toplevel
 
-            ts    = (df["timestamp"].astype("int64") // 10**9 + 3 * 3600).values
+            ts = (df["timestamp"].astype("int64") // 10**9 + 3 * 3600).values
             df_smc = df[["open", "high", "low", "close", "volume"]].copy().reset_index(drop=True)
             for col in df_smc.columns:
                 df_smc[col] = df_smc[col].astype(float)
 
             fvg_df = _smc.fvg(df_smc)
-            green  = COLORS["green"]
-            red    = COLORS["red"]
+            green = COLORS["green"]
+            red = COLORS["red"]
             zones: list[dict] = []
             for i in range(len(fvg_df)):
                 fvg_val = fvg_df["FVG"].iloc[i]
@@ -919,9 +934,11 @@ class TVChart(QWebEngineView):
                 bot = float(fvg_df["Bottom"].iloc[i])
                 t = int(ts[i]) if i < len(ts) else None
                 if fvg_val == 1:
-                    zones.append({"top": top, "bot": bot, "color": green, "label": "FVG↑", "time": t})
+                    zones.append(
+                        {"top": top, "bot": bot, "color": green, "label": "FVG↑", "time": t}
+                    )
                 else:
-                    zones.append({"top": top, "bot": bot, "color": red,   "label": "FVG↓", "time": t})
+                    zones.append({"top": top, "bot": bot, "color": red, "label": "FVG↓", "time": t})
             return zones
         except Exception:  # pylint: disable=broad-exception-caught
             return []
@@ -933,8 +950,12 @@ class TVChart(QWebEngineView):
             from smartmoneyconcepts import smc as _smc  # pylint: disable=import-outside-toplevel
 
             _TF_MAP = {
-                "1m": "1h", "5m": "1h", "15m": "4h",
-                "1h": "1D", "4h": "1W", "1d": "1W",
+                "1m": "1h",
+                "5m": "1h",
+                "15m": "4h",
+                "1h": "1D",
+                "4h": "1W",
+                "1d": "1W",
             }
             resample_tf = _TF_MAP.get(tf, "1D")
 
@@ -952,23 +973,26 @@ class TVChart(QWebEngineView):
 
             # DO / PDO — her zaman günlük (D), TF'ten bağımsız
             daily_open = df_smc["open"].resample("D").first().dropna()
-            pdo  = round(float(daily_open.iloc[-2]), 8) if len(daily_open) >= 2 else None
-            do_  = round(float(daily_open.iloc[-1]), 8) if len(daily_open) >= 1 else None
+            pdo = round(float(daily_open.iloc[-2]), 8) if len(daily_open) >= 2 else None
+            do_ = round(float(daily_open.iloc[-1]), 8) if len(daily_open) >= 1 else None
 
             return {
                 "high": round(float(ph.iloc[-1]), 8),
-                "low":  round(float(pl.iloc[-1]), 8),
-                "pdo":  pdo,
-                "do_":  do_,
-                "tf":   resample_tf,
+                "low": round(float(pl.iloc[-1]), 8),
+                "pdo": pdo,
+                "do_": do_,
+                "tf": resample_tf,
             }
         except Exception:  # pylint: disable=broad-exception-caught
             return {"high": None, "low": None, "pdo": None, "do_": None, "tf": ""}
 
     _PIVOT_ANCHOR_MAP = {
-        "1m": "D", "5m": "D", "15m": "D",   # TradingView "Auto": intraday, multiplier<=15 → günlük
-        "1h": "W", "4h": "W",               # intraday, multiplier>15 → haftalık
-        "1d": "ME",                          # günlük grafik → aylık
+        "1m": "D",
+        "5m": "D",
+        "15m": "D",  # TradingView "Auto": intraday, multiplier<=15 → günlük
+        "1h": "W",
+        "4h": "W",  # intraday, multiplier>15 → haftalık
+        "1d": "ME",  # günlük grafik → aylık
     }
 
     @classmethod
@@ -982,7 +1006,9 @@ class TVChart(QWebEngineView):
         1h/4h → haftalık, 1d → aylık. Önceden HER ZAMAN günlük kullanıyordu (DO/PDO
         emsaliyle), bu yanlış emsaldi — PDH/PDL'nin TF-bağımlı deseni doğruydu."""
         try:
-            from indicators.core import calculate_fib_pivots  # pylint: disable=import-outside-toplevel
+            from indicators.core import (
+                calculate_fib_pivots,  # pylint: disable=import-outside-toplevel
+            )
 
             anchor = cls._PIVOT_ANCHOR_MAP.get(tf, "D")
 
@@ -991,12 +1017,16 @@ class TVChart(QWebEngineView):
             for col in df_idx.columns:
                 df_idx[col] = df_idx[col].astype(float)
 
-            period = df_idx.resample(anchor).agg({"high": "max", "low": "min", "close": "last"}).dropna()
+            period = (
+                df_idx.resample(anchor).agg({"high": "max", "low": "min", "close": "last"}).dropna()
+            )
             if len(period) < 2:
                 return {}
 
             prev = period.iloc[-2]
-            levels = calculate_fib_pivots(float(prev["high"]), float(prev["low"]), float(prev["close"]))
+            levels = calculate_fib_pivots(
+                float(prev["high"]), float(prev["low"]), float(prev["close"])
+            )
             return {k: round(v, 8) for k, v in levels.items()}
         except Exception:  # pylint: disable=broad-exception-caught
             return {}
@@ -1035,10 +1065,10 @@ class TVChart(QWebEngineView):
                 df_smc[col] = df_smc[col].astype(float)
 
             swing_df = _smc.swing_highs_lows(df_smc, swing_length=5)
-            bos_df   = _smc.bos_choch(df_smc, swing_df, close_break=True)
+            bos_df = _smc.bos_choch(df_smc, swing_df, close_break=True)
 
-            green  = COLORS["green"]
-            red    = COLORS["red"]
+            green = COLORS["green"]
+            red = COLORS["red"]
             orange = "#ff9900"
             purple = COLORS["purple"]
 
@@ -1050,28 +1080,54 @@ class TVChart(QWebEngineView):
                     continue
                 t = int(ts[i])
                 if hl == 1.0:
-                    all_markers.append({"time": t, "position": "aboveBar", "color": red,
-                                        "shape": "arrowDown", "text": "H", "size": 0.8})
+                    all_markers.append(
+                        {
+                            "time": t,
+                            "position": "aboveBar",
+                            "color": red,
+                            "shape": "arrowDown",
+                            "text": "H",
+                            "size": 0.8,
+                        }
+                    )
                 else:
-                    all_markers.append({"time": t, "position": "belowBar", "color": green,
-                                        "shape": "arrowUp", "text": "L", "size": 0.8})
+                    all_markers.append(
+                        {
+                            "time": t,
+                            "position": "belowBar",
+                            "color": green,
+                            "shape": "arrowUp",
+                            "text": "L",
+                            "size": 0.8,
+                        }
+                    )
             markers = all_markers[-swing_limit:]
 
             # Tüm BOS/CHoCH seviyelerini topla, son level_limit tanesini al
             all_levels = []
             for i in range(len(bos_df)):
-                bos_val   = bos_df["BOS"].iloc[i]
+                bos_val = bos_df["BOS"].iloc[i]
                 choch_val = bos_df["CHOCH"].iloc[i]
-                lv        = bos_df["Level"].iloc[i]
-                t         = int(ts[i]) if i < len(ts) else None
+                lv = bos_df["Level"].iloc[i]
+                t = int(ts[i]) if i < len(ts) else None
                 if not np.isnan(bos_val) and not np.isnan(lv) and lv > 0:
-                    all_levels.append({"price": float(lv), "time": t,
-                                       "color": green if bos_val == 1 else red,
-                                       "title": "BOS↑" if bos_val == 1 else "BOS↓"})
+                    all_levels.append(
+                        {
+                            "price": float(lv),
+                            "time": t,
+                            "color": green if bos_val == 1 else red,
+                            "title": "BOS↑" if bos_val == 1 else "BOS↓",
+                        }
+                    )
                 elif not np.isnan(choch_val) and not np.isnan(lv) and lv > 0:
-                    all_levels.append({"price": float(lv), "time": t,
-                                       "color": orange if choch_val == 1 else purple,
-                                       "title": "CHoCH↑" if choch_val == 1 else "CHoCH↓"})
+                    all_levels.append(
+                        {
+                            "price": float(lv),
+                            "time": t,
+                            "color": orange if choch_val == 1 else purple,
+                            "title": "CHoCH↑" if choch_val == 1 else "CHoCH↓",
+                        }
+                    )
             levels = all_levels[-level_limit:]
 
             return {"markers": markers, "levels": levels}
@@ -1080,51 +1136,58 @@ class TVChart(QWebEngineView):
 
     @staticmethod
     def _price_format(price: float) -> tuple[int, float]:
-        if price >= 1000:  return 2,  0.01
-        if price >= 10:    return 3,  0.001
-        if price >= 1:     return 4,  0.0001
-        if price >= 0.1:   return 5,  0.00001
-        if price >= 0.01:  return 6,  0.000001
-        if price >= 0.001: return 7,  0.0000001
-        if price >= 0.0001:return 8,  0.00000001
+        if price >= 1000:
+            return 2, 0.01
+        if price >= 10:
+            return 3, 0.001
+        if price >= 1:
+            return 4, 0.0001
+        if price >= 0.1:
+            return 5, 0.00001
+        if price >= 0.01:
+            return 6, 0.000001
+        if price >= 0.001:
+            return 7, 0.0000001
+        if price >= 0.0001:
+            return 8, 0.00000001
         return 10, 0.0000000001
 
     @staticmethod
     def _compute_state(df: pd.DataFrame, _ts_hint=None) -> dict:
         """Son kapalı bar'ın (bar[-2]) EMA/RSI durumunu döner."""
         closes = df["close"].astype(float).reset_index(drop=True)
-        ts     = df["timestamp"].astype("int64") // 10**9 + 3 * 3600
-        ema    = closes.ewm(span=_EMA_SPAN, adjust=False).mean()
-        delta  = closes.diff()
-        gain   = delta.clip(lower=0).ewm(alpha=_RSI_ALPHA, min_periods=_RSI_PERIOD).mean()
-        loss   = (-delta.clip(upper=0)).ewm(alpha=_RSI_ALPHA, min_periods=_RSI_PERIOD).mean()
-        idx    = -2 if len(closes) >= 2 else -1
+        ts = df["timestamp"].astype("int64") // 10**9 + 3 * 3600
+        ema = closes.ewm(span=_EMA_SPAN, adjust=False).mean()
+        delta = closes.diff()
+        gain = delta.clip(lower=0).ewm(alpha=_RSI_ALPHA, min_periods=_RSI_PERIOD).mean()
+        loss = (-delta.clip(upper=0)).ewm(alpha=_RSI_ALPHA, min_periods=_RSI_PERIOD).mean()
+        idx = -2 if len(closes) >= 2 else -1
         return {
-            "ts":       int(ts.iloc[idx]),
-            "ema":      float(ema.iloc[idx]),
+            "ts": int(ts.iloc[idx]),
+            "ema": float(ema.iloc[idx]),
             "avg_gain": float(gain.iloc[idx]),
             "avg_loss": float(loss.iloc[idx]),
-            "close":    float(closes.iloc[idx]),
+            "close": float(closes.iloc[idx]),
         }
 
     @staticmethod
     def _prepare(df: pd.DataFrame):
-        ts     = df["timestamp"].astype("int64") // 10**9 + 3 * 3600
-        opens  = df["open"].astype(float)
-        highs  = df["high"].astype(float)
-        lows   = df["low"].astype(float)
+        ts = df["timestamp"].astype("int64") // 10**9 + 3 * 3600
+        opens = df["open"].astype(float)
+        highs = df["high"].astype(float)
+        lows = df["low"].astype(float)
         closes = df["close"].astype(float)
-        vols   = df["volume"].astype(float)
+        vols = df["volume"].astype(float)
 
-        ema   = closes.ewm(span=_EMA_SPAN, adjust=False).mean()
+        ema = closes.ewm(span=_EMA_SPAN, adjust=False).mean()
         delta = closes.diff()
-        gain  = delta.clip(lower=0).ewm(alpha=_RSI_ALPHA, min_periods=_RSI_PERIOD).mean()
-        loss  = (-delta.clip(upper=0)).ewm(alpha=_RSI_ALPHA, min_periods=_RSI_PERIOD).mean()
-        rsi   = 100 - 100 / (1 + gain / (loss + 1e-9))
+        gain = delta.clip(lower=0).ewm(alpha=_RSI_ALPHA, min_periods=_RSI_PERIOD).mean()
+        loss = (-delta.clip(upper=0)).ewm(alpha=_RSI_ALPHA, min_periods=_RSI_PERIOD).mean()
+        rsi = 100 - 100 / (1 + gain / (loss + 1e-9))
 
         candles, ema_data, vol_data, rsi_data = [], [], [], []
         green = COLORS["green"]
-        red   = COLORS["red"]
+        red = COLORS["red"]
 
         for i in range(len(df)):
             t = int(ts.iloc[i])
@@ -1137,10 +1200,13 @@ class TVChart(QWebEngineView):
 
             candles.append({"time": t, "open": o, "high": h, "low": l, "close": c})
             ema_data.append({"time": t, "value": round(float(ema.iloc[i]), 6)})
-            vol_data.append({
-                "time": t, "value": v,
-                "color": (green + "99") if c >= o else (red + "99"),
-            })
+            vol_data.append(
+                {
+                    "time": t,
+                    "value": v,
+                    "color": (green + "99") if c >= o else (red + "99"),
+                }
+            )
             if r == r:  # NaN değil
                 rsi_data.append({"time": t, "value": round(r, 2)})
 

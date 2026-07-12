@@ -20,6 +20,7 @@ market_structure/candle_pattern gibi kategorik/çok-değerli alanlar bu ilk
 denemede DAHIL EDİLMEDİ (sadece sayısal özellikler) — overfitting riskini
 düşük tutmak için.
 """
+
 import os
 import sys
 
@@ -35,8 +36,17 @@ from research.pattern_lab.vol_exhaustion_bt import _stats  # pylint: disable=wro
 
 INDICATOR = "HA_Cross"
 FEATURES = [
-    "alpha", "beta", "vp_buy_avg", "vp_sell_avg", "cvd_slope",
-    "vpmv_pre_avg", "vpmv_ratio", "vpmv_slope", "mtf_score", "rank_score", "vs_btc",
+    "alpha",
+    "beta",
+    "vp_buy_avg",
+    "vp_sell_avg",
+    "cvd_slope",
+    "vpmv_pre_avg",
+    "vpmv_ratio",
+    "vpmv_slope",
+    "mtf_score",
+    "rank_score",
+    "vs_btc",
 ]
 N_PLACEBO = 30
 TOP_FRACTION = 0.33
@@ -44,8 +54,11 @@ TOP_FRACTION = 0.33
 
 def _fetch() -> pd.DataFrame:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     cols = ", ".join(FEATURES)
     q = f"""
@@ -68,9 +81,14 @@ def _prepare(df: pd.DataFrame) -> pd.DataFrame:
 
 def _train(train_df: pd.DataFrame, y: np.ndarray) -> xgb.XGBClassifier:
     model = xgb.XGBClassifier(
-        n_estimators=100, max_depth=3, learning_rate=0.05,
-        subsample=0.8, colsample_bytree=0.8,
-        eval_metric="logloss", random_state=42, n_jobs=4,
+        n_estimators=100,
+        max_depth=3,
+        learning_rate=0.05,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        eval_metric="logloss",
+        random_state=42,
+        n_jobs=4,
     )
     model.fit(train_df[FEATURES + ["is_long"]], y)
     return model
@@ -85,7 +103,9 @@ def _top_tercile_pf(oos_df: pd.DataFrame, proba: np.ndarray, frac: float = TOP_F
 def run() -> None:
     raw = _fetch()
     df = _prepare(raw)
-    print(f"HA_Cross (Long+Short) — ham sinyal: {len(raw):,} | özellik-tam (NaN atıldı): {len(df):,}\n")
+    print(
+        f"HA_Cross (Long+Short) — ham sinyal: {len(raw):,} | özellik-tam (NaN atıldı): {len(df):,}\n"
+    )
 
     t_min, t_max = df["opened_at"].min(), df["opened_at"].max()
     mid = t_min + (t_max - t_min) / 2
@@ -104,10 +124,14 @@ def run() -> None:
     top = _top_tercile_pf(oos_df, proba_oos)
 
     print(f"{'grup':28} {'n':>6} {'WR%':>6} {'ort%':>8} {'PF':>7}")
-    print(f"{'OOS baseline (tümü)':28} {baseline.get('n',0):>6} {baseline.get('wr',0):>6} "
-          f"{baseline.get('ort_%',0):>8} {baseline.get('pf',0):>7}")
-    print(f"{'OOS üst tercil (model)':28} {top.get('n',0):>6} {top.get('wr',0):>6} "
-          f"{top.get('ort_%',0):>8} {top.get('pf',0):>7}")
+    print(
+        f"{'OOS baseline (tümü)':28} {baseline.get('n',0):>6} {baseline.get('wr',0):>6} "
+        f"{baseline.get('ort_%',0):>8} {baseline.get('pf',0):>7}"
+    )
+    print(
+        f"{'OOS üst tercil (model)':28} {top.get('n',0):>6} {top.get('wr',0):>6} "
+        f"{top.get('ort_%',0):>8} {top.get('pf',0):>7}"
+    )
 
     # split-period (üst tercil OOS'un kendi içinde)
     oos_mid = mid + (t_max - mid) / 2
@@ -116,8 +140,10 @@ def run() -> None:
     sel_df = oos_df[sel_mask]
     s1 = _stats(sel_df[sel_df["opened_at"] < oos_mid]["realized_pnl"].to_numpy() / 100)
     s2 = _stats(sel_df[sel_df["opened_at"] >= oos_mid]["realized_pnl"].to_numpy() / 100)
-    print(f"\nsplit-period (üst tercil): ilk_yari n={s1.get('n',0)} PF={s1.get('pf',0)} | "
-          f"ikinci_yari n={s2.get('n',0)} PF={s2.get('pf',0)}")
+    print(
+        f"\nsplit-period (üst tercil): ilk_yari n={s1.get('n',0)} PF={s1.get('pf',0)} | "
+        f"ikinci_yari n={s2.get('n',0)} PF={s2.get('pf',0)}"
+    )
 
     # Placebo: IS etiketlerini karıştır, yeniden eğit, aynı seçimi OOS'ta tekrarla
     rng = np.random.default_rng(42)
@@ -135,8 +161,10 @@ def run() -> None:
     if placebo_pfs:
         arr = np.array(placebo_pfs)
         rank = float((arr < real_pf).mean() * 100)
-        print(f"\nplacebo (n={len(arr)}): ort={arr.mean():.3f} p90={np.percentile(arr,90):.3f} "
-              f"max={arr.max():.3f} | gerçek PF={real_pf:.3f} (placebo'nun %{rank:.0f}'ini geçiyor)")
+        print(
+            f"\nplacebo (n={len(arr)}): ort={arr.mean():.3f} p90={np.percentile(arr,90):.3f} "
+            f"max={arr.max():.3f} | gerçek PF={real_pf:.3f} (placebo'nun %{rank:.0f}'ini geçiyor)"
+        )
 
     print("\nÖzellik önem sırası (gerçek model):")
     importances = sorted(

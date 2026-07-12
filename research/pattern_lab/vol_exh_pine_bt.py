@@ -5,15 +5,21 @@ nokta ölçülmüştü — "tam sönme/≤20" yerine gerçek formül: sıcakken 
 işaretlediği (üçgen etiket) nokta — trader ekranlarındaki ok da bu türden
 bir geçiş anına işaret ediyordu, tam mavi dibe değil.
 """
+
 import os
 import sys
 
 import numpy as np
-import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from research.pattern_lab.vol_exhaustion_bt import HORIZONS_BARS, MIN_BARS, _fwd_returns, _stats, _vol_rank
+from research.pattern_lab.vol_exhaustion_bt import (
+    HORIZONS_BARS,
+    MIN_BARS,
+    _fwd_returns,
+    _stats,
+    _vol_rank,
+)
 from research.pattern_lab.vol_exhaustion_sr_bt import _fetch, _sr_flags
 
 EXH_LEVEL = 75.0
@@ -24,7 +30,7 @@ EXH_COOLDOWN = 3
 def _pine_exh_events(rank: np.ndarray) -> list[int]:
     """Pine'ın BİREBİR formülü: exhaustion_signal = rank[i-1]>75 AND
     (rank[i-1]-rank[i])>=5 AND (i-last)>3. İşaretlenen gerçek nokta budur."""
-    idx, last = [], -10**9
+    idx, last = [], -(10**9)
     for i in range(1, len(rank)):
         r0, r1 = rank[i - 1], rank[i]
         if np.isnan(r0) or np.isnan(r1):
@@ -67,16 +73,22 @@ def run():
             fwd_exh_support[h].append(_fwd_returns(close, exh_support_idx, bars))
             fwd_base[h].append(_fwd_returns(close, all_idx, bars))
 
-    print(f"analize giren sembol: {n_syms} | Pine-EXH olay: {n_exh} | EXH∧support: {n_exh_support}\n")
+    print(
+        f"analize giren sembol: {n_syms} | Pine-EXH olay: {n_exh} | EXH∧support: {n_exh_support}\n"
+    )
     print(f"{'ufuk':6} {'grup':28} {'n':>7} {'WR%':>6} {'ort%':>8} {'PF':>7}")
     for h in HORIZONS_BARS:
-        for name, store in (("baseline", fwd_base),
-                            ("Pine-EXH (gerçek işaret)", fwd_exh),
-                            ("Pine-EXH ∧ near_support", fwd_exh_support)):
+        for name, store in (
+            ("baseline", fwd_base),
+            ("Pine-EXH (gerçek işaret)", fwd_exh),
+            ("Pine-EXH ∧ near_support", fwd_exh_support),
+        ):
             rets = np.concatenate(store[h]) if store[h] else np.array([])
             s = _stats(rets)
-            print(f"{h:6} {name:28} {s.get('n',0):>7} {s.get('wr',0):>6} "
-                  f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+            print(
+                f"{h:6} {name:28} {s.get('n',0):>7} {s.get('wr',0):>6} "
+                f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+            )
         print()
 
 

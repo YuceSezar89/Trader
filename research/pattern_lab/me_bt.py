@@ -18,6 +18,7 @@ test ediyor. Kapsam 5m/15m ile sınırlı (_SIGNAL_GENERATION_TFS).
 
 Kullanım: python -m research.pattern_lab.me_bt
 """
+
 import os
 import sys
 
@@ -68,13 +69,16 @@ def _fetch_bars(cur, symbol: str, interval: str, opened_at) -> "pd.DataFrame | N
     cagg = _CAGG.get(interval)
     if not cagg:
         return None
-    cur.execute(f"""
+    cur.execute(
+        f"""
         SELECT bucket AS open_time, open, high, low, close, volume
         FROM {cagg}
         WHERE symbol = %s AND bucket <= %s
         ORDER BY bucket DESC
         LIMIT %s
-    """, (symbol, opened_at, _BARS_NEEDED))
+    """,
+        (symbol, opened_at, _BARS_NEEDED),
+    )
     rows = cur.fetchall()
     if not rows:
         return None
@@ -83,13 +87,15 @@ def _fetch_bars(cur, symbol: str, interval: str, opened_at) -> "pd.DataFrame | N
 
 
 def _fetch_signals(cur) -> list:
-    cur.execute("""
+    cur.execute(
+        """
         SELECT id, symbol, interval, opened_at, signal_type, realized_pnl
         FROM signals
         WHERE status='closed' AND realized_pnl IS NOT NULL
           AND interval IN ('5m', '15m')
         ORDER BY symbol, interval, opened_at
-    """)
+    """
+    )
     return cur.fetchall()
 
 
@@ -104,8 +110,11 @@ def _report_correlation(df: pd.DataFrame, label: str) -> None:
 
 def main() -> None:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
@@ -120,11 +129,16 @@ def main() -> None:
         me = _compute_me(bars)
         if me is None:
             continue
-        rows.append({
-            "symbol": sig["symbol"], "signal_type": sig["signal_type"],
-            "interval": sig["interval"], "opened_at": sig["opened_at"],
-            "me": me, "realized_pnl": sig["realized_pnl"],
-        })
+        rows.append(
+            {
+                "symbol": sig["symbol"],
+                "signal_type": sig["signal_type"],
+                "interval": sig["interval"],
+                "opened_at": sig["opened_at"],
+                "me": me,
+                "realized_pnl": sig["realized_pnl"],
+            }
+        )
         if i % 5000 == 0:
             print(f"  [{i}/{len(signals)}] işlendi, {len(rows)} geçerli ME")
 

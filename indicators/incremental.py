@@ -15,6 +15,7 @@ modül SADECE canlı akıştaki (bar kapanışı) güncellemeler için kullanıl
 MA200 ve momentum (ROC) burada YOK — bunlar N-bar-önceki ham fiyata ihtiyaç
 duyar, state gerektirmez; çağıran taraf buffer'dan doğrudan okuyup ekler.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -43,6 +44,7 @@ RESYNC_INTERVAL = 200
 @dataclass
 class IndicatorState:
     """Bir sembol+TF çifti için incremental hesaplama durumu."""
+
     rsi_fast_avg_gain: float
     rsi_fast_avg_loss: float
     rsi_slow_avg_gain: float
@@ -89,10 +91,18 @@ def bootstrap_state(df: pd.DataFrame) -> IndicatorState:
     delta = close.diff()
     gain = delta.where(delta > 0, 0)
     loss = -delta.where(delta < 0, 0)
-    rsi_fast_avg_gain = gain.ewm(alpha=1 / Config.RSI_FAST_WINDOW, min_periods=Config.RSI_FAST_WINDOW, adjust=False).mean()
-    rsi_fast_avg_loss = loss.ewm(alpha=1 / Config.RSI_FAST_WINDOW, min_periods=Config.RSI_FAST_WINDOW, adjust=False).mean()
-    rsi_slow_avg_gain = gain.ewm(alpha=1 / Config.RSI_SLOW_WINDOW, min_periods=Config.RSI_SLOW_WINDOW, adjust=False).mean()
-    rsi_slow_avg_loss = loss.ewm(alpha=1 / Config.RSI_SLOW_WINDOW, min_periods=Config.RSI_SLOW_WINDOW, adjust=False).mean()
+    rsi_fast_avg_gain = gain.ewm(
+        alpha=1 / Config.RSI_FAST_WINDOW, min_periods=Config.RSI_FAST_WINDOW, adjust=False
+    ).mean()
+    rsi_fast_avg_loss = loss.ewm(
+        alpha=1 / Config.RSI_FAST_WINDOW, min_periods=Config.RSI_FAST_WINDOW, adjust=False
+    ).mean()
+    rsi_slow_avg_gain = gain.ewm(
+        alpha=1 / Config.RSI_SLOW_WINDOW, min_periods=Config.RSI_SLOW_WINDOW, adjust=False
+    ).mean()
+    rsi_slow_avg_loss = loss.ewm(
+        alpha=1 / Config.RSI_SLOW_WINDOW, min_periods=Config.RSI_SLOW_WINDOW, adjust=False
+    ).mean()
 
     # --- MACD (core.py:calculate_macd ile aynı) ---
     ema_fast = close.ewm(span=_MACD_FAST, adjust=False).mean()
@@ -212,12 +222,20 @@ def update_state(state: IndicatorState, new_bar: dict) -> dict:
     alpha_fast = 1.0 / Config.RSI_FAST_WINDOW
     state.rsi_fast_avg_gain += alpha_fast * (gain - state.rsi_fast_avg_gain)
     state.rsi_fast_avg_loss += alpha_fast * (loss - state.rsi_fast_avg_loss)
-    rsi_fast = 100.0 if state.rsi_fast_avg_loss == 0 else 100 - (100 / (1 + state.rsi_fast_avg_gain / state.rsi_fast_avg_loss))
+    rsi_fast = (
+        100.0
+        if state.rsi_fast_avg_loss == 0
+        else 100 - (100 / (1 + state.rsi_fast_avg_gain / state.rsi_fast_avg_loss))
+    )
 
     alpha_slow = 1.0 / Config.RSI_SLOW_WINDOW
     state.rsi_slow_avg_gain += alpha_slow * (gain - state.rsi_slow_avg_gain)
     state.rsi_slow_avg_loss += alpha_slow * (loss - state.rsi_slow_avg_loss)
-    rsi_slow = 100.0 if state.rsi_slow_avg_loss == 0 else 100 - (100 / (1 + state.rsi_slow_avg_gain / state.rsi_slow_avg_loss))
+    rsi_slow = (
+        100.0
+        if state.rsi_slow_avg_loss == 0
+        else 100 - (100 / (1 + state.rsi_slow_avg_gain / state.rsi_slow_avg_loss))
+    )
 
     result[f"rsi_{Config.RSI_FAST_WINDOW}"] = rsi_fast
     result[f"rsi_{Config.RSI_SLOW_WINDOW}"] = rsi_slow
@@ -255,7 +273,9 @@ def update_state(state: IndicatorState, new_bar: dict) -> dict:
     state.adx_minus_dm_rma += alpha_di * (minus_dm - state.adx_minus_dm_rma)
 
     plus_di = 100 * state.adx_plus_dm_rma / state.adx_truerange if state.adx_truerange != 0 else 0.0
-    minus_di = 100 * state.adx_minus_dm_rma / state.adx_truerange if state.adx_truerange != 0 else 0.0
+    minus_di = (
+        100 * state.adx_minus_dm_rma / state.adx_truerange if state.adx_truerange != 0 else 0.0
+    )
     sum_di = plus_di + minus_di
     dx = abs(plus_di - minus_di) / (sum_di if sum_di != 0 else 1.0)
     alpha_adx = 1.0 / _ADX_ADXLEN
@@ -272,8 +292,12 @@ def update_state(state: IndicatorState, new_bar: dict) -> dict:
     upper_b = hl2 + _ST_FACTOR * state.st_atr
     lower_b = hl2 - _ST_FACTOR * state.st_atr
 
-    new_upper = upper_b if (upper_b < state.st_upper or prev_close > state.st_upper) else state.st_upper
-    new_lower = lower_b if (lower_b > state.st_lower or prev_close < state.st_lower) else state.st_lower
+    new_upper = (
+        upper_b if (upper_b < state.st_upper or prev_close > state.st_upper) else state.st_upper
+    )
+    new_lower = (
+        lower_b if (lower_b > state.st_lower or prev_close < state.st_lower) else state.st_lower
+    )
 
     if state.st_direction == -1:
         new_direction = 1.0 if close < new_lower else -1.0

@@ -75,16 +75,21 @@ class AsyncioBinanceStream:
                 async with websockets.connect(
                     self.url, ping_interval=self.ping_interval, ping_timeout=self.ping_timeout
                 ) as ws:
-                    await ws.send(json.dumps({
-                        "method": "SUBSCRIBE",
-                        "params": self.streams,
-                        "id": self.connection_id,
-                    }))
+                    await ws.send(
+                        json.dumps(
+                            {
+                                "method": "SUBSCRIBE",
+                                "params": self.streams,
+                                "id": self.connection_id,
+                            }
+                        )
+                    )
                     self.is_connected = True
                     self.last_message_time = time.time()
                     logger.info(
                         "[AsyncioWS #%d] Bağlandı, %d stream'e subscribe olundu.",
-                        self.connection_id, len(self.streams),
+                        self.connection_id,
+                        len(self.streams),
                     )
                     reconnect_delay = 1.0
 
@@ -95,7 +100,9 @@ class AsyncioBinanceStream:
                         except Exception as exc:  # pylint: disable=broad-exception-caught
                             logger.error(
                                 "[AsyncioWS #%d] Mesaj işleme hatası: %s",
-                                self.connection_id, exc, exc_info=True,
+                                self.connection_id,
+                                exc,
+                                exc_info=True,
                             )
             except asyncio.CancelledError:
                 raise
@@ -103,7 +110,9 @@ class AsyncioBinanceStream:
                 self.is_connected = False
                 logger.warning(
                     "[AsyncioWS #%d] Bağlantı koptu (%s), %.0fs sonra tekrar denenecek",
-                    self.connection_id, exc, reconnect_delay,
+                    self.connection_id,
+                    exc,
+                    reconnect_delay,
                 )
                 await asyncio.sleep(reconnect_delay)
                 reconnect_delay = min(reconnect_delay * 2, 30.0)
@@ -137,7 +146,7 @@ class AsyncioBinanceStreamManager:
 
     async def start(self, all_streams: List[str]) -> Dict[int, AsyncioBinanceStream]:
         chunks = [
-            all_streams[i:i + self.max_streams_per_connection]
+            all_streams[i : i + self.max_streams_per_connection]
             for i in range(0, len(all_streams), self.max_streams_per_connection)
         ]
         for i, chunk in enumerate(chunks):
@@ -148,7 +157,9 @@ class AsyncioBinanceStreamManager:
                 base_url=self.base_url,
                 on_message=self.on_message,
             )
-            logger.info("[AsyncioWS] Connection #%d: %d stream başlatılıyor...", conn_id, len(chunk))
+            logger.info(
+                "[AsyncioWS] Connection #%d: %d stream başlatılıyor...", conn_id, len(chunk)
+            )
             conn.start()
             self.connections[conn_id] = conn
             await asyncio.sleep(0.25)  # production'daki gibi bağlantıları stagger et

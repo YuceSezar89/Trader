@@ -8,8 +8,8 @@ Kullanım:
 """
 
 import asyncio
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -18,9 +18,9 @@ import redis as redis_sync
 
 from database.crud import get_recent_klines
 from indicators.core import add_all_indicators
+from utils.logger import get_logger
 from utils.redis_client import RedisClient
 from utils.timeframe_aggregator import TimeframeAggregator
-from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -35,7 +35,7 @@ def _current_bar_count(symbol: str, tf: str) -> int:
     if not raw:
         return 0
     try:
-        data = raw[len(_ARROW_MAGIC):]
+        data = raw[len(_ARROW_MAGIC) :]
         reader = pa.ipc.open_stream(data)
         return len(reader.read_pandas())
     except Exception:

@@ -14,6 +14,7 @@ riskinden kaçınmak için ([[project_pattern_lab]]).
 Metrikler `signals` tablosunda sinyal AÇILIŞ anında kaydediliyor (look-ahead
 yok) — database/models.py::Signal.
 """
+
 import os
 import sys
 
@@ -25,21 +26,35 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from config import Config  # pylint: disable=wrong-import-position
 from research.pattern_lab.threshold_optimizer import (  # pylint: disable=wrong-import-position
-    MIN_N, _apply_rule, _pf, _rule_text, _single_var_placebo_distribution, _single_var_search,
+    MIN_N,
+    _apply_rule,
+    _pf,
+    _rule_text,
+    _single_var_placebo_distribution,
+    _single_var_search,
 )
 
 INDICATOR = "HA_Cross"
 DIRECTIONS = ["Long", "Short"]
 METRICS = [
-    "alpha", "beta", "vp_buy_avg", "vp_sell_avg",
-    "cvd_slope", "vpmv_pre_avg", "vpmv_ratio", "vpmv_slope",
+    "alpha",
+    "beta",
+    "vp_buy_avg",
+    "vp_sell_avg",
+    "cvd_slope",
+    "vpmv_pre_avg",
+    "vpmv_ratio",
+    "vpmv_slope",
 ]
 
 
 def _fetch(indicator: str, direction: str, col: str) -> pd.DataFrame:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     q = f"""
         SELECT {col}, realized_pnl, opened_at
@@ -83,29 +98,47 @@ def _test_metric(direction: str, col: str) -> dict:
         arr = np.array(placebo_pfs)
         rank = float((arr < is_pf).mean() * 100)
 
-    verdict = "GEÇERLİ ADAY" if (
-        rank >= 90 and oos_stats.get("pf", 0) > oos_baseline.get("pf", 0)
-        and s1.get("pf", 0) > 1 and s2.get("pf", 0) > 1 and s1.get("n", 0) >= 20 and s2.get("n", 0) >= 20
-    ) else "zayıf"
+    verdict = (
+        "GEÇERLİ ADAY"
+        if (
+            rank >= 90
+            and oos_stats.get("pf", 0) > oos_baseline.get("pf", 0)
+            and s1.get("pf", 0) > 1
+            and s2.get("pf", 0) > 1
+            and s1.get("n", 0) >= 20
+            and s2.get("n", 0) >= 20
+        )
+        else "zayıf"
+    )
 
     print(f"  {col:14} n={n:>5}  kural={_rule_text(rule)}")
-    print(f"                 OOS: baseline_PF={oos_baseline.get('pf',0):.3f} → "
-          f"filtreli_PF={oos_stats.get('pf',0):.3f} (n={oos_stats.get('n',0)}) | "
-          f"split ilk={s1.get('pf',0):.3f}(n={s1.get('n',0)}) ikinci={s2.get('pf',0):.3f}(n={s2.get('n',0)}) | "
-          f"placebo=%{rank:.0f} → {verdict}")
+    print(
+        f"                 OOS: baseline_PF={oos_baseline.get('pf',0):.3f} → "
+        f"filtreli_PF={oos_stats.get('pf',0):.3f} (n={oos_stats.get('n',0)}) | "
+        f"split ilk={s1.get('pf',0):.3f}(n={s1.get('n',0)}) ikinci={s2.get('pf',0):.3f}(n={s2.get('n',0)}) | "
+        f"placebo=%{rank:.0f} → {verdict}"
+    )
 
     return {
-        "metric": col, "direction": direction, "n": n,
-        "is_pf": is_pf, "oos_baseline_pf": oos_baseline.get("pf", 0),
-        "oos_filtered_pf": oos_stats.get("pf", 0), "oos_n": oos_stats.get("n", 0),
-        "s1_pf": s1.get("pf", 0), "s2_pf": s2.get("pf", 0),
-        "placebo_rank": rank, "verdict": verdict,
+        "metric": col,
+        "direction": direction,
+        "n": n,
+        "is_pf": is_pf,
+        "oos_baseline_pf": oos_baseline.get("pf", 0),
+        "oos_filtered_pf": oos_stats.get("pf", 0),
+        "oos_n": oos_stats.get("n", 0),
+        "s1_pf": s1.get("pf", 0),
+        "s2_pf": s2.get("pf", 0),
+        "placebo_rank": rank,
+        "verdict": verdict,
     }
 
 
 def run() -> None:
-    print(f"HA_Cross — {len(METRICS)} metrik × {len(DIRECTIONS)} yön = "
-          f"{len(METRICS)*len(DIRECTIONS)} tekli test\n")
+    print(
+        f"HA_Cross — {len(METRICS)} metrik × {len(DIRECTIONS)} yön = "
+        f"{len(METRICS)*len(DIRECTIONS)} tekli test\n"
+    )
 
     results = []
     for direction in DIRECTIONS:
@@ -114,17 +147,23 @@ def run() -> None:
             results.append(_test_metric(direction, col))
 
     print(f"\n\n{'='*70}\nÖZET (placebo sırasına göre)\n{'='*70}")
-    print(f"{'yön':6} {'metrik':14} {'n':>6} {'OOS_taban':>10} {'OOS_filtre':>11} {'plasebo%':>9} {'sonuç':>14}")
+    print(
+        f"{'yön':6} {'metrik':14} {'n':>6} {'OOS_taban':>10} {'OOS_filtre':>11} {'plasebo%':>9} {'sonuç':>14}"
+    )
     for r in sorted(results, key=lambda x: -x.get("placebo_rank", 0)):
         if r.get("verdict") == "yetersiz":
             continue
-        print(f"{r['direction']:6} {r['metric']:14} {r['n']:>6} "
-              f"{r.get('oos_baseline_pf',0):>10.3f} {r.get('oos_filtered_pf',0):>11.3f} "
-              f"{r.get('placebo_rank',0):>9.0f} {r['verdict']:>14}")
+        print(
+            f"{r['direction']:6} {r['metric']:14} {r['n']:>6} "
+            f"{r.get('oos_baseline_pf',0):>10.3f} {r.get('oos_filtered_pf',0):>11.3f} "
+            f"{r.get('placebo_rank',0):>9.0f} {r['verdict']:>14}"
+        )
 
     survivors = [r for r in results if r.get("verdict") == "GEÇERLİ ADAY"]
-    print(f"\n>>> {len(survivors)} metrik tam disiplini geçti: "
-          f"{[(r['direction'], r['metric']) for r in survivors]}")
+    print(
+        f"\n>>> {len(survivors)} metrik tam disiplini geçti: "
+        f"{[(r['direction'], r['metric']) for r in survivors]}"
+    )
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ RSI_Cross 15m tabanlı olduğu için onay TF'leri (do_kirilimi ile aynı
 gerekçeyle) 1h + 4h — DB'de native 30m/45m yok. Kural: sinyal Long ise
 1h VE 4h'nin son kapanmış HA barı bullish olmalı (2/2 TAM onay).
 """
+
 import os
 import sys
 
@@ -19,12 +20,24 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from config import Config  # pylint: disable=wrong-import-position
 from indicators.core import calculate_rsi  # pylint: disable=wrong-import-position
-from utils.vpmv import compute_series  # pylint: disable=wrong-import-position
+from research.pattern_lab.do_open_streak_bt import (  # pylint: disable=wrong-import-position
+    HORIZON_BARS,
+    MIN_BARS,
+)
 from research.pattern_lab.features import _atr  # pylint: disable=wrong-import-position
-from research.pattern_lab.do_open_streak_bt import HORIZON_BARS, MIN_BARS  # pylint: disable=wrong-import-position
-from research.pattern_lab.mtf_helpers import _fetch_dir_data, _confirm_count  # pylint: disable=wrong-import-position
-from research.pattern_lab.rsi_cross_sl_sweep_bt import _rsi_cross_events, _apply_signal_filter  # pylint: disable=wrong-import-position
-from research.pattern_lab.rsi_cross_combined_sl_bt import _fetch_with_volume, _report  # pylint: disable=wrong-import-position
+from research.pattern_lab.mtf_helpers import (  # pylint: disable=wrong-import-position
+    _confirm_count,
+    _fetch_dir_data,
+)
+from research.pattern_lab.rsi_cross_combined_sl_bt import (  # pylint: disable=wrong-import-position
+    _fetch_with_volume,
+    _report,
+)
+from research.pattern_lab.rsi_cross_sl_sweep_bt import (  # pylint: disable=wrong-import-position
+    _apply_signal_filter,
+    _rsi_cross_events,
+)
+from utils.vpmv import compute_series  # pylint: disable=wrong-import-position
 
 CONFIRM_TFS = ["1h", "4h"]
 
@@ -58,8 +71,12 @@ def run():
         dir_data = _fetch_dir_data(sym, CONFIRM_TFS)
 
         for i, direction in filtered_events:
-            if i + HORIZON_BARS >= len(c) or i - 1 < 0 or i + 1 >= len(g) \
-                    or not (np.isfinite(atr[i]) and atr[i] > 0):
+            if (
+                i + HORIZON_BARS >= len(c)
+                or i - 1 < 0
+                or i + 1 >= len(g)
+                or not (np.isfinite(atr[i]) and atr[i] > 0)
+            ):
                 continue
             series = series_long if direction == "Long" else series_short
             pre_v, post_v = series.iloc[i - 1], series.iloc[i + 1]
@@ -72,9 +89,20 @@ def run():
                     dir_data, CONFIRM_TFS, ts.iloc[i], want_bullish=(direction == "Long")
                 )
 
-            clean_events.append((
-                direction, h, l, c, atr[i], i, c[i], ts.iloc[i], post_v - pre_v, confirm_count,
-            ))
+            clean_events.append(
+                (
+                    direction,
+                    h,
+                    l,
+                    c,
+                    atr[i],
+                    i,
+                    c[i],
+                    ts.iloc[i],
+                    post_v - pre_v,
+                    confirm_count,
+                )
+            )
 
     t_min = min(e[7] for e in clean_events)
     t_max = max(e[7] for e in clean_events)
@@ -98,14 +126,22 @@ def run():
     oos_mid = mid + (t_max - mid) / 2
     half_days = oos_days / 2
 
-    for dir_label, direction in (("LONG+SHORT (birlikte)", None), ("SADECE LONG", "Long"), ("SADECE SHORT", "Short")):
+    for dir_label, direction in (
+        ("LONG+SHORT (birlikte)", None),
+        ("SADECE LONG", "Long"),
+        ("SADECE SHORT", "Short"),
+    ):
         vo = vpmv_only if direction is None else _by_dir(vpmv_only, direction)
         vm = vpmv_mtf if direction is None else _by_dir(vpmv_mtf, direction)
 
         print(f"\n\n╔══════════ {dir_label} ══════════╗")
         print("\n════ TÜM OOS ════")
         _report("VPMV sıçraması (MTF'siz, v2-18)", [e[:7] for e in vo], oos_days)
-        _report(f"VPMV + MTF onayı ({len(CONFIRM_TFS)}/{len(CONFIRM_TFS)}, 1h+4h)", [e[:7] for e in vm], oos_days)
+        _report(
+            f"VPMV + MTF onayı ({len(CONFIRM_TFS)}/{len(CONFIRM_TFS)}, 1h+4h)",
+            [e[:7] for e in vm],
+            oos_days,
+        )
 
         print(f"\n════ OOS — İLK YARI (biten: {oos_mid}) ════")
         _report("VPMV sıçraması (MTF'siz)", [e[:7] for e in vo if e[7] < oos_mid], half_days)

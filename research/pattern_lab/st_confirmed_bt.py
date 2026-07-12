@@ -12,6 +12,7 @@ st_confirmed sabit bir boolean (aranacak/kalibre edilecek bir eşik yok),
 bu yüzden threshold_optimizer'ın percentile arama/placebo aygıtına gerek
 yok — doğrudan True/False karşılaştırması + split-period sağlamlık yeterli.
 """
+
 import os
 import sys
 
@@ -29,8 +30,11 @@ DIRECTIONS = ["Long", "Short"]
 
 def _fetch(indicator: str, direction: str) -> pd.DataFrame:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     q = """
         SELECT st_confirmed, realized_pnl, opened_at
@@ -51,18 +55,26 @@ def _pf(df: pd.DataFrame) -> dict:
 
 def _report(df: pd.DataFrame) -> None:
     confirmed = df[df["st_confirmed"] == True]  # noqa: E712  pylint: disable=singleton-comparison
-    unconfirmed = df[df["st_confirmed"] == False]  # noqa: E712  pylint: disable=singleton-comparison
+    unconfirmed = df[
+        df["st_confirmed"] == False
+    ]  # noqa: E712  pylint: disable=singleton-comparison
 
     baseline = _pf(df)
     print(f"{'grup':20} {'n':>7} {'WR%':>6} {'ort%':>8} {'PF':>7}")
-    print(f"{'baseline (tümü)':20} {baseline.get('n',0):>7} {baseline.get('wr',0):>6} "
-          f"{baseline.get('ort_%',0):>8} {baseline.get('pf',0):>7}")
+    print(
+        f"{'baseline (tümü)':20} {baseline.get('n',0):>7} {baseline.get('wr',0):>6} "
+        f"{baseline.get('ort_%',0):>8} {baseline.get('pf',0):>7}"
+    )
     s_c = _pf(confirmed)
-    print(f"{'st_confirmed=True':20} {s_c.get('n',0):>7} {s_c.get('wr',0):>6} "
-          f"{s_c.get('ort_%',0):>8} {s_c.get('pf',0):>7}")
+    print(
+        f"{'st_confirmed=True':20} {s_c.get('n',0):>7} {s_c.get('wr',0):>6} "
+        f"{s_c.get('ort_%',0):>8} {s_c.get('pf',0):>7}"
+    )
     s_u = _pf(unconfirmed)
-    print(f"{'st_confirmed=False':20} {s_u.get('n',0):>7} {s_u.get('wr',0):>6} "
-          f"{s_u.get('ort_%',0):>8} {s_u.get('pf',0):>7}")
+    print(
+        f"{'st_confirmed=False':20} {s_u.get('n',0):>7} {s_u.get('wr',0):>6} "
+        f"{s_u.get('ort_%',0):>8} {s_u.get('pf',0):>7}"
+    )
 
     if len(df) < 60:
         return

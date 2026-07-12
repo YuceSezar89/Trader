@@ -16,8 +16,8 @@ def update_trailing(pos, price: float, dist: float) -> Optional[str]:
     trailing_stop_price alanları olan ORM nesnesi (Signal | PaperTrade).
     trailing_stop_price yerinde güncellenebilir.
     """
-    sl    = pos.stop_loss_price
-    tp    = pos.take_profit_price
+    sl = pos.stop_loss_price
+    tp = pos.take_profit_price
     trail = pos.trailing_stop_price
 
     if pos.signal_type == "Long":

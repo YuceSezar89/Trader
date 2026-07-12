@@ -5,6 +5,7 @@ BAĞIMSIZ tekrarlanıyor mu, yoksa tek bir rejime mi özgü? Rolling/state
 hesapları tam seri üzerinde yapılır (warmup bozulmasın), olaylar sonradan
 zaman damgasına göre iki kovaya ayrılır — vol_exh_split_check.py ile aynı desen.
 """
+
 import os
 import sys
 
@@ -13,11 +14,20 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from signals.do_kirilimi import _daily_open  # pylint: disable=wrong-import-position
-from research.pattern_lab.vol_exhaustion_bt import _fwd_returns, _stats  # pylint: disable=wrong-import-position
 from research.pattern_lab.do_open_streak_bt import (  # pylint: disable=wrong-import-position
-    DAYS, HORIZON_BARS, MIN_BARS, STREAK_THRESHOLDS, _do_break_gate, _fetch, _streak_events,
+    DAYS,
+    HORIZON_BARS,
+    MIN_BARS,
+    STREAK_THRESHOLDS,
+    _do_break_gate,
+    _fetch,
+    _streak_events,
 )
+from research.pattern_lab.vol_exhaustion_bt import (  # pylint: disable=wrong-import-position
+    _fwd_returns,
+    _stats,
+)
+from signals.do_kirilimi import _daily_open  # pylint: disable=wrong-import-position
 
 
 def run():
@@ -71,8 +81,10 @@ def run():
         for gname in groups:
             rets = np.concatenate(res[half][gname]) if res[half][gname] else np.array([])
             s = _stats(rets)
-            print(f"{gname:20} {s.get('n',0):>7} {s.get('wr',0):>6} "
-                  f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+            print(
+                f"{gname:20} {s.get('n',0):>7} {s.get('wr',0):>6} "
+                f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+            )
         print()
 
 

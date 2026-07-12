@@ -30,12 +30,12 @@ logger = logging.getLogger(__name__)
 
 # Interval → milisaniye
 _INTERVAL_MS: dict[str, int] = {
-    "1m":  60_000,
-    "5m":  300_000,
+    "1m": 60_000,
+    "5m": 300_000,
     "15m": 900_000,
-    "1h":  3_600_000,
-    "4h":  14_400_000,
-    "1d":  86_400_000,
+    "1h": 3_600_000,
+    "4h": 14_400_000,
+    "1d": 86_400_000,
 }
 
 
@@ -81,9 +81,13 @@ def find_gaps(symbol: str, interval: str, days: int) -> list[tuple[int, int]]:
     return gaps
 
 
-async def _fetch_with_ban_retry(symbol: str, interval: str, start_ms: int) -> Optional[pd.DataFrame]:
+async def _fetch_with_ban_retry(
+    symbol: str, interval: str, start_ms: int
+) -> Optional[pd.DataFrame]:
     """Kline verisi çeker — ban (-1003) gelirse ban kalkana kadar bekler."""
-    import time, re
+    import re
+    import time
+
     import aiohttp
 
     url = (
@@ -99,7 +103,7 @@ async def _fetch_with_ban_retry(symbol: str, interval: str, start_ms: int) -> Op
 
             if isinstance(data, dict):
                 code = data.get("code", 0)
-                msg  = data.get("msg", "")
+                msg = data.get("msg", "")
                 if code == -1003:  # IP ban
                     match = re.search(r"banned until (\d+)", msg)
                     if match:
@@ -113,13 +117,33 @@ async def _fetch_with_ban_retry(symbol: str, interval: str, start_ms: int) -> Op
                 logger.warning("[%s] API hatası: %s", symbol, data)
                 return None
 
-            df = pd.DataFrame(data, columns=[
-                "open_time", "open", "high", "low", "close", "volume",
-                "close_time", "quote_asset_volume", "number_of_trades",
-                "taker_buy_base_asset_volume", "taker_buy_quote_asset_volume", "ignore",
-            ])
-            df = df.astype({"open_time": int, "open": float, "high": float,
-                            "low": float, "close": float, "volume": float})
+            df = pd.DataFrame(
+                data,
+                columns=[
+                    "open_time",
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "volume",
+                    "close_time",
+                    "quote_asset_volume",
+                    "number_of_trades",
+                    "taker_buy_base_asset_volume",
+                    "taker_buy_quote_asset_volume",
+                    "ignore",
+                ],
+            )
+            df = df.astype(
+                {
+                    "open_time": int,
+                    "open": float,
+                    "high": float,
+                    "low": float,
+                    "close": float,
+                    "volume": float,
+                }
+            )
             return df
 
         except Exception as exc:
@@ -172,9 +196,10 @@ async def process_symbol(symbol: str, interval: str, days: int) -> int:
     total = 0
     for gap_start, gap_end in gaps:
         from datetime import datetime
+
         start_str = datetime.fromtimestamp(gap_start / 1000).strftime("%m/%d %H:%M")
-        end_str   = datetime.fromtimestamp(gap_end   / 1000).strftime("%m/%d %H:%M")
-        gap_min   = (gap_end - gap_start) / 60_000
+        end_str = datetime.fromtimestamp(gap_end / 1000).strftime("%m/%d %H:%M")
+        gap_min = (gap_end - gap_start) / 60_000
         logger.info("[%s] Gap: %s → %s (%.0f dk)", symbol, start_str, end_str, gap_min)
 
         added = await fill_gap(symbol, interval, gap_start, gap_end)
@@ -209,10 +234,11 @@ async def main(
     # Gap tespiti
     logger.info("Gap analizi yapılıyor...")
     gap_counts = {s: find_gaps(s, interval, days) for s in symbols}
-    need_fill  = {s: g for s, g in gap_counts.items() if g}
+    need_fill = {s: g for s, g in gap_counts.items() if g}
     logger.info(
         "%d / %d sembolde gap var (toplam %d gap)",
-        len(need_fill), len(symbols),
+        len(need_fill),
+        len(symbols),
         sum(len(g) for g in need_fill.values()),
     )
 

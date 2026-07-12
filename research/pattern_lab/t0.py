@@ -9,6 +9,7 @@ fazı karıştırıcısını düşürür).
 
 Çıktı: onay tablosu (kullanıcı görmeden Adım 3'e geçilmez).
 """
+
 import json
 import os
 import sys
@@ -65,15 +66,17 @@ def run() -> pd.DataFrame:
         cdf = layer_a[layer_a["symbol"] == case].sort_values("ts")
         info = detect_t0(cdf, anchor)
         t0 = info["t0"]
-        rows.append({
-            "vaka": case,
-            "t0": t0,
-            "ileri_24h_%": info["fwd_24h_pct"],
-            "onceki_48h_%": info["pre_48h_pct"],
-            "son24h_kesik_%": info["son24h_kesik_kosu_pct"],
-            "evren_n(t0)": int(uni_count.get(t0, 0)),
-            "kontrol": ctrl,
-        })
+        rows.append(
+            {
+                "vaka": case,
+                "t0": t0,
+                "ileri_24h_%": info["fwd_24h_pct"],
+                "onceki_48h_%": info["pre_48h_pct"],
+                "son24h_kesik_%": info["son24h_kesik_kosu_pct"],
+                "evren_n(t0)": int(uni_count.get(t0, 0)),
+                "kontrol": ctrl,
+            }
+        )
     out = pd.DataFrame(rows).sort_values("ileri_24h_%", ascending=False)
     out.to_parquet(f"{C.CORPUS_DIR}/t0_table.parquet", index=False)
     return out

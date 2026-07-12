@@ -15,6 +15,7 @@ kararlı bir metrik.
 
 Kullanım: python -m research.pattern_lab.evol_signed_bt
 """
+
 import warnings
 
 import numpy as np
@@ -72,8 +73,11 @@ def _report_correlation(df: pd.DataFrame, col: str, label: str) -> None:
 
 def main() -> None:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
@@ -89,12 +93,16 @@ def main() -> None:
         evol_signed = _compute_evol_signed(bars, sig["signal_type"])
         if evol_unsigned is None or evol_signed is None:
             continue
-        rows.append({
-            "symbol": sig["symbol"], "signal_type": sig["signal_type"],
-            "opened_at": sig["opened_at"],
-            "evol_unsigned": evol_unsigned, "evol_signed": evol_signed,
-            "realized_pnl": sig["realized_pnl"],
-        })
+        rows.append(
+            {
+                "symbol": sig["symbol"],
+                "signal_type": sig["signal_type"],
+                "opened_at": sig["opened_at"],
+                "evol_unsigned": evol_unsigned,
+                "evol_signed": evol_signed,
+                "realized_pnl": sig["realized_pnl"],
+            }
+        )
         if i % 5000 == 0:
             print(f"  [{i}/{len(signals)}] işlendi, {len(rows)} geçerli satır")
 
@@ -129,12 +137,18 @@ def main() -> None:
         good = sub[sub["evol_signed"] >= 65]
         bad = sub[sub["evol_signed"] < 35]
         print(f"  {sig_type}:")
-        print(f"    baseline     : n={len(baseline)}, PF={_pf(baseline['realized_pnl']):.3f}, "
-              f"WR={(baseline['realized_pnl']>0).mean()*100:.1f}%")
-        print(f"    signed>=65   : n={len(good)}, PF={_pf(good['realized_pnl']):.3f}, "
-              f"WR={(good['realized_pnl']>0).mean()*100:.1f}%")
-        print(f"    signed<35    : n={len(bad)}, PF={_pf(bad['realized_pnl']):.3f}, "
-              f"WR={(bad['realized_pnl']>0).mean()*100:.1f}%")
+        print(
+            f"    baseline     : n={len(baseline)}, PF={_pf(baseline['realized_pnl']):.3f}, "
+            f"WR={(baseline['realized_pnl']>0).mean()*100:.1f}%"
+        )
+        print(
+            f"    signed>=65   : n={len(good)}, PF={_pf(good['realized_pnl']):.3f}, "
+            f"WR={(good['realized_pnl']>0).mean()*100:.1f}%"
+        )
+        print(
+            f"    signed<35    : n={len(bad)}, PF={_pf(bad['realized_pnl']):.3f}, "
+            f"WR={(bad['realized_pnl']>0).mean()*100:.1f}%"
+        )
 
 
 if __name__ == "__main__":

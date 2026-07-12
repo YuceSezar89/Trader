@@ -4,11 +4,10 @@ en fazla 3 bar = 15 dk bayat — canlı panelin davranışına en yakın).
 
 Look-ahead güvenliği: rank_pct(t) yalnızca t ve öncesi ızgara satırlarını okur.
 """
+
 import pandas as pd
 
-from research.pattern_lab import config as C
-
-MIN_UNIVERSE = 150   # bu sayının altında kesit → sıra güvenilmez (None)
+MIN_UNIVERSE = 150  # bu sayının altında kesit → sıra güvenilmez (None)
 FFILL_LIMIT = 3
 
 
@@ -34,11 +33,18 @@ class RankProvider:
             return None
         return float((rets < rets[symbol]).mean() * 100)
 
-    def rank_series(self, symbol: str, t_end: pd.Timestamp, hours_back: int,
-                    window_bars: int, step_bars: int = 6) -> pd.Series:
+    def rank_series(
+        self,
+        symbol: str,
+        t_end: pd.Timestamp,
+        hours_back: int,
+        window_bars: int,
+        step_bars: int = 6,
+    ) -> pd.Series:
         """t_end'e kadar (dahil) geriye dönük sıra yörüngesi — 30 dk adımlarla."""
         t_end = pd.Timestamp(t_end)
-        times = pd.date_range(t_end - pd.Timedelta(hours=hours_back), t_end,
-                              freq=f"{5 * step_bars}min")
+        times = pd.date_range(
+            t_end - pd.Timedelta(hours=hours_back), t_end, freq=f"{5 * step_bars}min"
+        )
         vals = {t: self.rank_pct(symbol, t, window_bars) for t in times}
         return pd.Series(vals, dtype=float)

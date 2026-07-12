@@ -40,7 +40,7 @@ from signals.do_kirilimi import _daily_open
 logger = logging.getLogger(__name__)
 
 STREAK_THRESHOLD = 3
-GAUSS_THRESHOLD = 4.5     # research/pattern_lab/do_break_gauss_economic_bt.py OOS eşiği (~4.5)
+GAUSS_THRESHOLD = 4.5  # research/pattern_lab/do_break_gauss_economic_bt.py OOS eşiği (~4.5)
 SL_ATR_MULT = 3.0
 MAX_HOLD_HOURS = 24.0
 MIN_BARS = 100
@@ -67,8 +67,10 @@ class DoOpenStreakDetector:
                 ts = pd.to_datetime(d.index)
             ts = pd.Series(ts)
 
-            o = d["open"].to_numpy(); h = d["high"].to_numpy()
-            l = d["low"].to_numpy();  c = d["close"].to_numpy()
+            o = d["open"].to_numpy()
+            h = d["high"].to_numpy()
+            l = d["low"].to_numpy()
+            c = d["close"].to_numpy()
             n = len(d)
 
             daily_open, _ = _daily_open(ts, o)

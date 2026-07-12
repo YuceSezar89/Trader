@@ -13,6 +13,7 @@ Ayna testi: "hacim kırmızıdayken" (≥75, henüz soğumamış) giriş kötü 
 Look-ahead: sinyal SADECE geçmiş barlarla (rolling percentile + state
 machine) üretilir; ileri getiri ayrı ve sonradan ölçülür.
 """
+
 import os
 import sys
 
@@ -30,14 +31,17 @@ VOL_LEN = 100
 VOL_SMOOTH = 3
 HOT_LEVEL = 75
 COLD_LEVEL = 20
-HORIZONS_BARS = {"1h": 4, "4h": 16, "12h": 48, "24h": 96}   # 15m barlarda
+HORIZONS_BARS = {"1h": 4, "4h": 16, "12h": 48, "24h": 96}  # 15m barlarda
 MIN_BARS = 700
 
 
 def _fetch() -> pd.DataFrame:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     q = f"""
         SELECT symbol, bucket AS ts, close, volume
@@ -55,7 +59,7 @@ def _vol_rank(volume: np.ndarray) -> np.ndarray:
     n = len(smooth)
     rank = np.full(n, np.nan)
     for i in range(VOL_LEN, n):
-        w = smooth[i - VOL_LEN:i + 1]
+        w = smooth[i - VOL_LEN : i + 1]
         if np.isnan(w).any():
             continue
         rank[i] = (w < w[-1]).mean() * 100
@@ -126,16 +130,22 @@ def run():
             cold_fwd[h].append(_fwd_returns(close, cold_idx, bars))
             hot_fwd[h].append(_fwd_returns(close, hot_idx, bars))
 
-    print(f"analize giren sembol: {n_syms} | COLD olay: {n_cold_events} | HOT bar: {n_hot_events}\n")
+    print(
+        f"analize giren sembol: {n_syms} | COLD olay: {n_cold_events} | HOT bar: {n_hot_events}\n"
+    )
     print(f"{'ufuk':6} {'grup':22} {'n':>7} {'WR%':>6} {'ort%':>8} {'PF':>7}")
     for h in HORIZONS_BARS:
-        for name, store in (("baseline (tüm barlar)", baseline_fwd),
-                            ("COLD (tam sönme)", cold_fwd),
-                            ("HOT (henüz kırmızı)", hot_fwd)):
+        for name, store in (
+            ("baseline (tüm barlar)", baseline_fwd),
+            ("COLD (tam sönme)", cold_fwd),
+            ("HOT (henüz kırmızı)", hot_fwd),
+        ):
             rets = np.concatenate(store[h]) if store[h] else np.array([])
             s = _stats(rets)
-            print(f"{h:6} {name:22} {s.get('n',0):>7} {s.get('wr',0):>6} "
-                  f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+            print(
+                f"{h:6} {name:22} {s.get('n',0):>7} {s.get('wr',0):>6} "
+                f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+            )
         print()
 
 

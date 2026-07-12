@@ -10,6 +10,7 @@ Her özellik için:
 Bu bir KEŞİF çalışmasıdır: n=20 çift, ~30 özellik → şans eseri 1-2 'bulgu'
 beklenir. Hüküm Adım 5 (placebo/seed/pencere) + out-of-sample olmadan verilmez.
 """
+
 import os
 import sys
 from datetime import datetime
@@ -54,16 +55,18 @@ def run() -> pd.DataFrame:
             p = wilcoxon(diff).pvalue if (diff != 0).any() else 1.0
         except ValueError:
             p = np.nan
-        rows.append({
-            "ozellik": f,
-            "n_cift": len(pair),
-            "vaka_med": round(float(a.median()), 3),
-            "kontrol_med": round(float(b.median()), 3),
-            "fark_med": round(float(diff.median()), 3),
-            "vaka_ustun_%": round(float((diff > 0).mean() * 100), 0),
-            "wilcoxon_p": round(float(p), 4),
-            "cliffs_delta": round(cliffs_delta(a.to_numpy(), b.to_numpy()), 3),
-        })
+        rows.append(
+            {
+                "ozellik": f,
+                "n_cift": len(pair),
+                "vaka_med": round(float(a.median()), 3),
+                "kontrol_med": round(float(b.median()), 3),
+                "fark_med": round(float(diff.median()), 3),
+                "vaka_ustun_%": round(float((diff > 0).mean() * 100), 0),
+                "wilcoxon_p": round(float(p), 4),
+                "cliffs_delta": round(cliffs_delta(a.to_numpy(), b.to_numpy()), 3),
+            }
+        )
     res = pd.DataFrame(rows).sort_values("cliffs_delta", key=abs, ascending=False)
 
     os.makedirs(C.REPORT_DIR, exist_ok=True)

@@ -11,12 +11,12 @@ from typing import Optional
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QDoubleValidator
-from PyQt6.QtWidgets import QHeaderView
 from PyQt6.QtWidgets import (
     QComboBox,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QPushButton,
@@ -38,8 +38,8 @@ class ActiveSignalsPanel(QWidget):
         symbol_selected(str, str): Satıra tıklandığında (symbol, interval).
     """
 
-    symbol_selected          = pyqtSignal(str, str)
-    signal_data_selected     = pyqtSignal(dict)
+    symbol_selected = pyqtSignal(str, str)
+    signal_data_selected = pyqtSignal(dict)
     vpmv_breakdown_requested = pyqtSignal(str, str, str)  # symbol, interval, signal_type
 
     def __init__(self, parent=None):
@@ -73,9 +73,9 @@ class ActiveSignalsPanel(QWidget):
         # Filtre çubuğu
         filter_row = QHBoxLayout()
 
-        self._btn_all   = self._make_filter_btn("Hepsi",  True)
-        self._btn_long  = self._make_filter_btn("LONG",   False)
-        self._btn_short = self._make_filter_btn("SHORT",  False)
+        self._btn_all = self._make_filter_btn("Hepsi", True)
+        self._btn_long = self._make_filter_btn("LONG", False)
+        self._btn_short = self._make_filter_btn("SHORT", False)
 
         self._btn_all.clicked.connect(lambda: self._set_type_filter(""))
         self._btn_long.clicked.connect(lambda: self._set_type_filter("LONG"))
@@ -93,7 +93,9 @@ class ActiveSignalsPanel(QWidget):
         filter_row.addWidget(self._tf_combo)
 
         self._ind_combo = QComboBox()
-        self._ind_combo.addItems(["İnd: Hepsi", "HA_Cross", "RSI_Cross", "MA200_Cross", "Supertrend"])
+        self._ind_combo.addItems(
+            ["İnd: Hepsi", "HA_Cross", "RSI_Cross", "MA200_Cross", "Supertrend"]
+        )
         self._ind_combo.setFixedWidth(110)
         self._ind_combo.currentTextChanged.connect(self._on_indicator_changed)
         filter_row.addWidget(self._ind_combo)
@@ -137,7 +139,11 @@ class ActiveSignalsPanel(QWidget):
         range_row = QHBoxLayout()
         self._range_edits: dict[str, tuple[QLineEdit, QLineEdit]] = {}
         for field_name, label in (
-            ("vpm", "VPMV"), ("mtf", "MTF"), ("alpha", "α"), ("beta", "β"), ("zscore", "Z"),
+            ("vpm", "VPMV"),
+            ("mtf", "MTF"),
+            ("alpha", "α"),
+            ("beta", "β"),
+            ("zscore", "Z"),
         ):
             range_row.addWidget(QLabel(f"{label}:"))
             lo_edit = QLineEdit()
@@ -352,7 +358,7 @@ class ActiveSignalsPanel(QWidget):
             (self._btn_long, "LONG"),
             (self._btn_short, "SHORT"),
         ]:
-            active = (tf == type_filter)
+            active = tf == type_filter
             btn.setChecked(active)
             btn.setStyleSheet(self._filter_btn_style(active))
         self._update_stats()
@@ -380,7 +386,14 @@ class ActiveSignalsPanel(QWidget):
         self._update_stats()
 
     @pyqtSlot(str, float, float, float, float)
-    def on_price_updated(self, symbol: str, price: float, change_pct: float, _volume: float = 0.0, _funding: float = 0.0) -> None:
+    def on_price_updated(
+        self,
+        symbol: str,
+        price: float,
+        change_pct: float,
+        _volume: float = 0.0,
+        _funding: float = 0.0,
+    ) -> None:
         self._model.on_price_updated(symbol, price, change_pct)
 
     def on_prices_updated(self, prices: dict) -> None:
@@ -422,18 +435,20 @@ class ActiveSignalsPanel(QWidget):
             self._detail_bar.hide()
             return
 
-        def _r(v, fmt=".2f"): return f"{v:{fmt}}" if v is not None else "—"
+        def _r(v, fmt=".2f"):
+            return f"{v:{fmt}}" if v is not None else "—"
+
         st = ("✓" if row.st_confirmed else "✗") if row.st_confirmed is not None else "—"
         mtf = f"{int(row.mtf)}" if row.mtf is not None else "—"
-        pnl = (f"{row.pnl_pct:+.2f}%" if row.pnl_pct is not None else "—")
+        pnl = f"{row.pnl_pct:+.2f}%" if row.pnl_pct is not None else "—"
 
-        pre  = _r(row.vpmv_pre_avg, '.1f')
-        slop = _r(row.vpmv_slope,   '+.1f')
-        rat  = _r(row.vpmv_ratio,   '.3f')
-        cvd  = _r(row.cvd_slope,    '+.3f')
-        vpb  = _r(row.vp_buy_avg,   '.1f')
-        vps  = _r(row.vp_sell_avg,  '.1f')
-        vpsc = _r(row.vp_score,     '+.1f')
+        pre = _r(row.vpmv_pre_avg, ".1f")
+        slop = _r(row.vpmv_slope, "+.1f")
+        rat = _r(row.vpmv_ratio, ".3f")
+        cvd = _r(row.cvd_slope, "+.3f")
+        vpb = _r(row.vp_buy_avg, ".1f")
+        vps = _r(row.vp_sell_avg, ".1f")
+        vpsc = _r(row.vp_score, "+.1f")
         text = (
             f"  α {_r(row.alpha, '+.4f')}  "
             f"β {_r(row.beta)}  │  "
@@ -454,14 +469,16 @@ class ActiveSignalsPanel(QWidget):
         row = self._selected_row()
         if row:
             self.symbol_selected.emit(row.symbol, row.interval)
-            self.signal_data_selected.emit({
-                "signal_type": row.signal_type,
-                "opened_at": row.timestamp.isoformat() if row.timestamp else None,
-                "entry_price": row.entry_price,
-                "stop_loss_price": row.stop_loss_price,
-                "take_profit_price": row.take_profit_price,
-                "trailing_stop_price": row.trailing_stop_price,
-            })
+            self.signal_data_selected.emit(
+                {
+                    "signal_type": row.signal_type,
+                    "opened_at": row.timestamp.isoformat() if row.timestamp else None,
+                    "entry_price": row.entry_price,
+                    "stop_loss_price": row.stop_loss_price,
+                    "take_profit_price": row.take_profit_price,
+                    "trailing_stop_price": row.trailing_stop_price,
+                }
+            )
 
     def _selected_row(self):
         indexes = self._table.selectionModel().selectedRows()
@@ -475,13 +492,11 @@ class ActiveSignalsPanel(QWidget):
     def _update_stats(self) -> None:
         rows = self._model._rows  # noqa: SLF001
         total = len(rows)
-        longs  = sum(1 for r in rows if r.signal_type == "LONG")
+        longs = sum(1 for r in rows if r.signal_type == "LONG")
         shorts = total - longs
         pos_pnl = sum(1 for r in rows if r.pnl_pct is not None and r.pnl_pct > 0)
         self._count_label.setText(f"{total} sinyal")
-        self._stats_label.setText(
-            f"↑ {longs} LONG  ↓ {shorts} SHORT  ✓ {pos_pnl} pozitif"
-        )
+        self._stats_label.setText(f"↑ {longs} LONG  ↓ {shorts} SHORT  ✓ {pos_pnl} pozitif")
 
     # ── Public API ────────────────────────────────────────────────────────────
 

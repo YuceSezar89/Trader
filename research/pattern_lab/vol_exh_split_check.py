@@ -4,6 +4,7 @@ baseline < EXH < EXH∧support) her iki yarıda BAĞIMSIZ olarak tekrarlanıyor
 mu? Rolling hesaplar tam seri üzerinde yapılır (warmup bozulmasın), olaylar
 sonradan zaman damgasına göre iki kovaya ayrılır.
 """
+
 import os
 import sys
 
@@ -12,9 +13,15 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from research.pattern_lab.vol_exhaustion_bt import HORIZONS_BARS, MIN_BARS, _fwd_returns, _stats, _vol_rank
-from research.pattern_lab.vol_exhaustion_sr_bt import _fetch, _sr_flags
 from research.pattern_lab.vol_exh_pine_bt import _pine_exh_events
+from research.pattern_lab.vol_exhaustion_bt import (
+    HORIZONS_BARS,
+    MIN_BARS,
+    _fwd_returns,
+    _stats,
+    _vol_rank,
+)
+from research.pattern_lab.vol_exhaustion_sr_bt import _fetch, _sr_flags
 
 
 def run():
@@ -52,7 +59,11 @@ def run():
                 (first if pd.Timestamp(ts[i]) < mid else second).append(i)
             return first, second
 
-        idx_sets = {"baseline": bucket(all_idx), "exh": bucket(exh_idx), "exh_support": bucket(exh_support_idx)}
+        idx_sets = {
+            "baseline": bucket(all_idx),
+            "exh": bucket(exh_idx),
+            "exh_support": bucket(exh_support_idx),
+        }
         for h, bars in HORIZONS_BARS.items():
             for gi, half in enumerate(halves):
                 for gname in groups:
@@ -66,8 +77,10 @@ def run():
             for gname in groups:
                 rets = np.concatenate(res[half][h][gname]) if res[half][h][gname] else np.array([])
                 s = _stats(rets)
-                print(f"{h:6} {gname:14} {s.get('n',0):>7} {s.get('wr',0):>6} "
-                      f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+                print(
+                    f"{h:6} {gname:14} {s.get('n',0):>7} {s.get('wr',0):>6} "
+                    f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+                )
         print()
 
 

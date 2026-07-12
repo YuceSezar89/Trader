@@ -13,6 +13,7 @@ edelim" isteği.
 Disiplin threshold_optimizer.py ile birebir aynı: kronolojik IS/OOS + split-period
 + placebo (IS realized_pnl karıştırılıp aynı arama tekrarlanır).
 """
+
 import os
 import sys
 
@@ -22,13 +23,22 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from research.pattern_lab.devissotrader_agents_bt import (  # pylint: disable=wrong-import-position
-    _is_consolidating_series, _mean_reversion_state_series, _trend_state_series,
+    _is_consolidating_series,
+    _mean_reversion_state_series,
+    _trend_state_series,
 )
 from research.pattern_lab.rsi_cross_volbreakout_regime_bt import (  # pylint: disable=wrong-import-position
-    _fetch_regime, _fetch_signals, _merge_regime,
+    _fetch_regime,
+    _fetch_signals,
+    _merge_regime,
 )
 from research.pattern_lab.threshold_optimizer import (  # pylint: disable=wrong-import-position
-    MIN_N, N_PLACEBO, _apply_rule, _best_single_threshold, _pf, _run_single_var_on_df,
+    MIN_N,
+    N_PLACEBO,
+    _apply_rule,
+    _best_single_threshold,
+    _pf,
+    _run_single_var_on_df,
 )
 
 INDICATORS = ["RSI_Cross(9,24)", "HA_Cross", "MA200_Cross", "Supertrend(10,3.0)"]
@@ -99,8 +109,12 @@ def _run_combined(label: str, df: pd.DataFrame, cols: list) -> None:
     oos_stats = _pf(oos_filtered) if len(oos_filtered) > 0 else {"pf": 0, "n": 0, "wr": 0}
 
     print(f"\n── OOS (sabit kombine kuralla) ──")
-    print(f"baseline:  PF={oos_baseline.get('pf',0):.3f} WR%={oos_baseline.get('wr',0)} n={oos_baseline.get('n',0)}")
-    print(f"filtreli:  PF={oos_stats.get('pf',0):.3f} WR%={oos_stats.get('wr',0)} n={oos_stats.get('n',0)}")
+    print(
+        f"baseline:  PF={oos_baseline.get('pf',0):.3f} WR%={oos_baseline.get('wr',0)} n={oos_baseline.get('n',0)}"
+    )
+    print(
+        f"filtreli:  PF={oos_stats.get('pf',0):.3f} WR%={oos_stats.get('wr',0)} n={oos_stats.get('n',0)}"
+    )
 
     oos_mid = mid + (t_max - mid) / 2
     oos_first = _apply_all(oos_df[oos_df["opened_at"] < oos_mid], rules)
@@ -126,11 +140,19 @@ def _run_combined(label: str, df: pd.DataFrame, cols: list) -> None:
         placebo_arr = np.array(placebo_pfs)
         rank = float((placebo_arr < is_stats.get("pf", 0)).mean() * 100)
         print(f"\n── Placebo (n={len(placebo_pfs)} karıştırma) ──")
-        print(f"placebo PF ort={placebo_arr.mean():.3f} p90={np.percentile(placebo_arr,90):.3f} "
-              f"max={placebo_arr.max():.3f} | gerçek IS PF={is_stats.get('pf',0):.3f} "
-              f"(placebo'nun %{rank:.0f}'ini geçiyor)")
-        verdict = "GEÇERLİ ADAY" if rank >= 90 and oos_stats.get("pf", 0) > oos_baseline.get("pf", 0) \
-            and s1.get("pf", 0) > 1 and s2.get("pf", 0) > 1 else "GÜVENİLMEZ/ZAYIF"
+        print(
+            f"placebo PF ort={placebo_arr.mean():.3f} p90={np.percentile(placebo_arr,90):.3f} "
+            f"max={placebo_arr.max():.3f} | gerçek IS PF={is_stats.get('pf',0):.3f} "
+            f"(placebo'nun %{rank:.0f}'ini geçiyor)"
+        )
+        verdict = (
+            "GEÇERLİ ADAY"
+            if rank >= 90
+            and oos_stats.get("pf", 0) > oos_baseline.get("pf", 0)
+            and s1.get("pf", 0) > 1
+            and s2.get("pf", 0) > 1
+            else "GÜVENİLMEZ/ZAYIF"
+        )
         print(f"\n>>> SONUÇ: {verdict}")
 
 
@@ -156,8 +178,10 @@ def run() -> None:
             if merged is None:
                 continue
 
-            print(f"\n{'#'*74}\n# {indicator} — {direction}  "
-                  f"({len(merged):,} sinyal, 3 rejim durumuyla eşleşti)\n{'#'*74}")
+            print(
+                f"\n{'#'*74}\n# {indicator} — {direction}  "
+                f"({len(merged):,} sinyal, 3 rejim durumuyla eşleşti)\n{'#'*74}"
+            )
 
             for col_name in STATES:
                 label = f"{indicator} — {direction} — {col_name} (tekil)"
@@ -165,7 +189,8 @@ def run() -> None:
 
             _run_combined(
                 f"{indicator} — {direction} — KOMBİNE (3 durum, açgözlü stepwise)",
-                merged, list(STATES.keys()),
+                merged,
+                list(STATES.keys()),
             )
 
 

@@ -14,10 +14,10 @@ from __future__ import annotations
 from typing import Dict, Optional
 
 _TF_SECONDS: Dict[str, int] = {
-    "5m":  300,
+    "5m": 300,
     "15m": 900,
-    "1h":  3600,
-    "4h":  14400,
+    "1h": 3600,
+    "4h": 14400,
 }
 
 
@@ -72,16 +72,16 @@ class BarResampler:
     def _new_tick(open_time: int, tick: Dict) -> Dict:
         return {
             "open_time": open_time,
-            "open":      float(tick["open"]),
-            "high":      float(tick["high"]),
-            "low":       float(tick["low"]),
-            "close":     float(tick["close"]),
-            "volume":    float(tick["volume"]),
+            "open": float(tick["open"]),
+            "high": float(tick["high"]),
+            "low": float(tick["low"]),
+            "close": float(tick["close"]),
+            "volume": float(tick["volume"]),
         }
 
     @staticmethod
     def _merge(pending: Dict, tick: Dict) -> None:
-        pending["high"]   = max(pending["high"],   float(tick["high"]))
-        pending["low"]    = min(pending["low"],    float(tick["low"]))
-        pending["close"]  = float(tick["close"])
+        pending["high"] = max(pending["high"], float(tick["high"]))
+        pending["low"] = min(pending["low"], float(tick["low"]))
+        pending["close"] = float(tick["close"])
         pending["volume"] += float(tick["volume"])

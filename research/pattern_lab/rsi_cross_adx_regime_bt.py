@@ -12,6 +12,7 @@ ADX, kalıcı YÖN+GÜÇ ölçmek için tasarlanmıştır (kısa-pencereli z-sco
 Kural: ADX>25 VE -DI>+DI ise "güçlü düşüş trendi" — bu rejimde Long RSI_Cross
 sinyali elenir (simetrik olarak ADX>25 VE +DI>-DI ise Short elenir).
 """
+
 import os
 import sys
 
@@ -20,14 +21,26 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from config import Config  # pylint: disable=wrong-import-position
-from indicators.core import calculate_rsi, calculate_adx  # pylint: disable=wrong-import-position
-from utils.vpmv import compute_series  # pylint: disable=wrong-import-position
+from indicators.core import calculate_adx, calculate_rsi  # pylint: disable=wrong-import-position
+from research.pattern_lab.do_open_streak_bt import (  # pylint: disable=wrong-import-position
+    DAYS,
+    HORIZON_BARS,
+    MIN_BARS,
+)
 from research.pattern_lab.features import _atr  # pylint: disable=wrong-import-position
-from research.pattern_lab.do_open_streak_bt import DAYS, HORIZON_BARS, MIN_BARS  # pylint: disable=wrong-import-position
-from research.pattern_lab.rsi_cross_vpmv_jump_bt import _fetch_symbol_history  # pylint: disable=wrong-import-position
-from research.pattern_lab.rsi_cross_sl_sweep_bt import _rsi_cross_events, _apply_signal_filter  # pylint: disable=wrong-import-position
-from research.pattern_lab.rsi_cross_combined_sl_bt import _fetch_with_volume, _report  # pylint: disable=wrong-import-position
 from research.pattern_lab.mtf_helpers import TF_DURATION  # pylint: disable=wrong-import-position
+from research.pattern_lab.rsi_cross_combined_sl_bt import (  # pylint: disable=wrong-import-position
+    _fetch_with_volume,
+    _report,
+)
+from research.pattern_lab.rsi_cross_sl_sweep_bt import (  # pylint: disable=wrong-import-position
+    _apply_signal_filter,
+    _rsi_cross_events,
+)
+from research.pattern_lab.rsi_cross_vpmv_jump_bt import (
+    _fetch_symbol_history,  # pylint: disable=wrong-import-position
+)
+from utils.vpmv import compute_series  # pylint: disable=wrong-import-position
 
 ADX_TF = "1h"
 ADX_LEN = 14
@@ -104,8 +117,12 @@ def run():
         series_short = compute_series(g, "Short")
 
         for i, direction in filtered_events:
-            if i + HORIZON_BARS >= len(c) or i - 1 < 0 or i + 1 >= len(g) \
-                    or not (np.isfinite(atr[i]) and atr[i] > 0):
+            if (
+                i + HORIZON_BARS >= len(c)
+                or i - 1 < 0
+                or i + 1 >= len(g)
+                or not (np.isfinite(atr[i]) and atr[i] > 0)
+            ):
                 continue
             series = series_long if direction == "Long" else series_short
             pre_v, post_v = series.iloc[i - 1], series.iloc[i + 1]
@@ -113,9 +130,20 @@ def run():
                 continue
 
             regime = _regime_before(btc_ts_arr, btc_regime_arr, ts.iloc[i])
-            clean_events.append((
-                direction, h, l, c, atr[i], i, c[i], ts.iloc[i], post_v - pre_v, regime,
-            ))
+            clean_events.append(
+                (
+                    direction,
+                    h,
+                    l,
+                    c,
+                    atr[i],
+                    i,
+                    c[i],
+                    ts.iloc[i],
+                    post_v - pre_v,
+                    regime,
+                )
+            )
 
     t_min = min(e[7] for e in clean_events)
     t_max = max(e[7] for e in clean_events)
@@ -144,7 +172,11 @@ def run():
     oos_mid = mid + (t_max - mid) / 2
     half_days = oos_days / 2
 
-    for dir_label, direction in (("LONG+SHORT (birlikte)", None), ("SADECE LONG", "Long"), ("SADECE SHORT", "Short")):
+    for dir_label, direction in (
+        ("LONG+SHORT (birlikte)", None),
+        ("SADECE LONG", "Long"),
+        ("SADECE SHORT", "Short"),
+    ):
         vo = vpmv_only if direction is None else _by_dir(vpmv_only, direction)
         vr = vpmv_regime if direction is None else _by_dir(vpmv_regime, direction)
 

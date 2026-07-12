@@ -15,6 +15,7 @@ görülen overfitting tuzağı).
 
 IS'te persentil kalibre edilip OOS'a SABİT uygulanıyor + split-period + placebo.
 """
+
 import os
 import sys
 
@@ -24,11 +25,19 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from indicators.core import calculate_atr  # pylint: disable=wrong-import-position
+from research.pattern_lab.do_open_streak_gauss_threshold_bt import (  # pylint: disable=wrong-import-position
+    HORIZON_BARS,
+    MIN_BARS,
+    N_PLACEBO,
+    WARMUP,
+    _fetch,
+    _simulate,
+)
 from research.pattern_lab.vol_exhaustion_bt import _stats  # pylint: disable=wrong-import-position
 from signals.do_kirilimi import _daily_open  # pylint: disable=wrong-import-position
-from signals.do_open_streak import SL_ATR_MULT, STREAK_THRESHOLD  # pylint: disable=wrong-import-position
-from research.pattern_lab.do_open_streak_gauss_threshold_bt import (  # pylint: disable=wrong-import-position
-    _fetch, _simulate, MIN_BARS, WARMUP, HORIZON_BARS, N_PLACEBO,
+from signals.do_open_streak import (  # pylint: disable=wrong-import-position
+    SL_ATR_MULT,
+    STREAK_THRESHOLD,
 )
 
 SELECTIVITY_PERCENTILE = 66.0  # mevcut eşiğin (4.5) yaklaşık seçiciliğine denk
@@ -51,7 +60,8 @@ def _candidates(df: pd.DataFrame) -> pd.DataFrame:
         n = len(c)
 
         do, _ = _daily_open(ts, o)
-        prev_c = np.roll(c, 1); prev_c[0] = np.nan
+        prev_c = np.roll(c, 1)
+        prev_c[0] = np.nan
         do_break = (c > do) & (prev_c <= do) & np.isfinite(do)
         is_long = c > o
         atr_series = calculate_atr(g, period=14).to_numpy()
@@ -81,10 +91,15 @@ def _candidates(df: pd.DataFrame) -> pd.DataFrame:
                         entry = c[i]
                         sl = entry - SL_ATR_MULT * atr
                         ret = _simulate(l, c, i, entry, sl, HORIZON_BARS)
-                        rows.append({
-                            "symbol": sym, "opened_at": pd.Timestamp(ts_np[i]),
-                            "long_perc": long_perc, "atr_mult": atr_mult, "ret": ret,
-                        })
+                        rows.append(
+                            {
+                                "symbol": sym,
+                                "opened_at": pd.Timestamp(ts_np[i]),
+                                "long_perc": long_perc,
+                                "atr_mult": atr_mult,
+                                "ret": ret,
+                            }
+                        )
     return pd.DataFrame(rows)
 
 
@@ -108,8 +123,10 @@ def run() -> None:
     # IS'te iki yöntemin de eşiğini AYNI persentile göre kalibre et
     pct_thr_long = np.percentile(is_c["long_perc"], SELECTIVITY_PERCENTILE)
     pct_thr_atr = np.percentile(is_c["atr_mult"], SELECTIVITY_PERCENTILE)
-    print(f"IS'te kalibre edilen eşikler (persentil={SELECTIVITY_PERCENTILE}): "
-          f"long_perc>={pct_thr_long:.3f}  |  atr_mult>={pct_thr_atr:.3f}\n")
+    print(
+        f"IS'te kalibre edilen eşikler (persentil={SELECTIVITY_PERCENTILE}): "
+        f"long_perc>={pct_thr_long:.3f}  |  atr_mult>={pct_thr_atr:.3f}\n"
+    )
 
     print(f"{'varyant':34} sonuç")
     is_pct = _report("% bazlı (IS)", is_c[is_c["long_perc"] >= pct_thr_long])
@@ -117,8 +134,8 @@ def run() -> None:
     print()
     oos_pct_ev = oos_c[oos_c["long_perc"] >= pct_thr_long]
     oos_atr_ev = oos_c[oos_c["atr_mult"] >= pct_thr_atr]
-    oos_pct = _report("% bazlı (OOS) <<< ASIL SINAV", oos_pct_ev)
-    oos_atr = _report("ATR bazlı (OOS) <<< ASIL SINAV", oos_atr_ev)
+    _report("% bazlı (OOS) <<< ASIL SINAV", oos_pct_ev)
+    _report("ATR bazlı (OOS) <<< ASIL SINAV", oos_atr_ev)
 
     for label, ev in (("% bazlı OOS", oos_pct_ev), ("ATR bazlı OOS", oos_atr_ev)):
         if len(ev) < 30:
@@ -127,8 +144,10 @@ def run() -> None:
         m = ts_.min() + (ts_.max() - ts_.min()) / 2
         fh = _stats(ev[ev["opened_at"] < m]["ret"].to_numpy())
         sh = _stats(ev[ev["opened_at"] >= m]["ret"].to_numpy())
-        print(f"\n{label} split-period: ilk_yari n={fh.get('n',0)} PF={fh.get('pf',0)} | "
-              f"ikinci_yari n={sh.get('n',0)} PF={sh.get('pf',0)}")
+        print(
+            f"\n{label} split-period: ilk_yari n={fh.get('n',0)} PF={fh.get('pf',0)} | "
+            f"ikinci_yari n={sh.get('n',0)} PF={sh.get('pf',0)}"
+        )
 
     # Placebo: OOS aday havuzundan (gate+count==3, filtre UYGULANMAMIŞ) rastgele
     # aynı sayıda seçip PF dağılımını ölç.
@@ -148,8 +167,10 @@ def run() -> None:
         if placebo_pfs:
             arr = np.array(placebo_pfs)
             rank = float((arr < real_pf).mean() * 100)
-            print(f"\n{label} placebo (n={len(arr)}): ort={arr.mean():.3f} p90={np.percentile(arr,90):.3f} "
-                  f"| gerçek PF={real_pf:.3f} (placebo'nun %{rank:.0f}'ini geçiyor)")
+            print(
+                f"\n{label} placebo (n={len(arr)}): ort={arr.mean():.3f} p90={np.percentile(arr,90):.3f} "
+                f"| gerçek PF={real_pf:.3f} (placebo'nun %{rank:.0f}'ini geçiyor)"
+            )
 
 
 if __name__ == "__main__":

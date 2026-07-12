@@ -15,6 +15,7 @@ Destek/direnç tanımı (ÖNCEDEN BEYAN, sonradan ayarlanmadı):
 Gruplar: baseline, COLD, near_support, COLD∧near_support (asıl hipotez) —
 ve ayna: HOT, near_resistance, HOT∧near_resistance.
 """
+
 import os
 import sys
 
@@ -27,7 +28,13 @@ import psycopg2
 
 from config import Config
 from research.pattern_lab.vol_exhaustion_bt import (
-    COLD_LEVEL, DAYS, HORIZONS_BARS, HOT_LEVEL, MIN_BARS, _events, _fwd_returns, _stats, _vol_rank,
+    DAYS,
+    HORIZONS_BARS,
+    MIN_BARS,
+    _events,
+    _fwd_returns,
+    _stats,
+    _vol_rank,
 )
 
 SR_WINDOW = 180
@@ -37,8 +44,11 @@ SR_THRESHOLD_PCT = 2.0
 
 def _fetch() -> pd.DataFrame:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     q = f"""
         SELECT symbol, bucket AS ts, close, high, low, volume
@@ -51,7 +61,9 @@ def _fetch() -> pd.DataFrame:
     return df
 
 
-def _sr_flags(low: np.ndarray, high: np.ndarray, close: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def _sr_flags(
+    low: np.ndarray, high: np.ndarray, close: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
     support = pd.Series(low).rolling(SR_WINDOW).min().shift(SR_BUFFER).to_numpy()
     resistance = pd.Series(high).rolling(SR_WINDOW).max().shift(SR_BUFFER).to_numpy()
     with np.errstate(invalid="ignore", divide="ignore"):
@@ -64,8 +76,15 @@ def run():
     df = _fetch()
     print(f"{df['symbol'].nunique()} sembol, {len(df):,} 15m bar ({DAYS} gün)\n")
 
-    groups = ["baseline", "cold", "near_support", "cold_x_support",
-              "hot", "near_resistance", "hot_x_resistance"]
+    groups = [
+        "baseline",
+        "cold",
+        "near_support",
+        "cold_x_support",
+        "hot",
+        "near_resistance",
+        "hot_x_resistance",
+    ]
     fwd = {h: {g: [] for g in groups} for h in HORIZONS_BARS}
     n_syms = 0
     n_events = {g: 0 for g in groups}
@@ -90,9 +109,13 @@ def run():
         hot_resistance_idx = [i for i in hot_idx if i < len(near_resistance) and near_resistance[i]]
 
         idx_map = {
-            "baseline": all_idx, "cold": cold_idx, "near_support": support_idx,
-            "cold_x_support": cold_support_idx, "hot": hot_idx,
-            "near_resistance": resistance_idx, "hot_x_resistance": hot_resistance_idx,
+            "baseline": all_idx,
+            "cold": cold_idx,
+            "near_support": support_idx,
+            "cold_x_support": cold_support_idx,
+            "hot": hot_idx,
+            "near_resistance": resistance_idx,
+            "hot_x_resistance": hot_resistance_idx,
         }
         for gname, idxs in idx_map.items():
             n_events[gname] += len(idxs)
@@ -103,9 +126,12 @@ def run():
     print("olay sayıları:", n_events, "\n")
 
     labels = {
-        "baseline": "baseline (tüm barlar)", "cold": "COLD (tam sönme)",
-        "near_support": "near_support (yalnız)", "cold_x_support": "COLD ∧ near_support (HİPOTEZ)",
-        "hot": "HOT (yalnız)", "near_resistance": "near_resistance (yalnız)",
+        "baseline": "baseline (tüm barlar)",
+        "cold": "COLD (tam sönme)",
+        "near_support": "near_support (yalnız)",
+        "cold_x_support": "COLD ∧ near_support (HİPOTEZ)",
+        "hot": "HOT (yalnız)",
+        "near_resistance": "near_resistance (yalnız)",
         "hot_x_resistance": "HOT ∧ near_resistance (ayna)",
     }
     for h in HORIZONS_BARS:
@@ -114,8 +140,10 @@ def run():
         for gname in groups:
             rets = np.concatenate(fwd[h][gname]) if fwd[h][gname] else np.array([])
             s = _stats(rets)
-            print(f"{labels[gname]:32} {s.get('n',0):>7} {s.get('wr',0):>6} "
-                  f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+            print(
+                f"{labels[gname]:32} {s.get('n',0):>7} {s.get('wr',0):>6} "
+                f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+            )
         print()
 
 

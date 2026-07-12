@@ -24,6 +24,7 @@ kırılıyor — 9420 olayda SADECE tam onay (2/2, "ULTRA") grubu net kârlıyd�
 0/2 ve 1/2 net zarardaydı (bkz. aşağıdaki tablo). Split-period + OOS $ etkisi
 gibi daha derin analiz research/pattern_lab/do_kirilimi_mtf_alignment_bt.py'de.
 """
+
 import os
 import sys
 from typing import Optional
@@ -36,9 +37,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 import psycopg2  # pylint: disable=wrong-import-position
 
 from config import Config  # pylint: disable=wrong-import-position
+from research.pattern_lab.mtf_helpers import (  # pylint: disable=wrong-import-position
+    _confirm_count,
+    _fetch_dir_data,
+)
+from research.pattern_lab.vol_exhaustion_bt import (  # pylint: disable=wrong-import-position
+    _fwd_returns,
+    _stats,
+)
 from signals.do_kirilimi import _daily_open  # pylint: disable=wrong-import-position
-from research.pattern_lab.vol_exhaustion_bt import _fwd_returns, _stats  # pylint: disable=wrong-import-position
-from research.pattern_lab.mtf_helpers import _fetch_dir_data, _confirm_count  # pylint: disable=wrong-import-position
 
 DAYS = 45
 HORIZON_BARS = 96  # 24h @ 15m
@@ -50,8 +57,11 @@ MTF_STREAK_TARGET = 3  # v2-15: MTF onayı sadece headline eşiği (3) için öl
 
 def _fetch() -> pd.DataFrame:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     q = f"""
         SELECT symbol, bucket AS ts, open, high, low, close
@@ -64,7 +74,9 @@ def _fetch() -> pd.DataFrame:
     return df
 
 
-def _streak_events(o: np.ndarray, c: np.ndarray, gate: Optional[np.ndarray] = None) -> dict[int, list[int]]:
+def _streak_events(
+    o: np.ndarray, c: np.ndarray, gate: Optional[np.ndarray] = None
+) -> dict[int, list[int]]:
     """Ardışık yeşil mum sayısı her eşiğe İLK ULAŞTIĞI bar indekslerini döner
     (Pine'ın count_long mantığı — kırmızı mumda sayaç sıfırlanır). gate
     verilirse (D-open kırılımından itibaren yeşil mum bozulana kadar True
@@ -152,7 +164,9 @@ def run():
             dir_data = _fetch_dir_data(sym, MTF_CONFIRM_TFS)
             if dir_data is not None:
                 for i in target_events:
-                    confirm_count = _confirm_count(dir_data, MTF_CONFIRM_TFS, ts.iloc[i], want_bullish=True)
+                    confirm_count = _confirm_count(
+                        dir_data, MTF_CONFIRM_TFS, ts.iloc[i], want_bullish=True
+                    )
                     if confirm_count is not None:
                         ret = c[i + HORIZON_BARS] / c[i] - 1
                         mtf_confirm_fwd[confirm_count].append(ret)
@@ -162,32 +176,44 @@ def run():
     print(f"{'grup':38} {'n':>7} {'WR%':>6} {'ort%':>8} {'PF':>7}")
 
     s = _stats(baseline_rets)
-    print(f"{'baseline (tüm barlar)':38} {s.get('n',0):>7} {s.get('wr',0):>6} "
-          f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+    print(
+        f"{'baseline (tüm barlar)':38} {s.get('n',0):>7} {s.get('wr',0):>6} "
+        f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+    )
     print()
 
     for th in STREAK_THRESHOLDS:
         s = _stats(np.concatenate(do_streak_fwd[th]) if do_streak_fwd[th] else np.array([]))
         label = f"D-open kırılım + {th} ardışık yeşil"
-        print(f"{label:38} {s.get('n',0):>7} {s.get('wr',0):>6} "
-              f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}  (olay={n_do_events[th]})")
+        print(
+            f"{label:38} {s.get('n',0):>7} {s.get('wr',0):>6} "
+            f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}  (olay={n_do_events[th]})"
+        )
     print()
 
     for th in STREAK_THRESHOLDS:
         s = _stats(np.concatenate(plain_streak_fwd[th]) if plain_streak_fwd[th] else np.array([]))
         label = f"[ablasyon] sadece {th} ardışık yeşil"
-        print(f"{label:38} {s.get('n',0):>7} {s.get('wr',0):>6} "
-              f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}  (olay={n_plain_events[th]})")
+        print(
+            f"{label:38} {s.get('n',0):>7} {s.get('wr',0):>6} "
+            f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}  (olay={n_plain_events[th]})"
+        )
     print()
 
-    print(f"── D-open kırılım + {MTF_STREAK_TARGET} ardışık yeşil, üst TF "
-          f"({'/'.join(MTF_CONFIRM_TFS)}) onayına göre (v2-15) ──")
+    print(
+        f"── D-open kırılım + {MTF_STREAK_TARGET} ardışık yeşil, üst TF "
+        f"({'/'.join(MTF_CONFIRM_TFS)}) onayına göre (v2-15) ──"
+    )
     for count in (0, 1, 2):
         rets = np.array(mtf_confirm_fwd[count])
         s = _stats(rets)
-        label = f"{count}/{len(MTF_CONFIRM_TFS)}" + (" (ULTRA)" if count == len(MTF_CONFIRM_TFS) else "")
-        print(f"{label:38} {s.get('n',0):>7} {s.get('wr',0):>6} "
-              f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+        label = f"{count}/{len(MTF_CONFIRM_TFS)}" + (
+            " (ULTRA)" if count == len(MTF_CONFIRM_TFS) else ""
+        )
+        print(
+            f"{label:38} {s.get('n',0):>7} {s.get('wr',0):>6} "
+            f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+        )
 
 
 if __name__ == "__main__":

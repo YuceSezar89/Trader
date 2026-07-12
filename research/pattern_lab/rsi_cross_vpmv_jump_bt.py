@@ -12,6 +12,7 @@ project_pattern_lab.md v2-7): BAŞTAN split-period + SADECE 3 Tem 19:22:16
 sonrası (commit e81aa34, signals tablosunun temiz ters-sinyal/timeout rejimi)
 uygulanıyor — büyük ilk-bakış n'sine güvenip sonradan pişman olmayalım.
 """
+
 import os
 import sys
 
@@ -22,8 +23,8 @@ import psycopg2
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from config import Config  # pylint: disable=wrong-import-position
-from utils.vpmv import compute_series  # pylint: disable=wrong-import-position
 from research.pattern_lab.vol_exhaustion_bt import _stats  # pylint: disable=wrong-import-position
+from utils.vpmv import compute_series  # pylint: disable=wrong-import-position
 
 INTERVALS = ["5m", "15m"]
 CUTOFF = "2026-07-03 19:22:16"  # commit e81aa34
@@ -43,8 +44,11 @@ def _signal_bar_ts(opened_at, interval: str):
 
 def _fetch_signals(interval: str) -> pd.DataFrame:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     q = """
         SELECT symbol, signal_type, realized_pnl, opened_at
@@ -62,8 +66,11 @@ def _fetch_signals(interval: str) -> pd.DataFrame:
 
 def _fetch_symbol_history(symbol: str, interval: str) -> pd.DataFrame:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     q = f"SELECT bucket AS ts, open, high, low, close, volume FROM cagg_{interval} WHERE symbol = %s ORDER BY bucket"
     df = pd.read_sql(q, conn, params=(symbol,))
@@ -81,8 +88,10 @@ def _print_tercile_table(pairs: pd.DataFrame, q1: float, q2: float) -> None:
     for name in ("düşük", "orta", "yüksek"):
         rets = pairs.loc[pairs["tercil"] == name, "realized_pnl"].to_numpy() / 100
         s = _stats(rets)
-        print(f"{name:10} {s.get('n',0):>7} {s.get('wr',0):>6} "
-              f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+        print(
+            f"{name:10} {s.get('n',0):>7} {s.get('wr',0):>6} "
+            f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+        )
 
 
 def run():
@@ -111,11 +120,13 @@ def run():
                 post_v = series.iloc[i + 1]
                 if not (np.isfinite(pre_v) and np.isfinite(post_v)):
                     continue
-                all_pairs.append({
-                    "jump": post_v - pre_v,
-                    "realized_pnl": row["realized_pnl"],
-                    "opened_at": row["opened_at"],
-                })
+                all_pairs.append(
+                    {
+                        "jump": post_v - pre_v,
+                        "realized_pnl": row["realized_pnl"],
+                        "opened_at": row["opened_at"],
+                    }
+                )
 
     df = pd.DataFrame(all_pairs)
     print(f"\ntoplam eşleşen sinyal: {len(df):,}\n")
@@ -125,8 +136,10 @@ def run():
 
     s = _stats(df["realized_pnl"].to_numpy() / 100)
     print(f"{'grup':20} {'n':>7} {'WR%':>6} {'ort%':>8} {'PF':>7}")
-    print(f"{'baseline (tümü)':20} {s.get('n',0):>7} {s.get('wr',0):>6} "
-          f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+    print(
+        f"{'baseline (tümü)':20} {s.get('n',0):>7} {s.get('wr',0):>6} "
+        f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+    )
 
     q1, q2 = df["jump"].quantile([0.333, 0.667])
     print(f"\n── VPMV sıçraması (post[+1] - pre[-1]) terciline göre ── (q1={q1:.1f}, q2={q2:.1f})")

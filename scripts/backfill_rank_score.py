@@ -38,8 +38,11 @@ _WORKERS = 6
 
 def _connect():
     return psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, database=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        database=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
 
 
@@ -49,14 +52,16 @@ def _vpmv_series(df: pd.DataFrame) -> pd.Series:
     atr_series = calculate_atr(df, period=Config.ATR_PERIOD)
     price_pct = df["close"].pct_change().fillna(0.0) * 100.0
     return (
-        normalize_volume_0_100(df["volume"]) * 0.35 +
-        normalize_momentum_0_100(rsi_centered) * 0.35 +
-        normalize_volatility_0_100(atr_series) * 0.20 +
-        normalize_price_0_100(price_pct) * 0.10
+        normalize_volume_0_100(df["volume"]) * 0.35
+        + normalize_momentum_0_100(rsi_centered) * 0.35
+        + normalize_volatility_0_100(atr_series) * 0.20
+        + normalize_price_0_100(price_pct) * 0.10
     )
 
 
-def _sample_tf(bar_epochs: np.ndarray, values: np.ndarray, bucket_epochs: np.ndarray, interval_s: int) -> np.ndarray:
+def _sample_tf(
+    bar_epochs: np.ndarray, values: np.ndarray, bucket_epochs: np.ndarray, interval_s: int
+) -> np.ndarray:
     out = np.full(len(bucket_epochs), np.nan)
     if len(bar_epochs) == 0:
         return out
@@ -69,7 +74,9 @@ def _sample_tf(bar_epochs: np.ndarray, values: np.ndarray, bucket_epochs: np.nda
     return out
 
 
-def _compute_symbol(symbol: str, bucket_epochs: np.ndarray, first_bucket, last_bucket) -> np.ndarray:
+def _compute_symbol(
+    symbol: str, bucket_epochs: np.ndarray, first_bucket, last_bucket
+) -> np.ndarray:
     conn = _connect()
     try:
         tf_rows = []

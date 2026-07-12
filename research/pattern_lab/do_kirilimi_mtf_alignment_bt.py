@@ -11,6 +11,7 @@ ileri getiri (_fwd_returns, look-ahead'siz — event SONRASI 96 bar), MTF
 yönü ise event ANINDAN ÖNCE kapanmış barlardan alınıyor (_last_direction_before,
 ha_cross_mtf_alignment_bt.py'den import). Split-period sağlamlık kontrolü var.
 """
+
 import os
 import sys
 
@@ -19,11 +20,24 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from signals.do_kirilimi import _daily_open  # pylint: disable=wrong-import-position
+from research.pattern_lab.do_open_streak_bt import (  # pylint: disable=wrong-import-position
+    DAYS,
+    HORIZON_BARS,
+    MIN_BARS,
+    _do_break_gate,
+    _fetch,
+)
+from research.pattern_lab.do_open_touch_gauss_bt import (  # pylint: disable=wrong-import-position
+    GAUSS_STREAK_THRESHOLD,
+    _streak_state,
+    _threshold_events,
+)
+from research.pattern_lab.mtf_helpers import (  # pylint: disable=wrong-import-position
+    _confirm_count,
+    _fetch_dir_data,
+)
 from research.pattern_lab.vol_exhaustion_bt import _stats  # pylint: disable=wrong-import-position
-from research.pattern_lab.do_open_streak_bt import DAYS, HORIZON_BARS, MIN_BARS, _fetch, _do_break_gate  # pylint: disable=wrong-import-position
-from research.pattern_lab.do_open_touch_gauss_bt import GAUSS_STREAK_THRESHOLD, _streak_state, _threshold_events  # pylint: disable=wrong-import-position
-from research.pattern_lab.mtf_helpers import _fetch_dir_data, _confirm_count  # pylint: disable=wrong-import-position
+from signals.do_kirilimi import _daily_open  # pylint: disable=wrong-import-position
 
 CONFIRM_TFS = ["1h", "4h"]
 POSITION_USD = 100.0
@@ -38,8 +52,10 @@ def _dollar_stats(rets: np.ndarray, days_span: float) -> dict:
     total = float(pnl.sum())
     per_month = total / days_span * 30 if days_span > 0 else 0.0
     return {
-        "n": len(rets), "wr": round(float((pnl > 0).mean() * 100), 1),
-        "avg_usd": round(float(pnl.mean()), 3), "total_usd": round(total, 1),
+        "n": len(rets),
+        "wr": round(float((pnl > 0).mean() * 100), 1),
+        "avg_usd": round(float(pnl.mean()), 3),
+        "total_usd": round(total, 1),
         "usd_per_month": round(per_month, 1),
     }
 
@@ -50,8 +66,10 @@ def _print_by_count(d: pd.DataFrame) -> None:
         rets = d.loc[d["confirm_count"] == count, "ret"].to_numpy()
         s = _stats(rets)
         label = f"{count}/2" + (" (ULTRA)" if count == 2 else "")
-        print(f"{label:14} {s.get('n',0):>7} {s.get('wr',0):>6} "
-              f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+        print(
+            f"{label:14} {s.get('n',0):>7} {s.get('wr',0):>6} "
+            f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+        )
 
 
 def run():
@@ -100,8 +118,10 @@ def run():
 
     s = _stats(res["ret"].to_numpy())
     print(f"{'grup':20} {'n':>7} {'WR%':>6} {'ort%':>8} {'PF':>7}")
-    print(f"{'baseline (tümü)':20} {s.get('n',0):>7} {s.get('wr',0):>6} "
-          f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}\n")
+    print(
+        f"{'baseline (tümü)':20} {s.get('n',0):>7} {s.get('wr',0):>6} "
+        f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}\n"
+    )
 
     print("── Üst TF (1h/4h) onay sayısına göre ──")
     _print_by_count(res)
@@ -126,8 +146,10 @@ def run():
         print("örneklem çok küçük")
 
     days_span = (t_max - t_min).total_seconds() / 86400
-    print(f"\n── Ekonomik etki (TÜM dönem, ${POSITION_USD:.0f} pozisyon, in-sample/OOS ayrımı YOK — "
-          f"confirm_count sabit bir eşik, kalibre edilen serbest parametre yok) ──")
+    print(
+        f"\n── Ekonomik etki (TÜM dönem, ${POSITION_USD:.0f} pozisyon, in-sample/OOS ayrımı YOK — "
+        f"confirm_count sabit bir eşik, kalibre edilen serbest parametre yok) ──"
+    )
     print(f"{'grup':20} {'n':>6} {'WR%':>6} {'ort $/işlem':>12} {'toplam $':>10} {'$/ay':>10}")
     for name, sub in (
         ("baseline (tümü)", res),
@@ -138,8 +160,10 @@ def run():
         if stat.get("n", 0) == 0:
             print(f"{name:20} {'0':>6}")
             continue
-        print(f"{name:20} {stat['n']:>6} {stat['wr']:>6} {stat['avg_usd']:>12} "
-              f"{stat['total_usd']:>10} {stat['usd_per_month']:>10}")
+        print(
+            f"{name:20} {stat['n']:>6} {stat['wr']:>6} {stat['avg_usd']:>12} "
+            f"{stat['total_usd']:>10} {stat['usd_per_month']:>10}"
+        )
 
 
 if __name__ == "__main__":

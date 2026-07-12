@@ -13,6 +13,7 @@ yok, sadece opened_at'ten önceki barlar kullanılıyor) sinyalle aynı yönde m
 diye sayılıyor (0-3 üst TF onayı). Aynı disiplin: SADECE 3 Tem 19:22:16
 sonrası (temiz rejim) + split-period + OOS ekonomik etki.
 """
+
 import os
 import sys
 
@@ -21,9 +22,14 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+from research.pattern_lab.ha_cross_combined_test import (
+    _fetch_ha_cross_signals,  # pylint: disable=wrong-import-position
+)
+from research.pattern_lab.mtf_helpers import (  # pylint: disable=wrong-import-position
+    _confirm_count,
+    _fetch_dir_data,
+)
 from research.pattern_lab.vol_exhaustion_bt import _stats  # pylint: disable=wrong-import-position
-from research.pattern_lab.ha_cross_combined_test import _fetch_ha_cross_signals  # pylint: disable=wrong-import-position
-from research.pattern_lab.mtf_helpers import _fetch_dir_data, _confirm_count  # pylint: disable=wrong-import-position
 
 CONFIRM_TFS = ["15m", "1h", "4h"]
 POSITION_USD = 100.0
@@ -38,8 +44,10 @@ def _dollar_stats(rets: np.ndarray, days_span: float) -> dict:
     total = float(pnl.sum())
     per_month = total / days_span * 30 if days_span > 0 else 0.0
     return {
-        "n": len(rets), "wr": round(float((pnl > 0).mean() * 100), 1),
-        "avg_usd": round(float(pnl.mean()), 3), "total_usd": round(total, 1),
+        "n": len(rets),
+        "wr": round(float((pnl > 0).mean() * 100), 1),
+        "avg_usd": round(float(pnl.mean()), 3),
+        "total_usd": round(total, 1),
         "usd_per_month": round(per_month, 1),
     }
 
@@ -50,8 +58,10 @@ def _print_by_count(df: pd.DataFrame) -> None:
         rets = df.loc[df["confirm_count"] == count, "realized_pnl"].to_numpy() / 100
         s = _stats(rets)
         label = f"{count}/3" + (" (ULTRA)" if count == 3 else "")
-        print(f"{label:14} {s.get('n',0):>7} {s.get('wr',0):>6} "
-              f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+        print(
+            f"{label:14} {s.get('n',0):>7} {s.get('wr',0):>6} "
+            f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+        )
 
 
 def run():
@@ -70,11 +80,13 @@ def run():
             )
             if confirm_count is None:
                 continue
-            rows.append({
-                "confirm_count": confirm_count,
-                "realized_pnl": row["realized_pnl"],
-                "opened_at": row["opened_at"],
-            })
+            rows.append(
+                {
+                    "confirm_count": confirm_count,
+                    "realized_pnl": row["realized_pnl"],
+                    "opened_at": row["opened_at"],
+                }
+            )
 
     df = pd.DataFrame(rows)
     print(f"toplam eşleşen sinyal: {len(df):,}\n")
@@ -84,8 +96,10 @@ def run():
 
     s = _stats(df["realized_pnl"].to_numpy() / 100)
     print(f"{'grup':20} {'n':>7} {'WR%':>6} {'ort%':>8} {'PF':>7}")
-    print(f"{'baseline (tümü)':20} {s.get('n',0):>7} {s.get('wr',0):>6} "
-          f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}\n")
+    print(
+        f"{'baseline (tümü)':20} {s.get('n',0):>7} {s.get('wr',0):>6} "
+        f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}\n"
+    )
 
     print("── Üst TF (15m/1h/4h) onay sayısına göre ──")
     _print_by_count(df)
@@ -123,8 +137,10 @@ def run():
         if stat.get("n", 0) == 0:
             print(f"{name:20} {'0':>6}")
             continue
-        print(f"{name:20} {stat['n']:>6} {stat['wr']:>6} {stat['avg_usd']:>12} "
-              f"{stat['total_usd']:>10} {stat['usd_per_month']:>10}")
+        print(
+            f"{name:20} {stat['n']:>6} {stat['wr']:>6} {stat['avg_usd']:>12} "
+            f"{stat['total_usd']:>10} {stat['usd_per_month']:>10}"
+        )
 
 
 if __name__ == "__main__":

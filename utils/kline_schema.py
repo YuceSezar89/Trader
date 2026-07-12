@@ -11,6 +11,7 @@ Eksik çekirdek kolon → ERROR (veri kullanılamaz durumda demektir).
 Eksik yönlü kolon   → WARNING (metrikler toplam hacme düşer — görünür olsun).
 Aynı kaynak+eksik kombinasyonu bir kez loglanır (log seli olmaz).
 """
+
 import logging
 from typing import Optional
 
@@ -46,6 +47,10 @@ def check_kline_schema(
             key = (source, "dir", tuple(missing_dir))
             if key not in _warned:
                 _warned.add(key)
-                logger.warning("[KlineSchema] %s: yönlü hacim kolonu eksik: %s — metrikler toplam hacme düşecek", source, missing_dir)
+                logger.warning(
+                    "[KlineSchema] %s: yönlü hacim kolonu eksik: %s — metrikler toplam hacme düşecek",
+                    source,
+                    missing_dir,
+                )
 
     return df

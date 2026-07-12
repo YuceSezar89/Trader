@@ -170,7 +170,9 @@ class ChartPanel(QWidget):  # pylint: disable=too-many-instance-attributes
 
     # ── Veri yükleme ──────────────────────────────────────────────────────────
 
-    def _load_and_draw(self, symbol: str, tf: str, auto_range: bool = False) -> None:  # pylint: disable=unused-argument
+    def _load_and_draw(
+        self, symbol: str, tf: str, auto_range: bool = False
+    ) -> None:  # pylint: disable=unused-argument
         df = self._fetch_data(symbol, tf)
         self._chart.load_df(df, symbol, tf)
         if df is not None and not df.empty:
@@ -183,6 +185,7 @@ class ChartPanel(QWidget):  # pylint: disable=too-many-instance-attributes
         """Redis Arrow → JSON fallback → DB fallback."""
         try:
             import redis as _redis  # pylint: disable=import-outside-toplevel
+
             r = _redis.Redis.from_url(
                 self._redis_url,
                 decode_responses=False,
@@ -192,6 +195,7 @@ class ChartPanel(QWidget):  # pylint: disable=too-many-instance-attributes
             if raw:
                 if raw[:4] == b"ARDF":
                     import pyarrow as pa  # pylint: disable=import-outside-toplevel
+
                     reader = pa.ipc.open_stream(raw[4:])
                     df = reader.read_pandas()
                 else:
@@ -230,6 +234,7 @@ class ChartPanel(QWidget):  # pylint: disable=too-many-instance-attributes
     def _fetch_from_db(self, symbol: str, tf: str) -> Optional[pd.DataFrame]:
         try:
             import psycopg2  # pylint: disable=import-outside-toplevel
+
             conn = psycopg2.connect(**self._db_cfg)
             cur = conn.cursor()
             cur.execute(

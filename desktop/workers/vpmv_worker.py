@@ -21,7 +21,7 @@ from utils.vpmv import compute_series
 logger = logging.getLogger(__name__)
 
 _ARROW_MAGIC = b"ARDF"
-_MIN_BARS    = 20
+_MIN_BARS = 20
 
 
 def _to_dt(val) -> Optional[datetime]:
@@ -55,7 +55,7 @@ def _find_signal_bar(df: pd.DataFrame, opened_at: datetime) -> Optional[int]:
 class VpmvWorker(QThread):
     """Aktif sinyaller için post-sinyal VPMV serisini hesaplayan worker."""
 
-    vpmv_updated   = pyqtSignal(object)  # dict
+    vpmv_updated = pyqtSignal(object)  # dict
     status_updated = pyqtSignal(str)
 
     def __init__(
@@ -65,13 +65,13 @@ class VpmvWorker(QThread):
         parent=None,
     ):
         super().__init__(parent)
-        self._redis_url   = redis_url
+        self._redis_url = redis_url
         self._interval_ms = interval_ms
-        self._running     = False
+        self._running = False
         self._redis: Optional[redis.Redis] = None
-        self._lock        = threading.Lock()
-        self._wake        = threading.Event()
-        self._signals: dict[int, dict] = {}   # signal_id → signal dict
+        self._lock = threading.Lock()
+        self._wake = threading.Event()
+        self._signals: dict[int, dict] = {}  # signal_id → signal dict
 
     @pyqtSlot(list)
     def set_symbols(self, signals: list) -> None:
@@ -128,9 +128,7 @@ class VpmvWorker(QThread):
                 _last_compute = time.monotonic()
                 if result:
                     self.vpmv_updated.emit(result)
-                    self.status_updated.emit(
-                        f"{len(result['current'])} sembol  •  VPMV"
-                    )
+                    self.status_updated.emit(f"{len(result['current'])} sembol  •  VPMV")
                 else:
                     self.status_updated.emit("Veri yok")
             except Exception as exc:  # pylint: disable=broad-exception-caught
@@ -179,22 +177,22 @@ class VpmvWorker(QThread):
                     pass
 
     def _compute(self, signals: dict) -> Optional[dict]:  # pylint: disable=too-many-locals
-        series:         dict = {}
-        current_vpmv:   dict = {}
-        signal_vpmv:    dict = {}
-        pre_vpmv:       dict = {}
+        series: dict = {}
+        current_vpmv: dict = {}
+        signal_vpmv: dict = {}
+        pre_vpmv: dict = {}
         indicators_map: dict = {}
-        tf_map:         dict = {}
-        time_map:       dict = {}
+        tf_map: dict = {}
+        time_map: dict = {}
 
         for sig in signals.values():
-            symbol     = sig.get("symbol") or ""
-            sig_type   = sig.get("signal_type") or "Long"
-            opened_at  = _to_dt(sig.get("opened_at"))
+            symbol = sig.get("symbol") or ""
+            sig_type = sig.get("signal_type") or "Long"
+            opened_at = _to_dt(sig.get("opened_at"))
             vpms_score = sig.get("vpms_score") or 0.0
-            vpmv_pre   = sig.get("vpmv_pre_avg") or 0.0
-            interval   = sig.get("interval") or "1h"
-            display    = f"{symbol} ({interval})"
+            vpmv_pre = sig.get("vpmv_pre_avg") or 0.0
+            interval = sig.get("interval") or "1h"
+            display = f"{symbol} ({interval})"
 
             redis_key = f"live_kline_data:{symbol}:{interval}".encode()
             df = self._fetch_klines(redis_key)
@@ -216,16 +214,16 @@ class VpmvWorker(QThread):
             if len(post) == 0:
                 continue
 
-            v_now    = float(post[-1])
+            v_now = float(post[-1])
             v_signal = float(vpms_score) if vpms_score else float(vpmv_ser.iloc[sig_bar_idx])
 
-            series[display]         = post
-            current_vpmv[display]   = v_now
-            signal_vpmv[display]    = v_signal
-            pre_vpmv[display]       = vpmv_pre
+            series[display] = post
+            current_vpmv[display] = v_now
+            signal_vpmv[display] = v_signal
+            pre_vpmv[display] = vpmv_pre
             indicators_map[display] = sig.get("indicators") or ""
-            tf_map[display]         = interval
-            time_map[display]       = opened_at
+            tf_map[display] = interval
+            time_map[display] = opened_at
 
         if not series:
             return None
@@ -233,14 +231,14 @@ class VpmvWorker(QThread):
         delta = {sym: val - signal_vpmv.get(sym, 0.0) for sym, val in current_vpmv.items()}
 
         return {
-            "series":     series,
-            "current":    current_vpmv,
-            "signal":     signal_vpmv,
-            "pre":        pre_vpmv,
-            "delta":      delta,
+            "series": series,
+            "current": current_vpmv,
+            "signal": signal_vpmv,
+            "pre": pre_vpmv,
+            "delta": delta,
             "indicators": indicators_map,
-            "tf":         tf_map,
-            "time":       time_map,
+            "tf": tf_map,
+            "time": time_map,
         }
 
     def _fetch_klines(self, key: bytes) -> Optional[pd.DataFrame]:
@@ -250,6 +248,7 @@ class VpmvWorker(QThread):
         try:
             if raw[:4] == _ARROW_MAGIC:
                 import pyarrow as pa  # pylint: disable=import-outside-toplevel
+
                 reader = pa.ipc.open_stream(raw[4:])
                 return reader.read_pandas()
             return pd.read_json(StringIO(raw.decode()), orient="split")

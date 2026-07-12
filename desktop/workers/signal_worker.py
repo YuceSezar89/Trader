@@ -31,9 +31,9 @@ class SignalWorker(QThread):
     durum değişimi connection_changed ile panele bildirilir.
     """
 
-    signals_loaded = pyqtSignal(list)           # aktif sinyal listesi
-    new_signal = pyqtSignal(dict)               # tek yeni sinyal
-    signals_closed = pyqtSignal(list)           # kapanan sinyal ID listesi
+    signals_loaded = pyqtSignal(list)  # aktif sinyal listesi
+    new_signal = pyqtSignal(dict)  # tek yeni sinyal
+    signals_closed = pyqtSignal(list)  # kapanan sinyal ID listesi
     connection_changed = pyqtSignal(bool, str)  # connected, message
 
     def __init__(
@@ -73,8 +73,9 @@ class SignalWorker(QThread):
             sub = None
             pubsub = None
             try:
-                sub = redis.Redis.from_url(self._redis_url, decode_responses=True,
-                                           socket_connect_timeout=3)
+                sub = redis.Redis.from_url(
+                    self._redis_url, decode_responses=True, socket_connect_timeout=3
+                )
                 pubsub = sub.pubsub()
                 pubsub.subscribe("signal_opened")
                 for message in pubsub.listen():
@@ -117,12 +118,14 @@ class SignalWorker(QThread):
         try:
             conn = self._get_conn()
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     SELECT {_SIGNAL_COLUMNS}
                     FROM signals
                     WHERE status = 'active'
                     ORDER BY opened_at DESC
-                """)
+                """
+                )
                 rows = [dict(r) for r in cur.fetchall()]
                 cur.execute("SELECT COALESCE(MAX(id), 0) AS max_id FROM signals")
                 self._last_signal_id = cur.fetchone()["max_id"]
@@ -139,12 +142,15 @@ class SignalWorker(QThread):
             conn = self._get_conn()
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 # Yeni sinyaller
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     SELECT {_SIGNAL_COLUMNS}
                     FROM signals
                     WHERE id > %s
                     ORDER BY id ASC
-                """, (self._last_signal_id,))
+                """,
+                    (self._last_signal_id,),
+                )
                 for row in cur.fetchall():
                     d = dict(row)
                     self._last_signal_id = max(self._last_signal_id, d["id"])
@@ -154,10 +160,13 @@ class SignalWorker(QThread):
 
                 # Kapanan sinyaller
                 if self._active_ids:
-                    cur.execute("""
+                    cur.execute(
+                        """
                         SELECT id FROM signals
                         WHERE id = ANY(%s) AND status != 'active'
-                    """, (list(self._active_ids),))
+                    """,
+                        (list(self._active_ids),),
+                    )
                     closed = [r["id"] for r in cur.fetchall()]
                     if closed:
                         self._active_ids -= set(closed)

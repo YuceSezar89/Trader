@@ -11,8 +11,9 @@ Kullanım:
 
 from __future__ import annotations
 
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import argparse
@@ -58,24 +59,30 @@ def _compute_devisso(df: pd.DataFrame) -> float | None:
 def _fetch_bars(cur, symbol: str, interval: str, opened_at: datetime) -> pd.DataFrame | None:
     if interval == "1m":
         # 1m zaten ham granülerlik — cagg değil, doğrudan price_data'dan
-        cur.execute("""
+        cur.execute(
+            """
             SELECT timestamp AS open_time, open, high, low, close, volume
             FROM price_data
             WHERE symbol = %s AND interval = '1m' AND timestamp <= %s
             ORDER BY timestamp DESC
             LIMIT %s
-        """, (symbol, opened_at, _BARS_NEEDED))
+        """,
+            (symbol, opened_at, _BARS_NEEDED),
+        )
     else:
         cagg = _CAGG.get(interval)
         if not cagg:
             return None
-        cur.execute(f"""
+        cur.execute(
+            f"""
             SELECT bucket AS open_time, open, high, low, close, volume
             FROM {cagg}
             WHERE symbol = %s AND bucket <= %s
             ORDER BY bucket DESC
             LIMIT %s
-        """, (symbol, opened_at, _BARS_NEEDED))
+        """,
+            (symbol, opened_at, _BARS_NEEDED),
+        )
     rows = cur.fetchall()
     if not rows:
         return None
@@ -90,13 +97,15 @@ def run(dry_run: bool = False) -> None:
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     upd = conn.cursor()
 
-    cur.execute("""
+    cur.execute(
+        """
         SELECT id, symbol, interval, opened_at, signal_type
         FROM signals
         WHERE (devisso_score IS NULL OR opened_at < '2026-06-29 23:50:35')
           AND interval IN ('5m', '15m', '1h', '4h', '1m')
         ORDER BY symbol, interval, opened_at
-    """)
+    """
+    )
     signals = cur.fetchall()
     total = len(signals)
     logger.info("%d sinyal backfill gerekiyor", total)
@@ -104,8 +113,8 @@ def run(dry_run: bool = False) -> None:
     ok = skip = fail = 0
 
     for i, sig in enumerate(signals, 1):
-        sid      = sig["id"]
-        symbol   = sig["symbol"]
+        sid = sig["id"]
+        symbol = sig["symbol"]
         interval = sig["interval"]
         opened_at = sig["opened_at"]
 
@@ -120,10 +129,7 @@ def run(dry_run: bool = False) -> None:
             continue
 
         if not dry_run:
-            upd.execute(
-                "UPDATE signals SET devisso_score = %s WHERE id = %s",
-                (score, sid)
-            )
+            upd.execute("UPDATE signals SET devisso_score = %s WHERE id = %s", (score, sid))
 
         ok += 1
 
@@ -136,7 +142,9 @@ def run(dry_run: bool = False) -> None:
         conn.commit()
 
     conn.close()
-    logger.info("Tamamlandı — güncellendi=%d  atlandı=%d  hata=%d / toplam=%d", ok, skip, fail, total)
+    logger.info(
+        "Tamamlandı — güncellendi=%d  atlandı=%d  hata=%d / toplam=%d", ok, skip, fail, total
+    )
 
 
 if __name__ == "__main__":

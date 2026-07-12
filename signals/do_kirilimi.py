@@ -24,13 +24,13 @@ from config import Config
 
 logger = logging.getLogger(__name__)
 
-DO_HOUR       = 3
+DO_HOUR = 3
 SESSION_HOURS = 24
-HTF_MINUTES   = [90, 180, 360, 540, 720]
-MIN_ONAY      = 3
+HTF_MINUTES = [90, 180, 360, 540, 720]
+MIN_ONAY = 3
 MARKOV_KEEP, MARKOV_ADD = 0.7, 0.3
-ST_LEN, ST_MULT   = 10, 3.0
-ADX_LEN, ADX_MIN  = 14, 25.0
+ST_LEN, ST_MULT = 10, 3.0
+ADX_LEN, ADX_MIN = 14, 25.0
 MARU_BODY, MARU_WICK = 0.70, 0.20
 MIN_BARS = 220
 
@@ -112,15 +112,19 @@ class DOKirilimiDetector:
                 ts = pd.to_datetime(d.index)
             ts = pd.Series(ts)
 
-            o = d["open"].to_numpy(); h = d["high"].to_numpy()
-            l = d["low"].to_numpy();  c = d["close"].to_numpy()
+            o = d["open"].to_numpy()
+            h = d["high"].to_numpy()
+            l = d["low"].to_numpy()
+            c = d["close"].to_numpy()
             n = len(d)
 
             st = pta.supertrend(d["high"], d["low"], d["close"], length=ST_LEN, multiplier=ST_MULT)
             if st is None:
                 return None
             st_dir = st[f"SUPERTd_{ST_LEN}_{ST_MULT}"].to_numpy()
-            adx = pta.adx(d["high"], d["low"], d["close"], length=ADX_LEN)[f"ADX_{ADX_LEN}"].to_numpy()
+            adx = pta.adx(d["high"], d["low"], d["close"], length=ADX_LEN)[
+                f"ADX_{ADX_LEN}"
+            ].to_numpy()
             atr = pta.atr(d["high"], d["low"], d["close"], length=14).to_numpy()
 
             rsi = pta.rsi(np.log(d["close"]), length=14)
@@ -134,7 +138,8 @@ class DOKirilimiDetector:
             session_ok = mins_from_do < SESSION_HOURS * 60
 
             do_touch = (l <= dailyOpen) & (h >= dailyOpen)
-            prev_c = np.roll(c, 1); prev_c[0] = np.nan
+            prev_c = np.roll(c, 1)
+            prev_c[0] = np.nan
             do_break = (c > dailyOpen) & (prev_c <= dailyOpen)
             do_lift = (l <= dailyOpen) & (c > dailyOpen)
             c10c20_do = (c10 | c20) & (do_touch | do_break | do_lift) & np.isfinite(dailyOpen)
@@ -142,16 +147,26 @@ class DOKirilimiDetector:
             rng = h - l
             body = np.abs(c - o)
             with np.errstate(divide="ignore", invalid="ignore"):
-                marubozu = (c > o) & (rng > 0) & (body / rng >= MARU_BODY) & \
-                           ((h - c) / rng <= MARU_WICK) & ((o - l) / rng <= MARU_WICK)
-            prev_o = np.roll(o, 1); prev_o[0] = np.nan
-            prev_h = np.roll(h, 1); prev_l = np.roll(l, 1)
+                marubozu = (
+                    (c > o)
+                    & (rng > 0)
+                    & (body / rng >= MARU_BODY)
+                    & ((h - c) / rng <= MARU_WICK)
+                    & ((o - l) / rng <= MARU_WICK)
+                )
+            prev_o = np.roll(o, 1)
+            prev_o[0] = np.nan
+            prev_h = np.roll(h, 1)
+            prev_l = np.roll(l, 1)
             engulf = (c > o) & (prev_c < prev_o) & (l < prev_l) & (h > prev_h)
 
             bull = c > o
-            bull1 = np.roll(bull, 2); bull2 = np.roll(bull, 1)
-            bull1[:2] = False; bull2[:1] = False
-            h2 = np.roll(h, 2); h2[:2] = np.nan
+            bull1 = np.roll(bull, 2)
+            bull2 = np.roll(bull, 1)
+            bull1[:2] = False
+            bull2[:1] = False
+            h2 = np.roll(h, 2)
+            h2[:2] = np.nan
             fvg3 = bull1 & bull2 & bull & (l > h2)
             fvg_above_do = (h2 > dailyOpen) & (l > dailyOpen)
             setup_above_do = (o > dailyOpen) & (c > dailyOpen)
@@ -212,8 +227,14 @@ class DOKirilimiDetector:
                     fvg_lower = np.nan
                     fvg_bar = -1
 
-                setup_candle = (fvg_mem and sess and sdf_long and t_ok[i]
-                                and setup_above_do[i] and (marubozu[i] or engulf[i]))
+                setup_candle = (
+                    fvg_mem
+                    and sess
+                    and sdf_long
+                    and t_ok[i]
+                    and setup_above_do[i]
+                    and (marubozu[i] or engulf[i])
+                )
                 if setup_candle:
                     do_setup = False
                     fvg_mem = False

@@ -5,7 +5,7 @@ QAbstractTableModel kullanılır; QTableWidget yerine bu tercih edilir çünkü
 büyük veri setlerinde sadece değişen hücreyi yeniden çizer (dataChanged).
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Optional
 
 from PyQt6.QtCore import (
@@ -20,10 +20,10 @@ from PyQt6.QtGui import QColor
 from desktop.theme import COLORS
 
 COLUMNS = ["Sembol", "Fiyat", "Değişim %", "Hacim", "Funding"]
-COL_SYMBOL  = 0
-COL_PRICE   = 1
-COL_CHANGE  = 2
-COL_VOLUME  = 3
+COL_SYMBOL = 0
+COL_PRICE = 1
+COL_CHANGE = 2
+COL_VOLUME = 3
 COL_FUNDING = 4
 
 
@@ -36,7 +36,9 @@ class SymbolRow:
     prev_price: float = 0.0
     funding_rate: float = 0.0
 
-    def update_price(self, price: float, change_pct: float, volume: float = 0.0, funding_rate: float = 0.0) -> None:
+    def update_price(
+        self, price: float, change_pct: float, volume: float = 0.0, funding_rate: float = 0.0
+    ) -> None:
         self.prev_price = self.price
         self.price = price
         self.change_pct = change_pct
@@ -118,14 +120,17 @@ class WatchlistModel(QAbstractTableModel):
 
     def _display(self, row: SymbolRow, col: int) -> str:
         match col:
-            case _ if col == COL_SYMBOL: return row.symbol
-            case _ if col == COL_PRICE:  return _format_price(row.price) if row.price else "—"
+            case _ if col == COL_SYMBOL:
+                return row.symbol
+            case _ if col == COL_PRICE:
+                return _format_price(row.price) if row.price else "—"
             case _ if col == COL_CHANGE:
                 if row.change_pct == 0:
                     return "—"
                 sign = "+" if row.change_pct > 0 else ""
                 return f"{sign}{row.change_pct:.2f}%"
-            case _ if col == COL_VOLUME:  return _format_volume(row.volume) if row.volume else "—"
+            case _ if col == COL_VOLUME:
+                return _format_volume(row.volume) if row.volume else "—"
             case _ if col == COL_FUNDING:
                 if row.funding_rate == 0:
                     return "—"
@@ -142,11 +147,11 @@ class WatchlistModel(QAbstractTableModel):
                 return QColor(COLORS["red"])
             return QColor(COLORS["text_muted"])
         if col == COL_FUNDING:
-            if row.funding_rate > 0.0003:      # >0.03% — yüksek long baskısı
+            if row.funding_rate > 0.0003:  # >0.03% — yüksek long baskısı
                 return QColor(COLORS["red"])
             if row.funding_rate > 0:
                 return QColor(COLORS["text_muted"])
-            if row.funding_rate < -0.0003:     # <-0.03% — yüksek short baskısı
+            if row.funding_rate < -0.0003:  # <-0.03% — yüksek short baskısı
                 return QColor(COLORS["green"])
             if row.funding_rate < 0:
                 return QColor(COLORS["text_muted"])
@@ -185,14 +190,23 @@ class WatchlistModel(QAbstractTableModel):
             self._symbol_index = {r.symbol: i for i, r in enumerate(self._rows)}
 
     @pyqtSlot(str, float, float, float, float)
-    def on_price_updated(self, symbol: str, price: float, change_pct: float, volume: float = 0.0, funding_rate: float = 0.0) -> None:
+    def on_price_updated(
+        self,
+        symbol: str,
+        price: float,
+        change_pct: float,
+        volume: float = 0.0,
+        funding_rate: float = 0.0,
+    ) -> None:
         idx = self._symbol_index.get(symbol)
         if idx is None:
             return
         self._rows[idx].update_price(price, change_pct, volume, funding_rate)
         top_left = self.index(idx, COL_PRICE)
         bottom_right = self.index(idx, COL_FUNDING)
-        self.dataChanged.emit(top_left, bottom_right, [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ForegroundRole])
+        self.dataChanged.emit(
+            top_left, bottom_right, [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ForegroundRole]
+        )
 
     def symbol_at(self, row: int) -> Optional[str]:
         if 0 <= row < len(self._rows):
@@ -212,7 +226,7 @@ class WatchlistProxyModel(QSortFilterProxyModel):
     def lessThan(self, left: QModelIndex, right: QModelIndex) -> bool:
         src = self.sourceModel()
         col = left.column()
-        l_row = src._rows[left.row()]   # noqa: SLF001
+        l_row = src._rows[left.row()]  # noqa: SLF001
         r_row = src._rows[right.row()]  # noqa: SLF001
 
         match col:

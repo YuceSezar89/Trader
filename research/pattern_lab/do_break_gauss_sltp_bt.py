@@ -18,6 +18,7 @@ Sınır: Bar-ici (intra-bar) SL/TP sırası bilinmiyor (15m OHLC'de hangisi önc
 değdi belli değil) — SL önce değdi varsayımıyla KONSERVATİF ölçülüyor (aynı
 bar'da hem SL hem TP'ye değinen barlarda SL kazanır).
 """
+
 import os
 import sys
 from typing import Optional
@@ -27,32 +28,47 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from signals.do_kirilimi import _daily_open  # pylint: disable=wrong-import-position
-from research.pattern_lab.features import _atr  # pylint: disable=wrong-import-position
+from research.pattern_lab.do_break_gauss_economic_bt import (  # pylint: disable=wrong-import-position
+    POSITION_USD,
+    ROUND_TRIP_FEE,
+)
 from research.pattern_lab.do_open_streak_bt import (  # pylint: disable=wrong-import-position
-    DAYS, HORIZON_BARS, MIN_BARS, _fetch, _do_break_gate,
+    DAYS,
+    HORIZON_BARS,
+    MIN_BARS,
+    _do_break_gate,
+    _fetch,
 )
 from research.pattern_lab.do_open_touch_gauss_bt import (  # pylint: disable=wrong-import-position
-    GAUSS_STREAK_THRESHOLD, _gauss_sum, _streak_state, _threshold_events,
+    GAUSS_STREAK_THRESHOLD,
+    _gauss_sum,
+    _streak_state,
+    _threshold_events,
 )
-from research.pattern_lab.do_break_gauss_economic_bt import (  # pylint: disable=wrong-import-position
-    POSITION_USD, ROUND_TRIP_FEE,
-)
+from research.pattern_lab.features import _atr  # pylint: disable=wrong-import-position
+from signals.do_kirilimi import _daily_open  # pylint: disable=wrong-import-position
 
 DAR_ONCEKI = dict(sl_mult=1.5, tp_mult=3.0, breakeven_mult=1.0)  # önceki test (kötü çıktı)
 
 GENIS_CONFIGS = {
-    "SL=3 TP=8 BE=yok":     dict(sl_mult=3.0, tp_mult=8.0, breakeven_mult=None),
-    "SL=3 TP=8 BE=2":       dict(sl_mult=3.0, tp_mult=8.0, breakeven_mult=2.0),
-    "SL=4 TP=10 BE=yok":    dict(sl_mult=4.0, tp_mult=10.0, breakeven_mult=None),
+    "SL=3 TP=8 BE=yok": dict(sl_mult=3.0, tp_mult=8.0, breakeven_mult=None),
+    "SL=3 TP=8 BE=2": dict(sl_mult=3.0, tp_mult=8.0, breakeven_mult=2.0),
+    "SL=4 TP=10 BE=yok": dict(sl_mult=4.0, tp_mult=10.0, breakeven_mult=None),
     "SL=3 TP=yok(sadece SL)": dict(sl_mult=3.0, tp_mult=None, breakeven_mult=None),
 }
 
 
-def _simulate_exit(high: np.ndarray, low: np.ndarray, close: np.ndarray,
-                    entry_idx: int, entry_price: float, atr_val: float,
-                    sl_mult: float, tp_mult: Optional[float],
-                    breakeven_mult: Optional[float]) -> tuple[float, str]:
+def _simulate_exit(
+    high: np.ndarray,
+    low: np.ndarray,
+    close: np.ndarray,
+    entry_idx: int,
+    entry_price: float,
+    atr_val: float,
+    sl_mult: float,
+    tp_mult: Optional[float],
+    breakeven_mult: Optional[float],
+) -> tuple[float, str]:
     """Long pozisyon için bar-bar SL/TP/breakeven simülasyonu.
     tp_mult=None → TP yok (sadece SL + horizon timeout).
     breakeven_mult=None → breakeven kilidi yok.
@@ -123,9 +139,11 @@ def run():
         count_long, long_perc = _streak_state(o, h, l, c)
         ev3 = _threshold_events(count_long, gate, GAUSS_STREAK_THRESHOLD)
         gauss_perc = _gauss_sum(np.round(long_perc[ev3], 2))
-        valid = [(i, gv) for i, gv in zip(ev3, gauss_perc)
-                 if np.isfinite(gv) and np.isfinite(atr[i]) and atr[i] > 0
-                 and i < len(c) - HORIZON_BARS]
+        valid = [
+            (i, gv)
+            for i, gv in zip(ev3, gauss_perc)
+            if np.isfinite(gv) and np.isfinite(atr[i]) and atr[i] > 0 and i < len(c) - HORIZON_BARS
+        ]
 
         is_gauss_vals.extend(gv for i, gv in valid if pd.Timestamp(ts_np[i]) < mid)
         per_symbol.append((ts_np, h, l, c, atr, valid))
@@ -139,8 +157,9 @@ def run():
     config_reasons: dict[str, dict] = {name: {} for name in all_configs}
 
     for ts_np, h, l, c, atr, valid in per_symbol:
-        oos_high = [(i, gv) for i, gv in valid
-                    if pd.Timestamp(ts_np[i]) >= mid and gv >= oos_threshold]
+        oos_high = [
+            (i, gv) for i, gv in valid if pd.Timestamp(ts_np[i]) >= mid and gv >= oos_threshold
+        ]
         for i, _gv in oos_high:
             entry_price = c[i]
 
@@ -155,24 +174,31 @@ def run():
 
     blind24h_pnls = np.array(blind24h_pnls)
 
-    print(f"\n── Ekonomik karşılaştırma (${POSITION_USD:.0f} pozisyon, "
-          f"round-trip fee ${ROUND_TRIP_FEE:.2f}) ──")
+    print(
+        f"\n── Ekonomik karşılaştırma (${POSITION_USD:.0f} pozisyon, "
+        f"round-trip fee ${ROUND_TRIP_FEE:.2f}) ──"
+    )
     print(f"{'yöntem':28} {'n':>6} {'WR%':>6} {'ort $/işlem':>12} {'toplam $':>10} {'$/ay':>10}")
     s = _dollar_stats(blind24h_pnls, oos_days)
-    print(f"{'kör 24h bekleme':28} {s['n']:>6} {s['wr']:>6} {s['avg_usd']:>12} "
-          f"{s['total_usd']:>10} {s['usd_per_month']:>10}")
+    print(
+        f"{'kör 24h bekleme':28} {s['n']:>6} {s['wr']:>6} {s['avg_usd']:>12} "
+        f"{s['total_usd']:>10} {s['usd_per_month']:>10}"
+    )
     for name, pnls in config_pnls.items():
         s = _dollar_stats(np.array(pnls), oos_days)
         if s.get("n", 0) == 0:
             continue
-        print(f"{name:28} {s['n']:>6} {s['wr']:>6} {s['avg_usd']:>12} "
-              f"{s['total_usd']:>10} {s['usd_per_month']:>10}")
+        print(
+            f"{name:28} {s['n']:>6} {s['wr']:>6} {s['avg_usd']:>12} "
+            f"{s['total_usd']:>10} {s['usd_per_month']:>10}"
+        )
 
     print("\n── Çıkış nedeni dağılımı ──")
     for name, reasons in config_reasons.items():
         total = sum(reasons.values())
-        breakdown = ", ".join(f"{r}=%{c/total*100:.0f}" for r, c in
-                               sorted(reasons.items(), key=lambda x: -x[1]))
+        breakdown = ", ".join(
+            f"{r}=%{c/total*100:.0f}" for r, c in sorted(reasons.items(), key=lambda x: -x[1])
+        )
         print(f"  {name:28} {breakdown}")
 
 

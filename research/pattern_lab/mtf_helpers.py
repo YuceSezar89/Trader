@@ -18,6 +18,7 @@ saatin ilk 55 dakikasında gelmesi ~%92 olasılıkla bu hataya düşürüyordu).
 her TF'nin kendi süresi hesaba katılıyor: bir bucket'ın GERÇEKTEN kapanmış
 sayılması için bucket+süre <= verilen an olmalı.
 """
+
 import numpy as np
 import pandas as pd
 
@@ -42,7 +43,9 @@ def _ha_direction_series(interval: str, symbol: str) -> pd.DataFrame | None:
     return ha[["ts", "bullish"]]
 
 
-def _last_direction_before(dir_df: pd.DataFrame, ts_arr: np.ndarray, opened_at, tf: str) -> bool | None:
+def _last_direction_before(
+    dir_df: pd.DataFrame, ts_arr: np.ndarray, opened_at, tf: str
+) -> bool | None:
     """tf: bu ts_arr'ın ait olduğu zaman dilimi ("5m"/"15m"/"1h"/"4h") — bir
     bucket'ın GERÇEKTEN kapanmış sayılması için bucket + TF_DURATION[tf] <=
     opened_at şartı aranır (sadece bucket <= opened_at YETERSİZ, bkz. modül

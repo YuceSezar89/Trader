@@ -13,6 +13,7 @@ Bu script SADECE SHORT için üç versiyonu yan yana karşılaştırır:
    barının KENDİ kapanışını bir önceki barla kıyaslar, gelecek bar gerekmez,
    entry=c[i] (gecikmesiz, canlıda tam uygulanabilir).
 """
+
 import os
 import sys
 
@@ -22,11 +23,20 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from config import Config  # pylint: disable=wrong-import-position
 from indicators.core import calculate_rsi  # pylint: disable=wrong-import-position
-from utils.vpmv import compute_series  # pylint: disable=wrong-import-position
+from research.pattern_lab.do_open_streak_bt import (  # pylint: disable=wrong-import-position
+    HORIZON_BARS,
+    MIN_BARS,
+)
 from research.pattern_lab.features import _atr  # pylint: disable=wrong-import-position
-from research.pattern_lab.do_open_streak_bt import HORIZON_BARS, MIN_BARS  # pylint: disable=wrong-import-position
-from research.pattern_lab.rsi_cross_sl_sweep_bt import _rsi_cross_events, _apply_signal_filter  # pylint: disable=wrong-import-position
-from research.pattern_lab.rsi_cross_combined_sl_bt import _fetch_with_volume, _report  # pylint: disable=wrong-import-position
+from research.pattern_lab.rsi_cross_combined_sl_bt import (  # pylint: disable=wrong-import-position
+    _fetch_with_volume,
+    _report,
+)
+from research.pattern_lab.rsi_cross_sl_sweep_bt import (  # pylint: disable=wrong-import-position
+    _apply_signal_filter,
+    _rsi_cross_events,
+)
+from utils.vpmv import compute_series  # pylint: disable=wrong-import-position
 
 DIRECTION = "Short"
 
@@ -35,8 +45,8 @@ def run():
     df = _fetch_with_volume()
     print(f"{df['symbol'].nunique()} sembol, {len(df):,} 15m bar\n")
 
-    old_events = []      # entry = c[i] (look-ahead'li, eski yöntem)
-    fixed_events = []    # entry = c[i+1] (düzeltilmiş, canlıda mümkün)
+    old_events = []  # entry = c[i] (look-ahead'li, eski yöntem)
+    fixed_events = []  # entry = c[i+1] (düzeltilmiş, canlıda mümkün)
     intrabar_events = []  # entry = c[i], jump = VPMV[i]-VPMV[i-1] (mum içi, canlıda mümkün)
     all_ts = []
 
@@ -65,7 +75,11 @@ def run():
                 continue
             if i - 1 < 0 or i + 1 >= len(g):
                 continue
-            pre_v, post_v, sig_v = series_short.iloc[i - 1], series_short.iloc[i + 1], series_short.iloc[i]
+            pre_v, post_v, sig_v = (
+                series_short.iloc[i - 1],
+                series_short.iloc[i + 1],
+                series_short.iloc[i],
+            )
             if not (np.isfinite(pre_v) and np.isfinite(post_v) and np.isfinite(sig_v)):
                 continue
             jump = post_v - pre_v
@@ -89,9 +103,11 @@ def run():
     print(f"kalibrasyon (in-sample): {t_min} .. {mid}")
     print(f"test (out-of-sample):    {mid} .. {t_max}  ({oos_days:.1f} gün)\n")
 
-    for label, events in (("ESKİ (look-ahead'li, entry=c[i])", old_events),
-                          ("DÜZELTİLMİŞ-GECİKMELİ (entry=c[i+1])", fixed_events),
-                          ("MUM İÇİ (jump=VPMV[i]-VPMV[i-1], entry=c[i])", intrabar_events)):
+    for label, events in (
+        ("ESKİ (look-ahead'li, entry=c[i])", old_events),
+        ("DÜZELTİLMİŞ-GECİKMELİ (entry=c[i+1])", fixed_events),
+        ("MUM İÇİ (jump=VPMV[i]-VPMV[i-1], entry=c[i])", intrabar_events),
+    ):
         is_ev = [e for e in events if e[7] < mid]
         oos_ev = [e for e in events if e[7] >= mid]
         jump_threshold = float(np.percentile([e[8] for e in is_ev], 66.7))

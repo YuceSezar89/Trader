@@ -27,10 +27,7 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def _backend_already_running() -> bool:
     try:
-        result = subprocess.run(
-            ["pgrep", "-f", "run_services.py"],
-            capture_output=True, text=True
-        )
+        result = subprocess.run(["pgrep", "-f", "run_services.py"], capture_output=True, text=True)
         return bool(result.stdout.strip())
     except Exception:
         return False
@@ -65,21 +62,22 @@ def _load_config() -> dict:
     try:
         sys.path.insert(0, _PROJECT_ROOT)
         from config import Config  # pylint: disable=import-outside-toplevel
+
         return {
-            "redis_url":   Config.REDIS_URL,
-            "db_host":     Config.DB_HOST,
-            "db_port":     Config.DB_PORT,
-            "db_name":     Config.DB_NAME,
-            "db_user":     Config.DB_USER,
+            "redis_url": Config.REDIS_URL,
+            "db_host": Config.DB_HOST,
+            "db_port": Config.DB_PORT,
+            "db_name": Config.DB_NAME,
+            "db_user": Config.DB_USER,
             "db_password": Config.DB_PASSWORD,
         }
     except Exception:
         return {
-            "redis_url":   "redis://localhost:6379/0",
-            "db_host":     "localhost",
-            "db_port":     5432,
-            "db_name":     "trader_panel",
-            "db_user":     "yusuf",
+            "redis_url": "redis://localhost:6379/0",
+            "db_host": "localhost",
+            "db_port": 5432,
+            "db_name": "trader_panel",
+            "db_user": "yusuf",
             "db_password": "",
         }
 

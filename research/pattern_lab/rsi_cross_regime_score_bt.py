@@ -7,6 +7,7 @@ sinyallerine uygular — threshold_optimizer.py'nin AYNI 3-kapılı disiplini
 Veri: `signals` tablosundaki GERÇEK kapanmış RSI_Cross Long sinyalleri
 (alpha/beta testinde kullanılanla aynı, look-ahead yok).
 """
+
 import os
 import sys
 
@@ -14,10 +15,15 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from research.pattern_lab.regime_score import build_regime_score  # pylint: disable=wrong-import-position
-from research.pattern_lab.rsi_cross_combined_sl_bt import _fetch_with_volume  # pylint: disable=wrong-import-position
+from research.pattern_lab.regime_score import (
+    build_regime_score,  # pylint: disable=wrong-import-position
+)
+from research.pattern_lab.rsi_cross_combined_sl_bt import (
+    _fetch_with_volume,  # pylint: disable=wrong-import-position
+)
 from research.pattern_lab.threshold_optimizer import (  # pylint: disable=wrong-import-position
-    _fetch_signals, _run_single_var_on_df,
+    _fetch_signals,
+    _run_single_var_on_df,
 )
 
 INDICATOR = "RSI_Cross(9,24)"
@@ -43,9 +49,15 @@ def run():
     regime_df = regime_df.sort_values("ts")
 
     merged = pd.merge_asof(
-        sig_df, regime_df, left_on="opened_at", right_on="ts", direction="backward",
+        sig_df,
+        regime_df,
+        left_on="opened_at",
+        right_on="ts",
+        direction="backward",
     ).dropna(subset=["regime_score"])
-    print(f"{INDICATOR} — {DIRECTION}: {len(sig_df):,} sinyal, {len(merged):,} rejim skoruyla eşleşti")
+    print(
+        f"{INDICATOR} — {DIRECTION}: {len(sig_df):,} sinyal, {len(merged):,} rejim skoruyla eşleşti"
+    )
 
     label = f"{INDICATOR} — {DIRECTION} — REJİM SKORU (20-80 persentil)"
     _run_single_var_on_df(label, merged, "regime_score", percentiles=PERCENTILES)

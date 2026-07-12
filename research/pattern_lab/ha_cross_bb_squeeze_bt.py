@@ -13,6 +13,7 @@ yöntem) — sinyal barındaki değer DÜŞÜKSE bantlar o an tarihsel olarak da
 Hipotez: squeeze anında gelen sinyal (düşük tercil) → daha büyük/güvenilir
 hareket. Metodoloji: SADECE 3 Tem 19:22:16 sonrası + split-period BAŞTAN.
 """
+
 import os
 import sys
 
@@ -22,9 +23,15 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from indicators.core import calculate_bollinger_bands  # pylint: disable=wrong-import-position
+from research.pattern_lab.ha_cross_combined_test import (
+    _fetch_ha_cross_signals,  # pylint: disable=wrong-import-position
+)
+from research.pattern_lab.rsi_cross_vpmv_jump_bt import (  # pylint: disable=wrong-import-position
+    INTERVALS,
+    MIN_HISTORY,
+    _fetch_symbol_history,
+)
 from research.pattern_lab.vol_exhaustion_bt import _stats  # pylint: disable=wrong-import-position
-from research.pattern_lab.rsi_cross_vpmv_jump_bt import MIN_HISTORY, INTERVALS, _fetch_symbol_history  # pylint: disable=wrong-import-position
-from research.pattern_lab.ha_cross_combined_test import _fetch_ha_cross_signals  # pylint: disable=wrong-import-position
 
 
 def _bb_width_rank_series(df: pd.DataFrame) -> pd.Series:
@@ -47,8 +54,10 @@ def _print_tercile(df: pd.DataFrame, q1: float, q2: float) -> None:
     for name in ("düşük (daralmış)", "orta", "yüksek (geniş)"):
         rets = d.loc[d["tercil"] == name, "realized_pnl"].to_numpy() / 100
         s = _stats(rets)
-        print(f"{name:20} {s.get('n',0):>7} {s.get('wr',0):>6} "
-              f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+        print(
+            f"{name:20} {s.get('n',0):>7} {s.get('wr',0):>6} "
+            f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+        )
 
 
 def run():
@@ -73,11 +82,13 @@ def run():
                 val = bb_rank.iloc[i]
                 if not np.isfinite(val):
                     continue
-                rows.append({
-                    "bb_rank": val,
-                    "realized_pnl": row["realized_pnl"],
-                    "opened_at": row["opened_at"],
-                })
+                rows.append(
+                    {
+                        "bb_rank": val,
+                        "realized_pnl": row["realized_pnl"],
+                        "opened_at": row["opened_at"],
+                    }
+                )
 
     df = pd.DataFrame(rows)
     print(f"\ntoplam eşleşen sinyal: {len(df):,}\n")
@@ -87,11 +98,15 @@ def run():
 
     s = _stats(df["realized_pnl"].to_numpy() / 100)
     print(f"{'grup':20} {'n':>7} {'WR%':>6} {'ort%':>8} {'PF':>7}")
-    print(f"{'baseline (tümü)':20} {s.get('n',0):>7} {s.get('wr',0):>6} "
-          f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+    print(
+        f"{'baseline (tümü)':20} {s.get('n',0):>7} {s.get('wr',0):>6} "
+        f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+    )
 
     q1, q2 = df["bb_rank"].quantile([0.333, 0.667])
-    print(f"\n── BB genişliği (rolling-100 percentile rank) terciline göre ── (q1={q1:.1f}, q2={q2:.1f})")
+    print(
+        f"\n── BB genişliği (rolling-100 percentile rank) terciline göre ── (q1={q1:.1f}, q2={q2:.1f})"
+    )
     _print_tercile(df, q1, q2)
 
     t_min, t_max = df["opened_at"].min(), df["opened_at"].max()

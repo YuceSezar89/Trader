@@ -6,23 +6,23 @@ Kullanım:
     python scripts/analyze_prevol.py [log_dosyası]
 """
 
+import os
 import re
-import sys
 import statistics
+import sys
 from datetime import datetime, timedelta
 
 import psycopg2
 
-import os
-import sys
-
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from config import Config
 import psycopg2.extras
 
-DB_DSN = (f"dbname={Config.DB_NAME} user={Config.DB_USER} "
-          f"host={Config.DB_HOST} port={Config.DB_PORT}")
+from config import Config
+
+DB_DSN = (
+    f"dbname={Config.DB_NAME} user={Config.DB_USER} " f"host={Config.DB_HOST} port={Config.DB_PORT}"
+)
 log_file = sys.argv[1] if len(sys.argv) > 1 else "logs/services.log"
 
 pattern = re.compile(
@@ -36,13 +36,15 @@ with open(log_file) as f:
         if not m:
             continue
         ts_str, symbol, sig_type, interval, buy_pct = m.groups()
-        entries.append({
-            "ts":       datetime.fromisoformat(ts_str),
-            "symbol":   symbol,
-            "sig_type": sig_type,
-            "interval": interval,
-            "buy_pct":  float(buy_pct),
-        })
+        entries.append(
+            {
+                "ts": datetime.fromisoformat(ts_str),
+                "symbol": symbol,
+                "sig_type": sig_type,
+                "interval": interval,
+                "buy_pct": float(buy_pct),
+            }
+        )
 
 print(f"Log'da {len(entries)} PREVOL girişi bulundu.")
 if not entries:
@@ -51,13 +53,15 @@ if not entries:
 # Tek sorguda tüm sinyalleri çek, sonra Python'da eşleştir
 conn = psycopg2.connect(DB_DSN)
 cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-cur.execute("""
+cur.execute(
+    """
     SELECT symbol, signal_type, interval, opened_at, realized_pnl
     FROM signals
     WHERE status = 'closed'
       AND realized_pnl IS NOT NULL
     ORDER BY opened_at
-""")
+"""
+)
 signals = cur.fetchall()
 cur.close()
 conn.close()
@@ -91,7 +95,7 @@ def rapor(rows, baslik):
         print(f"{baslik}: veri yok")
         return
     pnls = [r["pnl_pct"] for r in rows]
-    pos  = sum(1 for p in pnls if p > 0)
+    pos = sum(1 for p in pnls if p > 0)
     print(f"\n{'='*45}")
     print(f"{baslik}  ({len(rows)} sinyal)")
     print(f"{'='*45}")
@@ -101,20 +105,28 @@ def rapor(rows, baslik):
 
 
 for label, sig_type, good_thr, bad_thr in [
-    ("LONG",  "Long",  60, 40),
+    ("LONG", "Long", 60, 40),
     ("SHORT", "Short", 40, 60),
 ]:
     sigs = [r for r in matched if r["sig_type"] == sig_type]
     if not sigs:
         continue
-    good = [r for r in sigs if (sig_type == "Long"  and r["buy_pct"] >= good_thr) or
-                                (sig_type == "Short" and r["buy_pct"] <= good_thr)]
-    bad  = [r for r in sigs if (sig_type == "Long"  and r["buy_pct"] <= bad_thr) or
-                                (sig_type == "Short" and r["buy_pct"] >= bad_thr)]
+    good = [
+        r
+        for r in sigs
+        if (sig_type == "Long" and r["buy_pct"] >= good_thr)
+        or (sig_type == "Short" and r["buy_pct"] <= good_thr)
+    ]
+    bad = [
+        r
+        for r in sigs
+        if (sig_type == "Long" and r["buy_pct"] <= bad_thr)
+        or (sig_type == "Short" and r["buy_pct"] >= bad_thr)
+    ]
     neut = [r for r in sigs if r not in good and r not in bad]
 
     rapor(good, f"{label} — Yön uyumlu hacim")
-    rapor(bad,  f"{label} — Ters yönde hacim")
+    rapor(bad, f"{label} — Ters yönde hacim")
     rapor(neut, f"{label} — Nötr hacim")
 
 print(f"\nToplam eşleşen: {len(matched)}")

@@ -12,6 +12,7 @@ Look-ahead yok: PP DAİMA bir önceki günün H/L/C'sinden (pp.shift(1)) — bug
 verisi bugünün PP'sini hiç etkilemiyor. Bar-kapanış güvenliği merge_regime'in
 mevcut (opened_at - 15dk) kesme mantığından geliyor.
 """
+
 import os
 import sys
 
@@ -22,9 +23,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from indicators.core import calculate_fib_pivots  # pylint: disable=wrong-import-position
 from research.pattern_lab.rsi_cross_volbreakout_regime_bt import (  # pylint: disable=wrong-import-position
-    INDICATOR, _fetch_regime, _fetch_signals, _merge_regime,
+    INDICATOR,
+    _fetch_regime,
+    _fetch_signals,
+    _merge_regime,
 )
-from research.pattern_lab.threshold_optimizer import _run_single_var_on_df  # pylint: disable=wrong-import-position
+from research.pattern_lab.threshold_optimizer import (
+    _run_single_var_on_df,  # pylint: disable=wrong-import-position
+)
 
 BAR_DURATION = pd.Timedelta(minutes=15)
 
@@ -32,7 +38,11 @@ BAR_DURATION = pd.Timedelta(minutes=15)
 def _pivot_bias_series(g: pd.DataFrame) -> pd.Series:
     g = g.copy()
     g["date"] = g["ts"].dt.date
-    daily = g.groupby("date").agg(high=("high", "max"), low=("low", "min"), close=("close", "last")).sort_index()
+    daily = (
+        g.groupby("date")
+        .agg(high=("high", "max"), low=("low", "min"), close=("close", "last"))
+        .sort_index()
+    )
     pp = daily.apply(lambda r: calculate_fib_pivots(r["high"], r["low"], r["close"])["pp"], axis=1)
     pp_prev = pp.shift(1)  # bugünün PP'si DÜNÜN H/L/C'sinden
     g["pp"] = g["date"].map(pp_prev.to_dict())
@@ -47,12 +57,16 @@ def run() -> None:
             print(f"{INDICATOR} — {direction}: yetersiz sinyal ({len(sig_df)}), atlanıyor")
             continue
 
-        regime_df = _fetch_regime(sig_df["symbol"].unique().tolist(), "15m", _pivot_bias_series, "pivot_bias")
+        regime_df = _fetch_regime(
+            sig_df["symbol"].unique().tolist(), "15m", _pivot_bias_series, "pivot_bias"
+        )
         merged = _merge_regime(sig_df, regime_df, "pivot_bias", BAR_DURATION)
-        print(f"{INDICATOR} — {direction}: {len(sig_df):,} sinyal, {len(merged):,} pivot_bias ile eşleşti "
-              f"(ort={merged['pivot_bias'].mean():.2f}, "
-              f"PP-üstü={len(merged[merged['pivot_bias']==1])}, "
-              f"PP-altı={len(merged[merged['pivot_bias']==-1])})")
+        print(
+            f"{INDICATOR} — {direction}: {len(sig_df):,} sinyal, {len(merged):,} pivot_bias ile eşleşti "
+            f"(ort={merged['pivot_bias'].mean():.2f}, "
+            f"PP-üstü={len(merged[merged['pivot_bias']==1])}, "
+            f"PP-altı={len(merged[merged['pivot_bias']==-1])})"
+        )
 
         label = f"{INDICATOR} — {direction} — pivot_bias (Fib PP üstü/altı)"
         _run_single_var_on_df(label, merged, "pivot_bias")

@@ -38,7 +38,9 @@ from config import Config  # pylint: disable=wrong-import-position
 
 BAYBORA_PATH = "/Users/yusuf/Downloads/baybora/Binance_customerv3/stratejiler/vpmv_cons"
 sys.path.insert(0, BAYBORA_PATH)
-from consensus_calculator import compute_consensus_full  # pylint: disable=import-error,wrong-import-position
+from consensus_calculator import (
+    compute_consensus_full,  # pylint: disable=import-error,wrong-import-position
+)
 
 # ── Baybora'nın kendi varsayılan parametreleri (DEĞİŞTİRİLMEDİ) ──────────────
 RSI_LEN, VOL_LEN, ATR_LEN, ATR_LOOKBACK = 14, 14, 14, 100
@@ -64,8 +66,11 @@ DEFAULT_DAYS = 120
 
 def _conn():
     return psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
 
 
@@ -125,27 +130,51 @@ def replay_symbol(df: pd.DataFrame) -> list[dict]:
         sl = slice(lo, i + 1)
 
         result = compute_consensus_full(
-            c[sl], h[sl], l[sl], v[sl],
-            float(daily_o[i]), float(weekly_o[i]), float(monthly_o[i]),
-            RSI_LEN, VOL_LEN, ATR_LEN, ATR_LOOKBACK,
-            ST_PERIOD, ST_MULT,
-            VOL_W, MOM_W, PRC_W, VLT_W,
-            LV_FAST, LV_SLOW, LV_SIG, LV_LR,
-            XM_SHORT, XM_LONG, XM_TRIG,
-            prev_ribbon, prev_c12, prev_c13, prev_poz, prev_sb,
-            AL_ESIGI, SAT_ESIGI,
+            c[sl],
+            h[sl],
+            l[sl],
+            v[sl],
+            float(daily_o[i]),
+            float(weekly_o[i]),
+            float(monthly_o[i]),
+            RSI_LEN,
+            VOL_LEN,
+            ATR_LEN,
+            ATR_LOOKBACK,
+            ST_PERIOD,
+            ST_MULT,
+            VOL_W,
+            MOM_W,
+            PRC_W,
+            VLT_W,
+            LV_FAST,
+            LV_SLOW,
+            LV_SIG,
+            LV_LR,
+            XM_SHORT,
+            XM_LONG,
+            XM_TRIG,
+            prev_ribbon,
+            prev_c12,
+            prev_c13,
+            prev_poz,
+            prev_sb,
+            AL_ESIGI,
+            SAT_ESIGI,
         )
         _states, _ye, _kr, poz, sb, rib, c12s, c13s, _ema_vals = result
 
         if poz != prev_poz and poz != 0:
             own_ret_24h = float(c[i] / c[i - 24] - 1) if i >= 24 else np.nan
-            events.append({
-                "idx": i,
-                "direction": "Long" if poz == 1 else "Short",
-                "entry_price": float(c[i]),
-                "entry_time": ts.iloc[i],
-                "own_ret_24h": own_ret_24h,
-            })
+            events.append(
+                {
+                    "idx": i,
+                    "direction": "Long" if poz == 1 else "Short",
+                    "entry_price": float(c[i]),
+                    "entry_time": ts.iloc[i],
+                    "own_ret_24h": own_ret_24h,
+                }
+            )
 
         prev_ribbon, prev_c12, prev_c13, prev_poz, prev_sb = rib, c12s, c13s, poz, sb
 
@@ -186,12 +215,17 @@ def simulate_exits(df: pd.DataFrame, events: list[dict]) -> list[dict]:
             exit_price, exit_reason = c[reverse_idx], "reverse"
 
         ret = (exit_price / entry - 1) if direction == "Long" else (entry / exit_price - 1)
-        trades.append({
-            "entry_time": ev["entry_time"], "direction": direction,
-            "entry_price": entry, "exit_price": exit_price,
-            "exit_reason": exit_reason, "ret": ret,
-            "own_ret_24h": ev["own_ret_24h"],
-        })
+        trades.append(
+            {
+                "entry_time": ev["entry_time"],
+                "direction": direction,
+                "entry_price": entry,
+                "exit_price": exit_price,
+                "exit_reason": exit_reason,
+                "ret": ret,
+                "own_ret_24h": ev["own_ret_24h"],
+            }
+        )
     return trades
 
 
@@ -223,17 +257,25 @@ def _dollar_stats(rets: np.ndarray, days_span: float) -> dict:
     total = float(pnl.sum())
     per_month = total / days_span * 30 if days_span > 0 else 0.0
     return {
-        "n": len(rets), "wr": round(float((pnl > 0).mean() * 100), 1),
-        "avg_usd": round(float(pnl.mean()), 3), "total_usd": round(total, 1),
+        "n": len(rets),
+        "wr": round(float((pnl > 0).mean() * 100), 1),
+        "avg_usd": round(float(pnl.mean()), 3),
+        "total_usd": round(total, 1),
         "usd_per_month": round(per_month, 1),
-        "pf": round(float(pnl[pnl > 0].sum() / abs(pnl[pnl < 0].sum())), 3) if (pnl < 0).any() else float("inf"),
+        "pf": (
+            round(float(pnl[pnl > 0].sum() / abs(pnl[pnl < 0].sum())), 3)
+            if (pnl < 0).any()
+            else float("inf")
+        ),
     }
 
 
 def run(num_symbols: int, days: int):
     symbols = _get_symbols(num_symbols)
     print(f"Test evreni: {len(symbols)} sembol, son {days} gün (1h)")
-    print(f"Parametreler: pencere={WINDOW} bar, eşik={AL_ESIGI}/13, TP=%{TP_PCT*100:.0f} SL=%{SL_PCT*100:.0f}\n")
+    print(
+        f"Parametreler: pencere={WINDOW} bar, eşik={AL_ESIGI}/13, TP=%{TP_PCT*100:.0f} SL=%{SL_PCT*100:.0f}\n"
+    )
 
     all_trades = []
     for i, symbol in enumerate(symbols):
@@ -261,19 +303,25 @@ def run(num_symbols: int, days: int):
     mid = t_min + (t_max - t_min) / 2
 
     print(f"\nToplam {len(tdf)} işlem, {t_min.date()} - {t_max.date()} ({span_days:.0f} gün)")
-    print(f"Yön dağılımı: Long={sum(tdf['direction']=='Long')} Short={sum(tdf['direction']=='Short')}")
+    print(
+        f"Yön dağılımı: Long={sum(tdf['direction']=='Long')} Short={sum(tdf['direction']=='Short')}"
+    )
     print(f"Çıkış nedeni: {tdf['exit_reason'].value_counts().to_dict()}\n")
 
     print("── TÜMÜ ──")
     s = _dollar_stats(tdf["ret"].to_numpy(), span_days)
-    print(f"n={s['n']} WR%={s['wr']} PF={s['pf']} ort$/işlem={s['avg_usd']} $/ay={s['usd_per_month']}\n")
+    print(
+        f"n={s['n']} WR%={s['wr']} PF={s['pf']} ort$/işlem={s['avg_usd']} $/ay={s['usd_per_month']}\n"
+    )
 
     print("── Yöne göre ──")
     for direction in ("Long", "Short"):
         sub = tdf[tdf["direction"] == direction]
         s = _dollar_stats(sub["ret"].to_numpy(), span_days)
-        print(f"{direction:6} n={s.get('n',0)} WR%={s.get('wr','-')} PF={s.get('pf','-')} "
-              f"ort$/işlem={s.get('avg_usd','-')} $/ay={s.get('usd_per_month','-')}")
+        print(
+            f"{direction:6} n={s.get('n',0)} WR%={s.get('wr','-')} PF={s.get('pf','-')} "
+            f"ort$/işlem={s.get('avg_usd','-')} $/ay={s.get('usd_per_month','-')}"
+        )
 
     print("\n── Split-period sağlamlık (ilk yarı vs ikinci yarı) ──")
     first_half = tdf[tdf["entry_time"] < mid]
@@ -281,28 +329,42 @@ def run(num_symbols: int, days: int):
     for name, sub in (("İlk yarı", first_half), ("İkinci yarı", second_half)):
         half_days = span_days / 2
         s = _dollar_stats(sub["ret"].to_numpy(), half_days)
-        print(f"{name:12} n={s.get('n',0)} WR%={s.get('wr','-')} PF={s.get('pf','-')} "
-              f"ort$/işlem={s.get('avg_usd','-')} $/ay={s.get('usd_per_month','-')}")
+        print(
+            f"{name:12} n={s.get('n',0)} WR%={s.get('wr','-')} PF={s.get('pf','-')} "
+            f"ort$/işlem={s.get('avg_usd','-')} $/ay={s.get('usd_per_month','-')}"
+        )
 
-    print("\n── AYRIŞMA tercili (kullanıcının 'en çok hareket edeni elle seç' davranışının vekili) ──")
+    print(
+        "\n── AYRIŞMA tercili (kullanıcının 'en çok hareket edeni elle seç' davranışının vekili) ──"
+    )
     print("(ayrışma = sinyal yönünde, BTC'ye göre 24h göreli getiri fazlası)")
     valid = tdf.dropna(subset=["ayrisma"]).copy()
-    valid["tercil"] = pd.qcut(valid["ayrisma"], 3, labels=["düşük", "orta", "yüksek"], duplicates="drop")
+    valid["tercil"] = pd.qcut(
+        valid["ayrisma"], 3, labels=["düşük", "orta", "yüksek"], duplicates="drop"
+    )
     for name in ["düşük", "orta", "yüksek"]:
         sub = valid[valid["tercil"] == name]
         s = _dollar_stats(sub["ret"].to_numpy(), span_days)
-        print(f"{name:8} n={s.get('n',0)} WR%={s.get('wr','-')} PF={s.get('pf','-')} "
-              f"ort$/işlem={s.get('avg_usd','-')} $/ay={s.get('usd_per_month','-')}")
+        print(
+            f"{name:8} n={s.get('n',0)} WR%={s.get('wr','-')} PF={s.get('pf','-')} "
+            f"ort$/işlem={s.get('avg_usd','-')} $/ay={s.get('usd_per_month','-')}"
+        )
 
     print("\n── AYRIŞMA tercili × split-period (sağlamlık) ──")
     for half_name, half_df in (("İlk yarı", first_half), ("İkinci yarı", second_half)):
-        half_valid = half_df.dropna(subset=["ayrisma"]).copy() if "ayrisma" in half_df.columns else valid[valid["entry_time"].isin(half_df["entry_time"])]
+        half_valid = (
+            half_df.dropna(subset=["ayrisma"]).copy()
+            if "ayrisma" in half_df.columns
+            else valid[valid["entry_time"].isin(half_df["entry_time"])]
+        )
         half_valid = valid[valid["entry_time"].isin(half_df["entry_time"])]
         if half_valid.empty:
             continue
         half_valid = half_valid.copy()
         try:
-            half_valid["tercil2"] = pd.qcut(half_valid["ayrisma"], 3, labels=["düşük", "orta", "yüksek"], duplicates="drop")
+            half_valid["tercil2"] = pd.qcut(
+                half_valid["ayrisma"], 3, labels=["düşük", "orta", "yüksek"], duplicates="drop"
+            )
         except ValueError:
             continue
         print(f"  {half_name}:")
@@ -310,8 +372,10 @@ def run(num_symbols: int, days: int):
             sub = half_valid[half_valid["tercil2"] == name]
             half_days = span_days / 2
             s = _dollar_stats(sub["ret"].to_numpy(), half_days)
-            print(f"    {name:8} n={s.get('n',0)} WR%={s.get('wr','-')} PF={s.get('pf','-')} "
-                  f"ort$/işlem={s.get('avg_usd','-')} $/ay={s.get('usd_per_month','-')}")
+            print(
+                f"    {name:8} n={s.get('n',0)} WR%={s.get('wr','-')} PF={s.get('pf','-')} "
+                f"ort$/işlem={s.get('avg_usd','-')} $/ay={s.get('usd_per_month','-')}"
+            )
 
 
 if __name__ == "__main__":

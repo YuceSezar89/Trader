@@ -8,6 +8,7 @@ Katman B: tüm evren × CORPUS_DAYS × 5m close (cagg_5m — sıralama/ayrışma
 Zaman ekseni: proje geleneği, naif İstanbul zamanı ("ts" kolonu).
 Çapa (anchor): kurulum anında bir kez dondurulur, meta.json'a yazılır.
 """
+
 import json
 import os
 import random
@@ -28,8 +29,11 @@ random.seed(C.SEED)
 
 def _conn():
     return psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
 
 
@@ -84,10 +88,7 @@ def select_groups(stats: pd.DataFrame) -> tuple[list[str], list[tuple[str, str]]
     for _, case in cases.iterrows():
         dec = case["vol_decile"]
         for widen in range(C.VOL_DECILES):
-            cand = pool[
-                (pool["vol_decile"].sub(dec).abs() <= widen)
-                & (~pool["symbol"].isin(used))
-            ]
+            cand = pool[(pool["vol_decile"].sub(dec).abs() <= widen) & (~pool["symbol"].isin(used))]
             if not cand.empty:
                 pick = cand.sample(1, random_state=C.SEED + len(pairs)).iloc[0]
                 used.add(pick["symbol"])
@@ -120,13 +121,19 @@ def fetch_layer_a(symbols: list[str], anchor: datetime) -> pd.DataFrame:
     frames = []
     for sym, g in raw.groupby("symbol"):
         g = g.set_index("ts").sort_index()
-        agg = g.resample("5min").agg(
-            open=("open", "first"), high=("high", "max"),
-            low=("low", "min"), close=("close", "last"),
-            volume=("volume", "sum"),
-            buy_volume=("buy_volume", _sum_or_nan),
-            sell_volume=("sell_volume", _sum_or_nan),
-        ).dropna(subset=["open"])
+        agg = (
+            g.resample("5min")
+            .agg(
+                open=("open", "first"),
+                high=("high", "max"),
+                low=("low", "min"),
+                close=("close", "last"),
+                volume=("volume", "sum"),
+                buy_volume=("buy_volume", _sum_or_nan),
+                sell_volume=("sell_volume", _sum_or_nan),
+            )
+            .dropna(subset=["open"])
+        )
         agg["symbol"] = sym
         frames.append(agg.reset_index())
         print(f"  {sym}: {len(agg)} bar (DB)")

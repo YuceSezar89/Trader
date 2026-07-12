@@ -30,8 +30,10 @@ def _get_dedicated_connection() -> aioredis.Redis:
     global _dedicated_conn  # pylint: disable=global-statement
     if _dedicated_conn is None:
         _dedicated_conn = aioredis.from_url(
-            Config.REDIS_URL, decode_responses=True,
-            socket_timeout=5, socket_connect_timeout=5,
+            Config.REDIS_URL,
+            decode_responses=True,
+            socket_timeout=5,
+            socket_connect_timeout=5,
         )
     return _dedicated_conn
 
@@ -89,7 +91,8 @@ async def throughput_watchdog_loop(
     Sadece launchd/benzeri bir supervisor altında çalışan servislerde kullanılmalı."""
     logger.info(
         "Throughput watchdog başlatıldı: %s (self_heal_after=%s)",
-        min_expected, self_heal_after or "kapalı",
+        min_expected,
+        self_heal_after or "kapalı",
     )
     last_counts = {component: _activity_counts.get(component, 0) for component in min_expected}
     consecutive_breaches = {component: 0 for component in min_expected}
@@ -113,13 +116,19 @@ async def throughput_watchdog_loop(
                 logger.warning(
                     "[Throughput] %s son %ds'de %d işlem yaptı (beklenen >= %d, art arda %d. ihlal) — "
                     "heartbeat taze olsa bile asıl iş akışı durmuş olabilir",
-                    component, check_interval, delta, min_count, consecutive_breaches[component],
+                    component,
+                    check_interval,
+                    delta,
+                    min_count,
+                    consecutive_breaches[component],
                 )
                 if self_heal_after and consecutive_breaches[component] >= self_heal_after:
                     stalled_secs = consecutive_breaches[component] * check_interval
                     logger.critical(
                         "[Throughput] %s %ds'dir 0 işlem yapıyor — self-heal: process "
-                        "sonlandırılıyor, launchd yeniden başlatacak", component, stalled_secs,
+                        "sonlandırılıyor, launchd yeniden başlatacak",
+                        component,
+                        stalled_secs,
                     )
                     try:
                         await asyncio.wait_for(
@@ -146,7 +155,7 @@ async def _read_all() -> dict[str, datetime]:
             if not raw:
                 continue
             try:
-                result[key[len(_HEARTBEAT_PREFIX):]] = datetime.fromisoformat(raw)
+                result[key[len(_HEARTBEAT_PREFIX) :]] = datetime.fromisoformat(raw)
             except ValueError:
                 continue
     except Exception as e:  # pylint: disable=broad-exception-caught
@@ -188,7 +197,9 @@ async def watchdog_loop(max_age_seconds: dict[str, int], check_interval: int = 6
                 age = (now - last).total_seconds()
                 if age > limit_secs and component not in _alerted:
                     _alerted.add(component)
-                    logger.error("[Heartbeat] %s bayat: %.0fs (limit %ds)", component, age, limit_secs)
+                    logger.error(
+                        "[Heartbeat] %s bayat: %.0fs (limit %ds)", component, age, limit_secs
+                    )
                     await send_telegram_message(
                         f"⚠️ {component} {int(age)}s'dir güncellenmiyor (limit: {limit_secs}s)"
                     )

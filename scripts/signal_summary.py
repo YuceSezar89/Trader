@@ -3,18 +3,19 @@
 Usage:
     .venv/bin/python scripts/signal_summary.py
 """
+
 import os
 import sys
 import traceback
 
 # Ensure repo root on path so `from config import Config` works
-ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from config import Config
 import psycopg2
 
+from config import Config
 
 QUERY = """
     SELECT 
@@ -31,7 +32,7 @@ QUERY = """
 
 
 def get_connection():
-    pwd = Config.DB_PASSWORD if getattr(Config, 'DB_PASSWORD', '') != '' else None
+    pwd = Config.DB_PASSWORD if getattr(Config, "DB_PASSWORD", "") != "" else None
     return psycopg2.connect(
         host=Config.DB_HOST,
         port=Config.DB_PORT,
@@ -45,7 +46,9 @@ def main():
     try:
         conn = get_connection()
     except Exception:
-        print("ERROR: could not connect to DB using Config — check environment/.env and Config values")
+        print(
+            "ERROR: could not connect to DB using Config — check environment/.env and Config values"
+        )
         traceback.print_exc()
         sys.exit(1)
 
@@ -71,5 +74,5 @@ def main():
         conn.close()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

@@ -2,16 +2,17 @@
 
 This is adapted from utils/sorgu.txt to use Config and be runnable from the repo root.
 """
-import sys
+
 import os
+import sys
 import traceback
-import psycopg2
+
 import pandas as pd
-import numpy as np
+import psycopg2
 
 # Ensure project root is on sys.path so `from config import Config` works when
 # running this script from the repository root or the scripts/ folder.
-ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
@@ -19,7 +20,7 @@ from config import Config
 
 
 def get_connection():
-    pwd = Config.DB_PASSWORD if Config.DB_PASSWORD != '' else None
+    pwd = Config.DB_PASSWORD if Config.DB_PASSWORD != "" else None
     return psycopg2.connect(
         host=Config.DB_HOST,
         port=Config.DB_PORT,
@@ -67,18 +68,22 @@ QUERY = """
 def main():
     try:
         conn = get_connection()
-    except Exception as e:
+    except Exception:
         print("ERROR: Could not connect to database using Config settings.")
         print("Config used:")
-        print(f"  host={Config.DB_HOST} port={Config.DB_PORT} db={Config.DB_NAME} user={Config.DB_USER}")
-        print("Make sure the DB is running and credentials are correct (check .env or environment variables).")
+        print(
+            f"  host={Config.DB_HOST} port={Config.DB_PORT} db={Config.DB_NAME} user={Config.DB_USER}"
+        )
+        print(
+            "Make sure the DB is running and credentials are correct (check .env or environment variables)."
+        )
         print()
         traceback.print_exc()
         sys.exit(1)
 
     try:
         df = pd.read_sql(QUERY, conn)
-    except Exception as e:
+    except Exception:
         print("ERROR: Query failed")
         traceback.print_exc()
         conn.close()
@@ -102,7 +107,7 @@ def main():
     # --- TEMEL İSTATİSTİK ---
     print("\n=== GENEL PERFORMANS ===")
     for t in [3, 5, 10]:
-        col = f'return_t{t}_pct'
+        col = f"return_t{t}_pct"
         if col in df.columns:
             returns = df[col].dropna()
             if len(returns) == 0:
@@ -119,51 +124,59 @@ def main():
 
     # --- SİNYAL TİPİNE GÖRE ---
     print("\n=== SİNYAL TİPİNE GÖRE (T+5) ===")
-    if 'return_t5_pct' in df.columns:
-        grouped = df.groupby('signal_type')['return_t5_pct'].agg([
-            ('count', 'count'),
-            ('win_rate', lambda x: (x > 0).mean() * 100),
-            ('avg_return', 'mean'),
-            ('std', 'std')
-        ])
+    if "return_t5_pct" in df.columns:
+        grouped = df.groupby("signal_type")["return_t5_pct"].agg(
+            [
+                ("count", "count"),
+                ("win_rate", lambda x: (x > 0).mean() * 100),
+                ("avg_return", "mean"),
+                ("std", "std"),
+            ]
+        )
         print(grouped.round(4))
 
     # --- INTERVAL'E GÖRE ---
     print("\n=== INTERVAL'E GÖRE (T+5) ===")
-    if 'return_t5_pct' in df.columns:
-        grouped = df.groupby('interval')['return_t5_pct'].agg([
-            ('count', 'count'),
-            ('win_rate', lambda x: (x > 0).mean() * 100),
-            ('avg_return', 'mean')
-        ])
+    if "return_t5_pct" in df.columns:
+        grouped = df.groupby("interval")["return_t5_pct"].agg(
+            [
+                ("count", "count"),
+                ("win_rate", lambda x: (x > 0).mean() * 100),
+                ("avg_return", "mean"),
+            ]
+        )
         print(grouped.round(4))
 
     # --- STRENGTH VARSA ---
-    if 'strength' in df.columns and df['strength'].notna().any():
+    if "strength" in df.columns and df["strength"].notna().any():
         print("\n=== STRENGTH'E GÖRE (T+5) ===")
-        grouped = df.groupby('strength')['return_t5_pct'].agg([
-            ('count', 'count'),
-            ('win_rate', lambda x: (x > 0).mean() * 100),
-            ('avg_return', 'mean')
-        ])
+        grouped = df.groupby("strength")["return_t5_pct"].agg(
+            [
+                ("count", "count"),
+                ("win_rate", lambda x: (x > 0).mean() * 100),
+                ("avg_return", "mean"),
+            ]
+        )
         print(grouped.round(4))
 
     # --- USER FILTER: Long signals, intervals 15m/1h/4h, strength >= 2 ---
     try:
         filtreli = df[
-            (df['signal_type'] == 'Long') &
-            (df['interval'].isin(['15m', '1h', '4h'])) &
-            (df['strength'] >= 2)
+            (df["signal_type"] == "Long")
+            & (df["interval"].isin(["15m", "1h", "4h"]))
+            & (df["strength"] >= 2)
         ]
     except KeyError:
-        print("One or more required columns for the filter are missing: 'signal_type', 'interval', 'strength'")
+        print(
+            "One or more required columns for the filter are missing: 'signal_type', 'interval', 'strength'"
+        )
         return
 
     print("\n=== KULLANICI FİLTRESİ SONUÇLARI ===")
     print(f"Kalan sinyal: {len(filtreli)}")
-    if 'return_t5_pct' in filtreli.columns and len(filtreli) > 0:
-        win_rate = (filtreli['return_t5_pct'] > 0).mean() * 100
-        avg_return = filtreli['return_t5_pct'].mean()
+    if "return_t5_pct" in filtreli.columns and len(filtreli) > 0:
+        win_rate = (filtreli["return_t5_pct"] > 0).mean() * 100
+        avg_return = filtreli["return_t5_pct"].mean()
         ev = avg_return
         print(f"Win Rate: {win_rate:.1f}%")
         print(f"Avg Return: {avg_return:.2f}%")
@@ -172,12 +185,12 @@ def main():
         print("No return_t5_pct data available for the filtered set.")
 
     # --- Sembole göre dağılım: hangi semboller sonucu şişiriyor? (top 20) ---
-    if len(filtreli) > 0 and 'symbol' in filtreli.columns and 'return_t5_pct' in filtreli.columns:
+    if len(filtreli) > 0 and "symbol" in filtreli.columns and "return_t5_pct" in filtreli.columns:
         symbol_stats = (
-            filtreli.groupby('symbol')['return_t5_pct']
-            .agg(count='count', win_rate=lambda x: (x > 0).mean() * 100, mean='mean')
+            filtreli.groupby("symbol")["return_t5_pct"]
+            .agg(count="count", win_rate=lambda x: (x > 0).mean() * 100, mean="mean")
             .round(2)
-            .sort_values('mean', ascending=False)
+            .sort_values("mean", ascending=False)
         )
 
         print("\n=== SEMBOL DAĞILIMI (Top 20 by mean return) ===")
@@ -185,7 +198,9 @@ def main():
 
         # Filter out low-count symbols to avoid noisy / inflated results
         min_count = 10
-        robust = symbol_stats[symbol_stats['count'] >= min_count].sort_values('mean', ascending=False)
+        robust = symbol_stats[symbol_stats["count"] >= min_count].sort_values(
+            "mean", ascending=False
+        )
         print(f"\n=== SEMBOL DAĞILIMI (count >= {min_count}) Top 20 ===")
         if len(robust) == 0:
             print(f"No symbols with count >= {min_count} in the filtered set.")
@@ -193,5 +208,5 @@ def main():
             print(robust.head(20).to_string())
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

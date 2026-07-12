@@ -10,6 +10,7 @@ Kapı 2 SEED    : kontrol grubu SEED+1000 ile yeniden seçilir (aynı eşleştir
                  ve |delta| >= 0.20 kalmalı.
 Kapı 3 PENCERE : LONG bağlam 48h → 24h. İşaret korunmalı, |delta| >= 0.20.
 """
+
 import asyncio
 import json
 import os
@@ -72,6 +73,7 @@ def _compare(pairs, t0_map, la, btc, rp, hours_back=48):
 
 async def _fetch_new_controls(symbols, anchor):
     from research.pattern_lab.corpus import fetch_layer_a
+
     return await fetch_layer_a(symbols, anchor)
 
 
@@ -94,7 +96,9 @@ def run():
 
     print("\n── KAPI 2: Yeni seed'li kontrol grubu ──")
     stats = pd.read_parquet(f"{C.CORPUS_DIR}/universe_stats.parquet")
-    lo, hi = stats["ret_pct"].quantile(C.MID_QUANTILE[0]), stats["ret_pct"].quantile(C.MID_QUANTILE[1])
+    lo, hi = stats["ret_pct"].quantile(C.MID_QUANTILE[0]), stats["ret_pct"].quantile(
+        C.MID_QUANTILE[1]
+    )
     pool = stats[(stats["ret_pct"] >= lo) & (stats["ret_pct"] <= hi)]
     pool = pool[~pool["symbol"].isin([s for p in pairs for s in p])]
     used, new_pairs = set(), []

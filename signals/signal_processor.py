@@ -1,23 +1,24 @@
 import asyncio
 import time
-import numpy as np
-import pandas as pd
 from typing import Awaitable, Callable, Optional
 
-from utils.logger import get_logger
-from signals.signal_engine import signal_engine
-from indicators.financial_metrics import calculate_metrics
-from signals.signal_lifecycle_manager import signal_lifecycle_manager
+import numpy as np
+import pandas as pd
+
 from config import Config
-from indicators.core import calculate_rsi, calculate_atr, calculate_adx, truncate_after_gap
+from indicators.core import calculate_adx, calculate_atr, calculate_rsi, truncate_after_gap
+from indicators.financial_metrics import calculate_metrics
+from signals.paper_trade_manager import ha_cross_manager, paper_trade_manager, rsi_15m_manager
+from signals.risk_manager import risk_manager
+from signals.signal_engine import signal_engine
+from signals.signal_lifecycle_manager import signal_lifecycle_manager
 from signals.vpm_calculator import VPMCalculator
+from utils.logger import get_logger
 from utils.preprocessing import (
     normalize_volatility_0_100,
 )
-from utils.redis_client import RedisClient, SAFE_EXTERNAL_TIMEOUT
+from utils.redis_client import SAFE_EXTERNAL_TIMEOUT, RedisClient
 from utils.vpmv import compute_components, compute_pre
-from signals.paper_trade_manager import paper_trade_manager, ha_cross_manager, rsi_15m_manager
-from signals.risk_manager import risk_manager
 
 logger = get_logger(__name__)
 
@@ -48,7 +49,8 @@ async def _get_pt_flag() -> str:
         return _PT_FLAG_CACHE["value"]
     try:
         val = await asyncio.wait_for(
-            RedisClient.get_client().get("settings:paper_trade_enabled"), timeout=SAFE_EXTERNAL_TIMEOUT
+            RedisClient.get_client().get("settings:paper_trade_enabled"),
+            timeout=SAFE_EXTERNAL_TIMEOUT,
         )
         _PT_FLAG_CACHE["value"] = str(val) if val is not None else "1"
         _PT_FLAG_CACHE["ts"] = now
@@ -56,26 +58,27 @@ async def _get_pt_flag() -> str:
         logger.warning("paper_trade_enabled bayrağı okunamadı, önbellek kullanılıyor: %s", exc)
     return _PT_FLAG_CACHE["value"]
 
+
 _MIN_BARS: dict[str, int] = {
-    "1m":  300,
-    "5m":  100,
+    "1m": 300,
+    "5m": 100,
     "15m": 50,
     "30m": 50,
-    "1h":  50,
-    "4h":  50,
-    "6h":  50,
-    "8h":  50,
+    "1h": 50,
+    "4h": 50,
+    "6h": 50,
+    "8h": 50,
     "12h": 50,
-    "1d":  50,
+    "1d": 50,
 }
 
 _MTF_HIGHER: dict[str, list[str]] = {
-    "1m":  ["5m",  "15m"],
-    "5m":  ["15m", "1h"],
-    "15m": ["1h",  "4h"],
-    "1h":  ["4h",  "1d"],
-    "4h":  ["1d"],
-    "1d":  [],
+    "1m": ["5m", "15m"],
+    "5m": ["15m", "1h"],
+    "15m": ["1h", "4h"],
+    "1h": ["4h", "1d"],
+    "4h": ["1d"],
+    "1d": [],
 }
 
 _SIGNAL_GENERATION_TFS = {"5m", "15m"}
@@ -183,8 +186,9 @@ async def _compute_mtf_score(
                 continue
             st_bullish = float(valid.iloc[-1]) == -1
             checked += 1
-            if (signal_type == "Long" and st_bullish) or \
-               (signal_type == "Short" and not st_bullish):
+            if (signal_type == "Long" and st_bullish) or (
+                signal_type == "Short" and not st_bullish
+            ):
                 confirmed += 1
         except Exception as exc:
             logger.debug("MTF ST konfirmasyonu [%s %s] atlandı: %s", symbol, tf, exc)
@@ -224,7 +228,9 @@ def _compute_devisso_score(df: pd.DataFrame) -> Optional[float]:
         return None
 
 
-def _compute_smc(df: pd.DataFrame, sig_type: str, lookback: int = 50) -> tuple[Optional[float], str]:
+def _compute_smc(
+    df: pd.DataFrame, sig_type: str, lookback: int = 50
+) -> tuple[Optional[float], str]:
     """
     Premium/Discount zone + Market Structure (BOS/CHoCH).
 
@@ -244,12 +250,12 @@ def _compute_smc(df: pd.DataFrame, sig_type: str, lookback: int = 50) -> tuple[O
         from smartmoneyconcepts import smc as _smc_lib  # pylint: disable=import-outside-toplevel
 
         df_use = df.tail(lookback).copy().reset_index(drop=True)
-        high  = df_use["high"].astype(float)
-        low   = df_use["low"].astype(float)
+        high = df_use["high"].astype(float)
+        low = df_use["low"].astype(float)
         close = df_use["close"].astype(float)
 
         rng_high = float(high.max())
-        rng_low  = float(low.min())
+        rng_low = float(low.min())
         pd_zone: Optional[float] = None
         if rng_high > rng_low:
             pd_zone = round(((float(close.iloc[-1]) - rng_low) / (rng_high - rng_low)) * 100, 1)
@@ -259,11 +265,11 @@ def _compute_smc(df: pd.DataFrame, sig_type: str, lookback: int = 50) -> tuple[O
             df_smc[col] = df_smc[col].astype(float)
 
         swing_df = _smc_lib.swing_highs_lows(df_smc, swing_length=5)
-        bos_df   = _smc_lib.bos_choch(df_smc, swing_df, close_break=True)
+        bos_df = _smc_lib.bos_choch(df_smc, swing_df, close_break=True)
 
         structure_dir = 0
         for i in range(len(bos_df) - 1, -1, -1):
-            bos_val   = bos_df["BOS"].iloc[i]
+            bos_val = bos_df["BOS"].iloc[i]
             choch_val = bos_df["CHOCH"].iloc[i]
             if not np.isnan(bos_val):
                 structure_dir = int(bos_val)
@@ -294,6 +300,7 @@ def _compute_candle_pattern(df: pd.DataFrame) -> str:
     """
     try:
         import pandas_ta_classic as _pta  # pylint: disable=import-outside-toplevel
+
         if len(df) < 5:
             return "-"
         df_cdl = df[["open", "high", "low", "close"]].copy().astype(float)
@@ -316,7 +323,7 @@ def _compute_candle_pattern(df: pd.DataFrame) -> str:
 
 
 _FVG_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
-_FVG_LOOKBACK   = 30
+_FVG_LOOKBACK = 30
 
 
 def _detect_fvg_in_df(df: pd.DataFrame, sig_type: str, entry_price: float) -> bool:
@@ -330,12 +337,13 @@ def _detect_fvg_in_df(df: pd.DataFrame, sig_type: str, entry_price: float) -> bo
         return False
     try:
         from smartmoneyconcepts import smc as _smc_lib  # pylint: disable=import-outside-toplevel
+
         df_smc = df[["open", "high", "low", "close", "volume"]].copy().reset_index(drop=True)
         for col in df_smc.columns:
             df_smc[col] = df_smc[col].astype(float)
-        fvg_df    = _smc_lib.fvg(df_smc)
+        fvg_df = _smc_lib.fvg(df_smc)
         direction = 1 if sig_type == "Long" else -1
-        lows  = df_smc["low"].to_numpy()
+        lows = df_smc["low"].to_numpy()
         highs = df_smc["high"].to_numpy()
         for i in range(len(fvg_df)):
             fvg_val = fvg_df["FVG"].iloc[i]
@@ -345,9 +353,9 @@ def _detect_fvg_in_df(df: pd.DataFrame, sig_type: str, entry_price: float) -> bo
             bot = float(fvg_df["Bottom"].iloc[i])
             if not bot <= entry_price <= top:
                 continue
-            if direction == 1 and np.any(lows[i + 2:] < bot):
+            if direction == 1 and np.any(lows[i + 2 :] < bot):
                 continue  # boğa gap'i tamamen dolmuş
-            if direction == -1 and np.any(highs[i + 2:] > top):
+            if direction == -1 and np.any(highs[i + 2 :] > top):
                 continue  # ayı gap'i tamamen dolmuş
             return True
         return False
@@ -375,7 +383,9 @@ async def _compute_fvg(symbol: str, sig_type: str, entry_price: float) -> str:
     return ",".join(matched) if matched else "-"
 
 
-def _compute_vp_score(df: pd.DataFrame, lookback: int = 500, use_real_volume: bool = False) -> tuple[float, float]:
+def _compute_vp_score(
+    df: pd.DataFrame, lookback: int = 500, use_real_volume: bool = False
+) -> tuple[float, float]:
     """
     %VP Normalized Lines — PineScript birebir çeviri.
 
@@ -392,7 +402,7 @@ def _compute_vp_score(df: pd.DataFrame, lookback: int = 500, use_real_volume: bo
         price_change = df["close"].diff().fillna(0.0)
         cum_positive = price_change.clip(lower=0.0).cumsum()
         cum_negative = (-price_change).clip(lower=0.0).cumsum()
-        total_move   = (cum_positive + cum_negative).replace(0, np.nan)
+        total_move = (cum_positive + cum_negative).replace(0, np.nan)
         positive_pct = (cum_positive / total_move * 100).fillna(50.0)
         negative_pct = (cum_negative / total_move * 100).fillna(50.0)
 
@@ -405,10 +415,10 @@ def _compute_vp_score(df: pd.DataFrame, lookback: int = 500, use_real_volume: bo
             hl_range = (df["high"] - df["low"]).clip(lower=1e-8)
             bv = df["volume"] * (df["close"] - df["low"]) / hl_range
             sv = df["volume"] * (df["high"] - df["close"]) / hl_range
-        cum_buy  = bv.cumsum()
+        cum_buy = bv.cumsum()
         cum_sell = sv.cumsum()
         total_vol = (cum_buy + cum_sell).replace(0, np.nan)
-        buy_pct  = (cum_buy  / total_vol * 100).fillna(50.0)
+        buy_pct = (cum_buy / total_vol * 100).fillna(50.0)
         sell_pct = (cum_sell / total_vol * 100).fillna(50.0)
 
         def _norm(s: pd.Series) -> pd.Series:
@@ -416,7 +426,7 @@ def _compute_vp_score(df: pd.DataFrame, lookback: int = 500, use_real_volume: bo
             hi = s.rolling(lookback, min_periods=1).max()
             return ((s - lo) / (hi - lo + 1e-10) * 100).fillna(50.0)
 
-        buy_pos_avg  = (_norm(buy_pct)  + _norm(positive_pct)) / 2
+        buy_pos_avg = (_norm(buy_pct) + _norm(positive_pct)) / 2
         sell_neg_avg = (_norm(sell_pct) + _norm(negative_pct)) / 2
 
         return round(float(buy_pos_avg.iloc[-1]), 2), round(float(sell_neg_avg.iloc[-1]), 2)
@@ -431,7 +441,9 @@ async def process_and_enrich_signals(
     interval: str,
     oi_data: Optional[str] = None,
     symbol_buffers: Optional[dict] = None,
-    metrics_calculator: Optional[Callable[[pd.DataFrame, pd.DataFrame, str], Awaitable[pd.DataFrame]]] = None,
+    metrics_calculator: Optional[
+        Callable[[pd.DataFrame, pd.DataFrame, str], Awaitable[pd.DataFrame]]
+    ] = None,
     dry_run: bool = False,
 ) -> None:
     """
@@ -447,7 +459,9 @@ async def process_and_enrich_signals(
     paper trade tetiklenmez (signal_service.py'nin Faz 4 dry-run gözlem penceresi
     için — varsayılan False, live_data_manager.py etkilenmez).
     """
-    logger.info(f"[{symbol}] Sinyal işleme başlatıldı - DataFrame boyutu: {len(df)}, Ref boyutu: {len(ref_df)}")
+    logger.info(
+        f"[{symbol}] Sinyal işleme başlatıldı - DataFrame boyutu: {len(df)}, Ref boyutu: {len(ref_df)}"
+    )
 
     if df.empty or ref_df.empty:
         logger.warning(f"[{symbol}] Veri çerçevelerinden biri boş, atlanıyor.")
@@ -457,7 +471,10 @@ async def process_and_enrich_signals(
     if len(df) < min_bars:
         logger.warning(
             "[%s] %s: yetersiz bar (%d/%d), sinyal üretilmiyor",
-            symbol, interval, len(df), min_bars,
+            symbol,
+            interval,
+            len(df),
+            min_bars,
         )
         return
 
@@ -471,7 +488,9 @@ async def process_and_enrich_signals(
             df_prepared = df.copy()
             df_prepared.index = pd.Index(pd.to_datetime(df_prepared["open_time"], unit="ms"))
             ref_df_prepared = ref_df.copy()
-            ref_df_prepared.index = pd.Index(pd.to_datetime(ref_df_prepared["open_time"], unit="ms"))
+            ref_df_prepared.index = pd.Index(
+                pd.to_datetime(ref_df_prepared["open_time"], unit="ms")
+            )
 
             if metrics_calculator is not None:
                 df_with_metrics = await metrics_calculator(df_prepared, ref_df_prepared, interval)
@@ -482,7 +501,7 @@ async def process_and_enrich_signals(
             beta = latest_metrics.get("beta")
 
             alpha_str = f"{alpha:.4f}" if alpha is not None else "N/A"
-            beta_str  = f"{beta:.4f}"  if beta  is not None else "N/A"
+            beta_str = f"{beta:.4f}" if beta is not None else "N/A"
             logger.info(f"[{symbol}] Finansal metrikler -> Alpha: {alpha_str}, Beta: {beta_str}")
         else:
             logger.warning(f"[{symbol}] Metrik için yeterli veri yok (gerekli: 50), atlanıyor.")
@@ -492,8 +511,12 @@ async def process_and_enrich_signals(
     # 2. Teknik Sinyalleri Hesapla
     try:
         logger.info(f"[{symbol}] Teknik sinyal hesaplama başlatılıyor...")
-        technical_signals = await signal_engine.calculate_all_signals(df, symbol=symbol, interval=interval)
-        logger.info(f"[{symbol}] Teknik sinyal hesaplama tamamlandı - {len(technical_signals) if technical_signals else 0} tür")
+        technical_signals = await signal_engine.calculate_all_signals(
+            df, symbol=symbol, interval=interval
+        )
+        logger.info(
+            f"[{symbol}] Teknik sinyal hesaplama tamamlandı - {len(technical_signals) if technical_signals else 0} tür"
+        )
     except Exception as e:
         logger.error(f"[{symbol}] Teknik sinyal hatası: {e}", exc_info=True)
         return
@@ -509,7 +532,9 @@ async def process_and_enrich_signals(
     st_direction = None
     if "st_direction" in df.columns and len(df) >= 2:
         st_dir_val = df["st_direction"].iloc[-2]
-        if st_dir_val is not None and not (isinstance(st_dir_val, float) and st_dir_val != st_dir_val):
+        if st_dir_val is not None and not (
+            isinstance(st_dir_val, float) and st_dir_val != st_dir_val
+        ):
             st_direction = float(st_dir_val)  # -1=bullish, 1=bearish
 
     for signal_name, signal_list in technical_signals.items():
@@ -525,8 +550,9 @@ async def process_and_enrich_signals(
                     st_confirmed = True
                 else:
                     st_bullish = st_direction == -1
-                    st_confirmed = (sig_type == "Long" and st_bullish) or \
-                                   (sig_type == "Short" and not st_bullish)
+                    st_confirmed = (sig_type == "Long" and st_bullish) or (
+                        sig_type == "Short" and not st_bullish
+                    )
                     if not st_confirmed:
                         logger.info(
                             f"[{symbol}] {signal_name} {sig_type} ST onaysız "
@@ -555,14 +581,17 @@ async def process_and_enrich_signals(
                 # Pre-signal directional volume log (test)
                 try:
                     _pre = df.iloc[-6:-1]
-                    _hl  = (_pre["high"] - _pre["low"]).clip(lower=1e-8)
-                    _bv  = (_pre["volume"] * (_pre["close"] - _pre["low"])  / _hl).sum()
-                    _sv  = (_pre["volume"] * (_pre["high"]  - _pre["close"]) / _hl).sum()
+                    _hl = (_pre["high"] - _pre["low"]).clip(lower=1e-8)
+                    _bv = (_pre["volume"] * (_pre["close"] - _pre["low"]) / _hl).sum()
+                    _sv = (_pre["volume"] * (_pre["high"] - _pre["close"]) / _hl).sum()
                     _tot = _bv + _sv
                     _buy_pct = _bv / _tot * 100 if _tot > 0 else 50.0
                     logger.info(
                         "PREVOL | %s | %s | %s | buy_pct=%.1f",
-                        symbol, sig_type, interval, _buy_pct,
+                        symbol,
+                        sig_type,
+                        interval,
+                        _buy_pct,
                     )
                 except Exception:  # pylint: disable=broad-exception-caught
                     pass
@@ -573,17 +602,24 @@ async def process_and_enrich_signals(
                     df_g = truncate_after_gap(df)
                     if "buy_volume" in df_g.columns and df_g["buy_volume"].notna().any():
                         _bv = df_g["buy_volume"].fillna(
-                            df_g["volume"] * (df_g["close"] - df_g["low"]) / (df_g["high"] - df_g["low"]).clip(lower=1e-8)
+                            df_g["volume"]
+                            * (df_g["close"] - df_g["low"])
+                            / (df_g["high"] - df_g["low"]).clip(lower=1e-8)
                         )
                     else:
                         _cvd_hl = (df_g["high"] - df_g["low"]).clip(lower=1e-8)
                         _bv = df_g["volume"] * (df_g["close"] - df_g["low"]) / _cvd_hl
-                    _cvd      = (2 * _bv - df_g["volume"]).cumsum()
-                    _avg_vol  = df_g["volume"].rolling(10).mean().clip(lower=1e-8)
-                    _cvd_slope = round(float((_cvd.diff().rolling(10).mean() / _avg_vol).iloc[-1]), 4)
+                    _cvd = (2 * _bv - df_g["volume"]).cumsum()
+                    _avg_vol = df_g["volume"].rolling(10).mean().clip(lower=1e-8)
+                    _cvd_slope = round(
+                        float((_cvd.diff().rolling(10).mean() / _avg_vol).iloc[-1]), 4
+                    )
                     logger.info(
                         "CVD | %s | %s | %s | slope=%.4f",
-                        symbol, sig_type, interval, _cvd_slope,
+                        symbol,
+                        sig_type,
+                        interval,
+                        _cvd_slope,
                     )
                 except Exception:  # pylint: disable=broad-exception-caught
                     pass
@@ -612,7 +648,8 @@ async def process_and_enrich_signals(
                         ema200 = closes.ewm(span=200, adjust=False).mean()
                         std200 = closes.rolling(200).std()
                         z_score_entry = round(
-                            float((closes.iloc[-1] - ema200.iloc[-1]) / (std200.iloc[-1] + 1e-12)), 3
+                            float((closes.iloc[-1] - ema200.iloc[-1]) / (std200.iloc[-1] + 1e-12)),
+                            3,
                         )
                 except Exception as exc:
                     logger.debug("z_score_entry hesaplanamadı [%s]: %s", symbol, exc)
@@ -621,11 +658,16 @@ async def process_and_enrich_signals(
                     _is_long = sig_type == "Long"
                     _z_min = Config.VPM.get("LONG_Z_MIN" if _is_long else "SHORT_Z_MIN")
                     _z_max = Config.VPM.get("LONG_Z_MAX" if _is_long else "SHORT_Z_MAX")
-                    if (_z_min is not None and z_score_entry < _z_min) or \
-                       (_z_max is not None and z_score_entry > _z_max):
+                    if (_z_min is not None and z_score_entry < _z_min) or (
+                        _z_max is not None and z_score_entry > _z_max
+                    ):
                         logger.info(
                             "[%s] Z-score=%.3f filtre dışı (%s, min=%s max=%s) — sinyal atlandı",
-                            symbol, z_score_entry, sig_type, _z_min, _z_max,
+                            symbol,
+                            z_score_entry,
+                            sig_type,
+                            _z_min,
+                            _z_max,
                         )
                         continue
 
@@ -636,11 +678,15 @@ async def process_and_enrich_signals(
                     if len(df) >= 28:
                         adx_series, _, _ = calculate_adx(df)
                         adx_val = float(adx_series.iloc[-1])
-                        regime_trend = "trending" if adx_val > 25 else "ranging" if adx_val < 20 else "neutral"
+                        regime_trend = (
+                            "trending" if adx_val > 25 else "ranging" if adx_val < 20 else "neutral"
+                        )
 
                         atr_series = calculate_atr(df, period=Config.ATR_PERIOD)
                         atr_pct = float(normalize_volatility_0_100(atr_series).iloc[-1])
-                        volatility_regime = "high" if atr_pct > 70 else "low" if atr_pct < 30 else "normal"
+                        volatility_regime = (
+                            "high" if atr_pct > 70 else "low" if atr_pct < 30 else "normal"
+                        )
                 except Exception as exc:
                     logger.debug("volatility_regime hesaplanamadı [%s]: %s", symbol, exc)
 
@@ -653,10 +699,16 @@ async def process_and_enrich_signals(
                         btc_closes = btc_df["close"].astype(float)
                         btc_ema = btc_closes.ewm(span=200, adjust=False).mean()
                         btc_std = btc_closes.rolling(200).std()
-                        btc_z = round(float(
-                            (btc_closes.iloc[-1] - btc_ema.iloc[-1]) / (btc_std.iloc[-1] + 1e-12)
-                        ), 3)
-                        btc_trend_str = "bullish" if btc_z > 0.5 else "bearish" if btc_z < -0.5 else "neutral"
+                        btc_z = round(
+                            float(
+                                (btc_closes.iloc[-1] - btc_ema.iloc[-1])
+                                / (btc_std.iloc[-1] + 1e-12)
+                            ),
+                            3,
+                        )
+                        btc_trend_str = (
+                            "bullish" if btc_z > 0.5 else "bearish" if btc_z < -0.5 else "neutral"
+                        )
                 except Exception as exc:
                     logger.debug("BTC trend hesaplanamadı: %s", exc)
 
@@ -668,45 +720,51 @@ async def process_and_enrich_signals(
                 if indicators_name == "HA_Cross":
                     htf_bull_count = await _count_htf_ha_bullish(symbol, sig_type, symbol_buffers)
                     if interval == "5m":
-                        ha_ultra_confirm = await _count_ha_ultra_confirm(symbol, sig_type, symbol_buffers)
+                        ha_ultra_confirm = await _count_ha_ultra_confirm(
+                            symbol, sig_type, symbol_buffers
+                        )
 
                 is_confluence = (
-                    indicators_name == "HA_Cross" and
-                    sig_type == "Long" and
-                    interval == "15m" and
-                    htf_bull_count >= Config.HA_HTF_MIN_COUNT
+                    indicators_name == "HA_Cross"
+                    and sig_type == "Long"
+                    and interval == "15m"
+                    and htf_bull_count >= Config.HA_HTF_MIN_COUNT
                 )
 
                 if is_confluence:
                     logger.info(
                         "[%s] ★ KONFLUANS SİNYALİ %s %s | HTF=%d/%d",
-                        symbol, interval, sig_type, htf_bull_count, len(_HTF_CONFIRM_TFS),
+                        symbol,
+                        interval,
+                        sig_type,
+                        htf_bull_count,
+                        len(_HTF_CONFIRM_TFS),
                     )
 
                 # 7. Sinyali işle
                 current_price = float(df["close"].iloc[-1]) if len(df) >= 1 else None
                 enriched_signal = {
-                    "symbol":         symbol,
-                    "interval":       interval,
-                    "indicators":     signal_data.get("indicators"),
-                    "signal_type":    sig_type,
-                    "opened_at":      signal_data.get("timestamp"),
-                    "open_price":     signal_data.get("price"),
-                    "vpms_score":     float(vpms_score) if vpms_score is not None else None,
-                    "mtf_score":      mtf_score,
-                    "st_confirmed":   st_confirmed,
-                    "rsi":            signal_data.get("rsi"),
-                    "strength":       signal_data.get("strength"),
-                    "atr":            signal_data.get("atr"),
-                    "alpha":          alpha,
-                    "beta":           beta,
-                    "sharpe_ratio":       latest_metrics.get("sharpe_ratio"),
-                    "sortino_ratio":      latest_metrics.get("sortino_ratio"),
-                    "calmar_ratio":       latest_metrics.get("calmar_ratio"),
-                    "information_ratio":  latest_metrics.get("information_ratio"),
-                    "oi_data":        oi_data,
-                    "z_score_entry":  z_score_entry,
-                    "is_confluence":  is_confluence,
+                    "symbol": symbol,
+                    "interval": interval,
+                    "indicators": signal_data.get("indicators"),
+                    "signal_type": sig_type,
+                    "opened_at": signal_data.get("timestamp"),
+                    "open_price": signal_data.get("price"),
+                    "vpms_score": float(vpms_score) if vpms_score is not None else None,
+                    "mtf_score": mtf_score,
+                    "st_confirmed": st_confirmed,
+                    "rsi": signal_data.get("rsi"),
+                    "strength": signal_data.get("strength"),
+                    "atr": signal_data.get("atr"),
+                    "alpha": alpha,
+                    "beta": beta,
+                    "sharpe_ratio": latest_metrics.get("sharpe_ratio"),
+                    "sortino_ratio": latest_metrics.get("sortino_ratio"),
+                    "calmar_ratio": latest_metrics.get("calmar_ratio"),
+                    "information_ratio": latest_metrics.get("information_ratio"),
+                    "oi_data": oi_data,
+                    "z_score_entry": z_score_entry,
+                    "is_confluence": is_confluence,
                     "htf_bull_count": htf_bull_count,
                     "ha_ultra_confirm": ha_ultra_confirm,
                 }
@@ -716,18 +774,21 @@ async def process_and_enrich_signals(
                     _pre_avg, _slope, _vpmv_sig = compute_pre(df, sig_type)
                     logger.info(
                         "[%s] VPMV pre raw: df_len=%d pre_avg=%s vpmv_sig=%s",
-                        symbol, len(df), _pre_avg, _vpmv_sig,
+                        symbol,
+                        len(df),
+                        _pre_avg,
+                        _vpmv_sig,
                     )
                     if _pre_avg is not None and _vpmv_sig is not None:
                         _vpmv_pre_avg = round(_pre_avg, 2)
-                        _vpmv_slope   = round(_slope, 2)
-                        _vpmv_ratio   = round(_vpmv_sig / _pre_avg, 4) if _pre_avg > 0 else None
+                        _vpmv_slope = round(_slope, 2)
+                        _vpmv_ratio = round(_vpmv_sig / _pre_avg, 4) if _pre_avg > 0 else None
                 except Exception as _vpe:
                     logger.warning("[%s] VPMV pre hesaplama hatası: %s", symbol, _vpe)
 
                 enriched_signal["vpmv_pre_avg"] = _vpmv_pre_avg
-                enriched_signal["vpmv_slope"]   = _vpmv_slope
-                enriched_signal["vpmv_ratio"]   = _vpmv_ratio
+                enriched_signal["vpmv_slope"] = _vpmv_slope
+                enriched_signal["vpmv_ratio"] = _vpmv_ratio
 
                 # A/B/C deneyi: aynı skor vekil ve yönsüz hacimle (analiz için, panelde yok)
                 _vpmv_proxy = _vpmv_total = None
@@ -745,41 +806,58 @@ async def process_and_enrich_signals(
                 if _vpmv_ratio is not None and _vpmv_ratio < min_ratio:
                     logger.info(
                         "[%s] VPMV ratio=%.3f < %.2f — sinyal atlandı (%s)",
-                        symbol, _vpmv_ratio, min_ratio, signal_name,
+                        symbol,
+                        _vpmv_ratio,
+                        min_ratio,
+                        signal_name,
                     )
                     continue
-                enriched_signal["cvd_slope"]    = _cvd_slope
+                enriched_signal["cvd_slope"] = _cvd_slope
 
                 _deviso = _compute_devisso_score(df)
                 enriched_signal["devisso_score"] = _deviso
                 logger.info(
                     "DEVISSO | %s | %s | %s | score=%s",
-                    symbol, sig_type, interval, _deviso,
+                    symbol,
+                    sig_type,
+                    interval,
+                    _deviso,
                 )
 
                 _vp_buy, _vp_sell = _compute_vp_score(df)
                 _vp_score = round(_vp_buy - _vp_sell, 2)
-                enriched_signal["vp_buy_avg"]  = _vp_buy
+                enriched_signal["vp_buy_avg"] = _vp_buy
                 enriched_signal["vp_sell_avg"] = _vp_sell
-                enriched_signal["vp_score"]    = _vp_score
+                enriched_signal["vp_score"] = _vp_score
 
                 _vpr_buy, _vpr_sell = _compute_vp_score(df, use_real_volume=True)
                 _vp_score_real = None if np.isnan(_vpr_buy) else round(_vpr_buy - _vpr_sell, 2)
                 enriched_signal["vp_score_real"] = _vp_score_real
                 logger.info(
                     "VP | %s | %s | %s | buy=%.1f sell=%.1f score=%.1f",
-                    symbol, sig_type, interval, _vp_buy, _vp_sell, _vp_score,
+                    symbol,
+                    sig_type,
+                    interval,
+                    _vp_buy,
+                    _vp_sell,
+                    _vp_score,
                 )
 
                 _pd_zone, _mkt_structure = _compute_smc(df, sig_type)
-                enriched_signal["pd_zone"]          = _pd_zone
+                enriched_signal["pd_zone"] = _pd_zone
                 enriched_signal["market_structure"] = _mkt_structure
                 logger.info(
                     "SMC | %s | %s | %s | pd=%.1f struct=%s",
-                    symbol, sig_type, interval, _pd_zone or -1, _mkt_structure,
+                    symbol,
+                    sig_type,
+                    interval,
+                    _pd_zone or -1,
+                    _mkt_structure,
                 )
 
-                _fvg_tfs = await _compute_fvg(symbol, sig_type, float(enriched_signal.get("open_price", current_price or 0)))
+                _fvg_tfs = await _compute_fvg(
+                    symbol, sig_type, float(enriched_signal.get("open_price", current_price or 0))
+                )
                 enriched_signal["fvg_tfs"] = _fvg_tfs
                 logger.info("FVG | %s | %s | tfs=%s", symbol, sig_type, _fvg_tfs)
 
@@ -791,7 +869,10 @@ async def process_and_enrich_signals(
                 if dry_run:
                     logger.info(
                         "[DRY-RUN] [%s] Sinyal işlenecekti (%s - %s) — DB'ye yazılmadı, "
-                        "paper trade tetiklenmedi", symbol, signal_name, sig_type,
+                        "paper trade tetiklenmedi",
+                        symbol,
+                        signal_name,
+                        sig_type,
                     )
                     try:
                         await asyncio.wait_for(
@@ -802,7 +883,9 @@ async def process_and_enrich_signals(
                         pass
                     continue
 
-                signal_id = await signal_lifecycle_manager.process(enriched_signal, current_price=current_price)
+                signal_id = await signal_lifecycle_manager.process(
+                    enriched_signal, current_price=current_price
+                )
                 logger.info(f"[{symbol}] Sinyal işlendi: ID {signal_id}")
                 if signal_id:
                     risk_manager.register(symbol)
@@ -813,8 +896,10 @@ async def process_and_enrich_signals(
                         funding: Optional[float] = None
                         try:
                             import json as _json
+
                             ticker_raw = await asyncio.wait_for(
-                                RedisClient.get_client().get(f"ticker:{symbol}"), timeout=SAFE_EXTERNAL_TIMEOUT
+                                RedisClient.get_client().get(f"ticker:{symbol}"),
+                                timeout=SAFE_EXTERNAL_TIMEOUT,
                             )
                             if ticker_raw:
                                 ticker_d = _json.loads(ticker_raw)

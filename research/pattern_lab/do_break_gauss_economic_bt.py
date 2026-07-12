@@ -19,6 +19,7 @@ Sınır: Bu 24h sabit-tutma (fixed-hold) getirisi — do_kirilimi'nin gerçek
 SL/TP/ATR bazlı çıkış mantığından FARKLI, basitleştirilmiş bir ekonomik
 tahmin. Gerçek strateji entegrasyonu ayrı bir adım.
 """
+
 import os
 import sys
 
@@ -27,14 +28,23 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from signals.do_kirilimi import _daily_open  # pylint: disable=wrong-import-position
-from research.pattern_lab.vol_exhaustion_bt import _fwd_returns  # pylint: disable=wrong-import-position
 from research.pattern_lab.do_open_streak_bt import (  # pylint: disable=wrong-import-position
-    DAYS, HORIZON_BARS, MIN_BARS, _fetch, _do_break_gate,
+    DAYS,
+    HORIZON_BARS,
+    MIN_BARS,
+    _do_break_gate,
+    _fetch,
 )
 from research.pattern_lab.do_open_touch_gauss_bt import (  # pylint: disable=wrong-import-position
-    GAUSS_STREAK_THRESHOLD, _gauss_sum, _streak_state, _threshold_events,
+    GAUSS_STREAK_THRESHOLD,
+    _gauss_sum,
+    _streak_state,
+    _threshold_events,
 )
+from research.pattern_lab.vol_exhaustion_bt import (
+    _fwd_returns,  # pylint: disable=wrong-import-position
+)
+from signals.do_kirilimi import _daily_open  # pylint: disable=wrong-import-position
 
 POSITION_USD = 100.0
 FEE_RATE = 0.0005  # signals/paper_trade_manager.py ile aynı
@@ -88,8 +98,11 @@ def run():
         count_long, long_perc = _streak_state(o, h, l, c)
         ev3 = _threshold_events(count_long, gate, GAUSS_STREAK_THRESHOLD)
         gauss_perc = _gauss_sum(np.round(long_perc[ev3], 2))
-        valid = [(i, gv) for i, gv in zip(ev3, gauss_perc)
-                 if np.isfinite(gv) and i < len(c) - HORIZON_BARS]
+        valid = [
+            (i, gv)
+            for i, gv in zip(ev3, gauss_perc)
+            if np.isfinite(gv) and i < len(c) - HORIZON_BARS
+        ]
 
         is_gauss_vals.extend(gv for i, gv in valid if pd.Timestamp(ts_np[i]) < mid)
         per_symbol.append((ts_np, c, valid))
@@ -116,8 +129,10 @@ def run():
     high_rets = np.concatenate(oos_high_rets) if oos_high_rets else np.array([])
     low_rets = np.concatenate(oos_low_rets) if oos_low_rets else np.array([])
 
-    print(f"── Out-of-sample ekonomik etki (${POSITION_USD:.0f} pozisyon, "
-          f"round-trip fee ${ROUND_TRIP_FEE:.2f}) ──")
+    print(
+        f"── Out-of-sample ekonomik etki (${POSITION_USD:.0f} pozisyon, "
+        f"round-trip fee ${ROUND_TRIP_FEE:.2f}) ──"
+    )
     print(f"{'grup':32} {'n':>6} {'WR%':>6} {'ort $/işlem':>12} {'toplam $':>10} {'$/ay':>10}")
     for name, rets in (
         ("baseline (tüm barlar)", baseline_rets),
@@ -128,13 +143,17 @@ def run():
         if s.get("n", 0) == 0:
             print(f"{name:32} {'0':>6}")
             continue
-        print(f"{name:32} {s['n']:>6} {s['wr']:>6} {s['avg_usd']:>12} "
-              f"{s['total_usd']:>10} {s['usd_per_month']:>10}")
+        print(
+            f"{name:32} {s['n']:>6} {s['wr']:>6} {s['avg_usd']:>12} "
+            f"{s['total_usd']:>10} {s['usd_per_month']:>10}"
+        )
 
-    print(f"\nNot: 'ort $/işlem' ve '$/ay' TEK bir ${POSITION_USD:.0f}'lık pozisyonun art arda\n"
-          f"aynı sırayla açılıp 24h sonra kapandığı varsayımıyla (kartez/eşzamanlı değil,\n"
-          f"basit toplama). Gerçek portföy simülasyonu (eşzamanlı pozisyon limiti, compounding)\n"
-          f"kapsam dışı — bu sadece 'ortalama bir işlem ne kazandırır' tahmini.")
+    print(
+        f"\nNot: 'ort $/işlem' ve '$/ay' TEK bir ${POSITION_USD:.0f}'lık pozisyonun art arda\n"
+        f"aynı sırayla açılıp 24h sonra kapandığı varsayımıyla (kartez/eşzamanlı değil,\n"
+        f"basit toplama). Gerçek portföy simülasyonu (eşzamanlı pozisyon limiti, compounding)\n"
+        f"kapsam dışı — bu sadece 'ortalama bir işlem ne kazandırır' tahmini."
+    )
 
 
 if __name__ == "__main__":

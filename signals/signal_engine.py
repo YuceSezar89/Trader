@@ -10,14 +10,16 @@ Sinyal Türleri:
 Tüm fonksiyonlar asenkron olarak çalışır ve sağlam hata yönetimi içerir.
 """
 
-import pandas as pd
 import asyncio
-from typing import List, Dict, Any, Optional, Callable, Coroutine
-from datetime import timedelta, datetime
-from utils.logger import get_logger
+from datetime import datetime, timedelta
+from typing import Any, Callable, Coroutine, Dict, List, Optional
+
+import pandas as pd
+
 from config import Config
 from indicators.core import calculate_rsi, calculate_supertrend
 from signals.signal_filter import SignalFilter
+from utils.logger import get_logger
 
 
 def _bar_time_from_open_ms(open_time_ms) -> datetime:
@@ -27,6 +29,7 @@ def _bar_time_from_open_ms(open_time_ms) -> datetime:
     ts = pd.to_datetime(open_time_ms, unit="ms", utc=True)
     tz_name = getattr(Config, "TIMEZONE", "Europe/Istanbul")
     return ts.tz_convert(tz_name).replace(tzinfo=None).to_pydatetime()
+
 
 # Eşik değerlerini merkezi yapılandırmadan al
 RSI_THRESHOLDS = Config.RSI_THRESHOLDS
@@ -76,9 +79,7 @@ class SignalEngine:
         # Son iki satırda NaN kontrolü
         for col in required_cols:
             if df[col].iloc[-min_len:].isna().any():
-                self.logger.warning(
-                    f"'{col}' sütununda son {min_len} barda NaN değerler var."
-                )
+                self.logger.warning(f"'{col}' sütununda son {min_len} barda NaN değerler var.")
                 return False
         return True
 
@@ -116,11 +117,11 @@ class SignalEngine:
             try:
                 unit = iv[-1].lower()
                 val = int(iv[:-1])
-                if unit == 'm':
+                if unit == "m":
                     inferred_delta = timedelta(minutes=val)
-                elif unit == 'h':
+                elif unit == "h":
                     inferred_delta = timedelta(hours=val)
-                elif unit == 'd':
+                elif unit == "d":
                     inferred_delta = timedelta(days=val)
                 else:
                     inferred_delta = timedelta(minutes=15)
@@ -142,7 +143,9 @@ class SignalEngine:
             f"Signal TS Debug | ot_utc={ot_utc} | inferred_delta={inferred_delta} | "
             f"close_utc={close_utc} | close_local={close_local} | now_local={now_local} | tz={tz_name}"
         )
-        current_time = close_local.replace(tzinfo=None).to_pydatetime()  # timezone-naive datetime nesnesi
+        current_time = close_local.replace(
+            tzinfo=None
+        ).to_pydatetime()  # timezone-naive datetime nesnesi
 
         # ADX değerlerini güvenli bir şekilde al
         adx = (
@@ -181,9 +184,7 @@ class SignalEngine:
             else None
         )
         atr = (
-            df["atr"].iloc[-1]
-            if "atr" in df.columns and not pd.isna(df["atr"].iloc[-1])
-            else None
+            df["atr"].iloc[-1] if "atr" in df.columns and not pd.isna(df["atr"].iloc[-1]) else None
         )
 
         effective_pullback = pullback_level
@@ -251,10 +252,14 @@ class SignalEngine:
         if signal_type:
             indicator_key = f"RSI_Cross({fast_len},{slow_len})"
             high = float(df[COL_HIGH].iloc[-1])
-            low  = float(df[COL_LOW].iloc[-1])
+            low = float(df[COL_LOW].iloc[-1])
             bar_time = _bar_time_from_open_ms(df["open_time"].iloc[-1])
-            if symbol and interval and not await self._filter.check(
-                signal_type, high, low, symbol, interval, indicator_key, bar_time
+            if (
+                symbol
+                and interval
+                and not await self._filter.check(
+                    signal_type, high, low, symbol, interval, indicator_key, bar_time
+                )
             ):
                 self.logger.info(
                     f"[{symbol}] {interval} {signal_type} filtreden geçemedi ({indicator_key})"
@@ -298,10 +303,14 @@ class SignalEngine:
         if signal_type:
             indicator_key = "MA200_Cross"
             high = float(curr[COL_HIGH])
-            low  = float(curr[COL_LOW])
+            low = float(curr[COL_LOW])
             bar_time = _bar_time_from_open_ms(curr["open_time"])
-            if symbol and interval and not await self._filter.check(
-                signal_type, high, low, symbol, interval, indicator_key, bar_time
+            if (
+                symbol
+                and interval
+                and not await self._filter.check(
+                    signal_type, high, low, symbol, interval, indicator_key, bar_time
+                )
             ):
                 self.logger.info(
                     f"[{symbol}] {interval} {signal_type} filtreden geçemedi ({indicator_key})"
@@ -335,26 +344,28 @@ class SignalEngine:
             df = df.copy()
             df["st_direction"] = direction
 
-        dir_now  = df["st_direction"].iloc[-1]
+        dir_now = df["st_direction"].iloc[-1]
         dir_prev = df["st_direction"].iloc[-2]
 
         if pd.isna(dir_now) or pd.isna(dir_prev):
             return []
 
-        long_signal  = (dir_now == -1 and dir_prev != -1)
-        short_signal = (dir_now ==  1 and dir_prev !=  1)
+        long_signal = dir_now == -1 and dir_prev != -1
+        short_signal = dir_now == 1 and dir_prev != 1
 
         if not long_signal and not short_signal:
             return []
 
-        signal_type   = "Long" if long_signal else "Short"
+        signal_type = "Long" if long_signal else "Short"
         indicator_key = "Supertrend(10,3.0)"
         high = float(df[COL_HIGH].iloc[-1])
-        low  = float(df[COL_LOW].iloc[-1])
+        low = float(df[COL_LOW].iloc[-1])
         bar_time = _bar_time_from_open_ms(df["open_time"].iloc[-1])
 
         if symbol and interval:
-            if not await self._filter.check(signal_type, high, low, symbol, interval, indicator_key, bar_time):
+            if not await self._filter.check(
+                signal_type, high, low, symbol, interval, indicator_key, bar_time
+            ):
                 self.logger.info(
                     f"[{symbol}] {interval} {signal_type} filtreden geçemedi ({indicator_key})"
                 )
@@ -405,11 +416,15 @@ class SignalEngine:
 
         indicator_key = "HA_Cross"
         high = float(curr[COL_HIGH])
-        low  = float(curr[COL_LOW])
+        low = float(curr[COL_LOW])
         bar_time = _bar_time_from_open_ms(curr["open_time"])
 
-        if symbol and interval and not await self._filter.check(
-            signal_type, high, low, symbol, interval, indicator_key, bar_time
+        if (
+            symbol
+            and interval
+            and not await self._filter.check(
+                signal_type, high, low, symbol, interval, indicator_key, bar_time
+            )
         ):
             self.logger.info(
                 f"[{symbol}] {interval} {signal_type} filtreden geçemedi ({indicator_key})"
@@ -431,9 +446,7 @@ class SignalEngine:
         Tüm sinyal türlerini hesaplar ve birleştirilmiş sonuç döndürür.
         Daha sağlam ve genişletilebilir görev yönetimi kullanır.
         """
-        signal_methods: Dict[
-            str, Callable[[pd.DataFrame], Coroutine[Any, Any, Any]]
-        ] = {
+        signal_methods: Dict[str, Callable[[pd.DataFrame], Coroutine[Any, Any, Any]]] = {
             "rsi_crossover": self.rsi_crossover_signal,
             "ma200_crossover": self.ma200_crossover_signal,
             "supertrend": self.supertrend_signal,
@@ -465,15 +478,12 @@ class SignalEngine:
             return results
 
         except Exception as e:
-            self.logger.error(
-                f"Sinyal hesaplama sırasında genel hata: {e}", exc_info=True
-            )
+            self.logger.error(f"Sinyal hesaplama sırasında genel hata: {e}", exc_info=True)
             # Hatalı görevleri belirle ve logla
             for name, task in tasks.items():
                 if task.done() and task.exception():
                     self.logger.error(f"'{name}' sinyalinde hata: {task.exception()}")
             return {name: "ERROR" for name in tasks}
-
 
     async def replay_filter_state(
         self, df: pd.DataFrame, symbol: str, interval: str, replay_from_ms: int

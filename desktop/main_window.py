@@ -24,19 +24,19 @@ from PyQt6.QtWidgets import (
 
 from desktop.panels.active_signals_panel import ActiveSignalsPanel
 from desktop.panels.chart_panel import ChartPanel
+from desktop.panels.deviso_panel import DevisoPanel
 from desktop.panels.divergence_panel import DivergencePanel
 from desktop.panels.paper_trade_panel import PaperTradePanel
-from desktop.panels.vpmv_divergence_panel import VpmvDivergencePanel
-from desktop.panels.deviso_panel import DevisoPanel
 from desktop.panels.ranking_panel import RankingPanel
+from desktop.panels.vpmv_divergence_panel import VpmvDivergencePanel
 from desktop.panels.watchlist_panel import WatchlistPanel
 from desktop.theme import COLORS
 from desktop.widgets.log_panel import LogPanel
 from desktop.workers.divergence_worker import DivergenceWorker
 from desktop.workers.health_worker import HealthWorker, ServiceStatus
-from desktop.workers.vpmv_worker import VpmvWorker
 from desktop.workers.market_worker import MarketWorker
 from desktop.workers.signal_worker import SignalWorker
+from desktop.workers.vpmv_worker import VpmvWorker
 
 
 class StatusIndicator(QLabel):
@@ -195,9 +195,12 @@ class MainWindow(QMainWindow):
 
         sep = lambda: QLabel("  │  ")  # noqa: E731
         for sep in [
-            self._status_redis, sep(),
-            self._status_db, sep(),
-            self._status_symbols, sep(),
+            self._status_redis,
+            sep(),
+            self._status_db,
+            sep(),
+            self._status_symbols,
+            sep(),
             self._status_signals,
         ]:
             sb.addWidget(sep)
@@ -221,10 +224,10 @@ class MainWindow(QMainWindow):
 
         redis_url = self._config.get("redis_url", "redis://localhost:6379/0")
         db_cfg = {
-            "host":     self._config.get("db_host", "localhost"),
-            "port":     self._config.get("db_port", 5432),
-            "dbname":   self._config.get("db_name", "trader_panel"),
-            "user":     self._config.get("db_user", "yusuf"),
+            "host": self._config.get("db_host", "localhost"),
+            "port": self._config.get("db_port", 5432),
+            "dbname": self._config.get("db_name", "trader_panel"),
+            "user": self._config.get("db_user", "yusuf"),
             "password": self._config.get("db_password", ""),
         }
 
@@ -321,8 +324,8 @@ class MainWindow(QMainWindow):
 
         # ── Placeholder paneller (sağ tabified + alt) ─────────────────────
         placeholder_panels = [
-            ("signal_feed", "Sinyal Feed",      Qt.DockWidgetArea.RightDockWidgetArea),
-            ("backtest",    "Backtest Stüdyo",  Qt.DockWidgetArea.BottomDockWidgetArea),
+            ("signal_feed", "Sinyal Feed", Qt.DockWidgetArea.RightDockWidgetArea),
+            ("backtest", "Backtest Stüdyo", Qt.DockWidgetArea.BottomDockWidgetArea),
         ]
 
         for name, title, area in placeholder_panels:
@@ -371,10 +374,10 @@ class MainWindow(QMainWindow):
     def _start_workers(self) -> None:
         redis_url = self._config.get("redis_url", "redis://localhost:6379/0")
         db_cfg = {
-            "host":     self._config.get("db_host", "localhost"),
-            "port":     self._config.get("db_port", 5432),
-            "dbname":   self._config.get("db_name", "trader_panel"),
-            "user":     self._config.get("db_user", "yusuf"),
+            "host": self._config.get("db_host", "localhost"),
+            "port": self._config.get("db_port", 5432),
+            "dbname": self._config.get("db_name", "trader_panel"),
+            "user": self._config.get("db_user", "yusuf"),
             "password": self._config.get("db_password", ""),
         }
 
@@ -426,18 +429,12 @@ class MainWindow(QMainWindow):
         self._ranking_panel._worker.ranking_updated.connect(
             self._divergence_panel.on_ranking_updated
         )
-        self._divergence_worker.status_updated.connect(
-            self._divergence_panel.on_status_updated
-        )
+        self._divergence_worker.status_updated.connect(self._divergence_panel.on_status_updated)
         self._divergence_panel.tf_combo().currentTextChanged.connect(
             self._divergence_worker.set_timeframe
         )
-        self._signal_worker.signals_loaded.connect(
-            self._divergence_worker.set_symbols
-        )
-        self._signal_worker.new_signal.connect(
-            self._divergence_worker.add_symbol
-        )
+        self._signal_worker.signals_loaded.connect(self._divergence_worker.set_symbols)
+        self._signal_worker.new_signal.connect(self._divergence_worker.add_symbol)
         self._divergence_worker.start()
         self._workers.append(self._divergence_worker)
 
@@ -484,7 +481,10 @@ class MainWindow(QMainWindow):
         try:
             out = subprocess.run(
                 "launchctl list | grep com.trader.runner",
-                shell=True, capture_output=True, text=True, timeout=3,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=3,
             ).stdout.strip()
             if out:
                 return out.split()[0] != "-"
@@ -514,6 +514,7 @@ class MainWindow(QMainWindow):
     @pyqtSlot()
     def _toggle_service(self) -> None:
         import os
+
         uid = os.getuid()
         if self._is_service_running():
             cmd = ["launchctl", "kill", "SIGTERM", f"gui/{uid}/com.trader.runner"]
@@ -532,7 +533,14 @@ class MainWindow(QMainWindow):
         self._chart_panel.set_tf(tf)
 
     @pyqtSlot(str, float, float, float, float)
-    def _on_price_updated(self, symbol: str, price: float, change_pct: float, _volume: float = 0.0, _funding: float = 0.0) -> None:
+    def _on_price_updated(
+        self,
+        symbol: str,
+        price: float,
+        change_pct: float,
+        _volume: float = 0.0,
+        _funding: float = 0.0,
+    ) -> None:
         # Toolbar sembol arama kutusundaki sembol seçiliyse başlık güncelle
         if self._symbol_search.text().upper() == symbol:
             sign = "+" if change_pct > 0 else ""
@@ -557,20 +565,21 @@ class MainWindow(QMainWindow):
     @pyqtSlot()
     def _update_clock(self) -> None:
         from datetime import datetime
-        self._status_time.setText(
-            datetime.now().strftime("%d.%m.%Y  %H:%M:%S")
-        )
+
+        self._status_time.setText(datetime.now().strftime("%d.%m.%Y  %H:%M:%S"))
 
     # ── Layout Kaydet / Yükle ─────────────────────────────────────────────
 
     def _save_layout(self) -> None:
         from PyQt6.QtCore import QSettings
+
         s = QSettings("TRader", "Terminal")
         s.setValue("geometry", self.saveGeometry())
         s.setValue("state", self.saveState())
 
     def _restore_layout(self) -> None:
         from PyQt6.QtCore import QSettings
+
         s = QSettings("TRader", "Terminal")
         geom = s.value("geometry")
         state = s.value("state")
@@ -602,6 +611,7 @@ class MainWindow(QMainWindow):
 
     def _reset_layout(self) -> None:
         from PyQt6.QtCore import QSettings
+
         QSettings("TRader", "Terminal").clear()
         self.statusBar().showMessage("Layout sıfırlandı — yeniden başlatın.", 3000)
 

@@ -18,7 +18,9 @@ from datetime import datetime
 
 import psutil
 
-_LOG_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "desktop_perf.csv")
+_LOG_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "desktop_perf.csv"
+)
 _INTERVAL_SEC = 30
 _PROCESS_MATCH = "desktop.main"
 
@@ -40,7 +42,9 @@ def main() -> None:
     with open(_LOG_PATH, "a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         if is_new:
-            writer.writerow(["timestamp", "elapsed_min", "rss_mb", "cpu_pct", "num_threads", "num_fds"])
+            writer.writerow(
+                ["timestamp", "elapsed_min", "rss_mb", "cpu_pct", "num_threads", "num_fds"]
+            )
 
         proc.cpu_percent()  # ilk çağrı her zaman 0.0 döner, ısıtma
         start = time.time()
@@ -57,14 +61,16 @@ def main() -> None:
                     num_fds = -1
                 elapsed_min = (time.time() - start) / 60
 
-                writer.writerow([
-                    datetime.now().isoformat(timespec="seconds"),
-                    round(elapsed_min, 1),
-                    round(rss_mb, 1),
-                    round(cpu_pct, 1),
-                    num_threads,
-                    num_fds,
-                ])
+                writer.writerow(
+                    [
+                        datetime.now().isoformat(timespec="seconds"),
+                        round(elapsed_min, 1),
+                        round(rss_mb, 1),
+                        round(cpu_pct, 1),
+                        num_threads,
+                        num_fds,
+                    ]
+                )
                 f.flush()
             except psutil.NoSuchProcess:
                 print("Process artık çalışmıyor, izleme durduruluyor")

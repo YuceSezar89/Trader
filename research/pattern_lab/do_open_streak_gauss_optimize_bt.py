@@ -11,6 +11,7 @@ sabit değer denemek yerine, PROJENİN standart IS/OOS disiplinini uyguluyor:
 
 Mevcut üretim değeri (4.5) referans olarak OOS'ta da gösteriliyor.
 """
+
 import os
 import sys
 
@@ -19,13 +20,19 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+from indicators.core import calculate_atr  # pylint: disable=wrong-import-position
+from research.pattern_lab.do_open_streak_gauss_threshold_bt import (  # pylint: disable=wrong-import-position
+    HORIZON_BARS,
+    MIN_BARS,
+    N_PLACEBO,
+    WARMUP,
+    _fetch,
+    _signal_series,
+    _simulate,
+)
 from research.pattern_lab.vol_exhaustion_bt import _stats  # pylint: disable=wrong-import-position
 from signals.do_kirilimi import _daily_open  # pylint: disable=wrong-import-position
-from indicators.core import calculate_atr  # pylint: disable=wrong-import-position
 from signals.do_open_streak import SL_ATR_MULT  # pylint: disable=wrong-import-position
-from research.pattern_lab.do_open_streak_gauss_threshold_bt import (  # pylint: disable=wrong-import-position
-    _fetch, _signal_series, _simulate, MIN_BARS, WARMUP, HORIZON_BARS, N_PLACEBO,
-)
 
 CANDIDATE_THRESHOLDS = [round(x, 2) for x in np.arange(0.5, 10.01, 0.25)]
 MIN_IS_N = 50
@@ -110,10 +117,18 @@ def run() -> None:
     p_is = _stats(prod_is_ev["ret"].to_numpy()) if not prod_is_ev.empty else {}
     p_oos = _stats(prod_oos_ev["ret"].to_numpy()) if not prod_oos_ev.empty else {}
 
-    print(f"{'seçilen eşik=' + str(best_th):28} {'IS':6} {s_is.get('n',0):>6} {s_is.get('wr',0):>6} {s_is.get('pf',0):>7}")
-    print(f"{'seçilen eşik=' + str(best_th):28} {'OOS':6} {s_oos.get('n',0):>6} {s_oos.get('wr',0):>6} {s_oos.get('pf',0):>7}  <<< ASIL SINAV")
-    print(f"{'üretim eşik=' + str(PROD_THRESHOLD):28} {'IS':6} {p_is.get('n',0):>6} {p_is.get('wr',0):>6} {p_is.get('pf',0):>7}")
-    print(f"{'üretim eşik=' + str(PROD_THRESHOLD):28} {'OOS':6} {p_oos.get('n',0):>6} {p_oos.get('wr',0):>6} {p_oos.get('pf',0):>7}")
+    print(
+        f"{'seçilen eşik=' + str(best_th):28} {'IS':6} {s_is.get('n',0):>6} {s_is.get('wr',0):>6} {s_is.get('pf',0):>7}"
+    )
+    print(
+        f"{'seçilen eşik=' + str(best_th):28} {'OOS':6} {s_oos.get('n',0):>6} {s_oos.get('wr',0):>6} {s_oos.get('pf',0):>7}  <<< ASIL SINAV"
+    )
+    print(
+        f"{'üretim eşik=' + str(PROD_THRESHOLD):28} {'IS':6} {p_is.get('n',0):>6} {p_is.get('wr',0):>6} {p_is.get('pf',0):>7}"
+    )
+    print(
+        f"{'üretim eşik=' + str(PROD_THRESHOLD):28} {'OOS':6} {p_oos.get('n',0):>6} {p_oos.get('wr',0):>6} {p_oos.get('pf',0):>7}"
+    )
 
     if s_oos.get("n", 0) < 30:
         print("\nOOS örneklemi çok küçük, güvenilir yorum yapılamaz.")
@@ -126,8 +141,10 @@ def run() -> None:
     second_half = sel_oos_ev[sel_oos_ev["opened_at"] >= oos_mid]
     sf = _stats(first_half["ret"].to_numpy())
     ss = _stats(second_half["ret"].to_numpy())
-    print(f"\nOOS split-period: ilk_yari n={sf.get('n',0)} PF={sf.get('pf',0)} | "
-          f"ikinci_yari n={ss.get('n',0)} PF={ss.get('pf',0)}")
+    print(
+        f"\nOOS split-period: ilk_yari n={sf.get('n',0)} PF={sf.get('pf',0)} | "
+        f"ikinci_yari n={ss.get('n',0)} PF={ss.get('pf',0)}"
+    )
 
     # 4) Placebo (OOS'ta, seçilen eşiğin olay sayısını koruyarak rastgele zamanlama)
     rng = np.random.default_rng(42)
@@ -171,8 +188,10 @@ def run() -> None:
         arr = np.array(placebo_pfs)
         real_pf = s_oos.get("pf", 0.0)
         rank = float((arr < real_pf).mean() * 100)
-        print(f"\nOOS placebo (n={len(arr)}): ort={arr.mean():.3f} p90={np.percentile(arr,90):.3f} "
-              f"max={arr.max():.3f} | gerçek OOS PF={real_pf:.3f} (placebo'nun %{rank:.0f}'ini geçiyor)")
+        print(
+            f"\nOOS placebo (n={len(arr)}): ort={arr.mean():.3f} p90={np.percentile(arr,90):.3f} "
+            f"max={arr.max():.3f} | gerçek OOS PF={real_pf:.3f} (placebo'nun %{rank:.0f}'ini geçiyor)"
+        )
 
 
 if __name__ == "__main__":

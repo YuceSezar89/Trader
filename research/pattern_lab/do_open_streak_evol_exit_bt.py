@@ -16,6 +16,7 @@ Look-ahead yok: sinyal SADECE geçmiş barlarla üretiliyor (production check()
 ile aynı), EVOL causal rolling, min_hold ile artefakt önleniyor
 ([[project_devisso_ersi]] — ha_cross_evol_exit_bt.py'de bulunan ders).
 """
+
 import os
 import sys
 
@@ -28,12 +29,18 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from config import Config  # pylint: disable=wrong-import-position
 from indicators.core import calculate_atr  # pylint: disable=wrong-import-position
 from research.pattern_lab.ha_cross_evol_exit_bt import (  # pylint: disable=wrong-import-position
-    RANK_WINDOW, RVOL_WINDOW, _evol_series,
+    RANK_WINDOW,
+    RVOL_WINDOW,
+    _evol_series,
 )
 from research.pattern_lab.vol_exhaustion_bt import _stats  # pylint: disable=wrong-import-position
 from signals.do_kirilimi import _daily_open  # pylint: disable=wrong-import-position
 from signals.do_open_streak import (  # pylint: disable=wrong-import-position
-    GAUSS_THRESHOLD, MAX_HOLD_HOURS, SL_ATR_MULT, STREAK_THRESHOLD, _gauss_sum,
+    GAUSS_THRESHOLD,
+    MAX_HOLD_HOURS,
+    SL_ATR_MULT,
+    STREAK_THRESHOLD,
+    _gauss_sum,
 )
 
 DAYS = 60
@@ -46,8 +53,11 @@ EVOL_MIN_HOLD_BARS = 8
 
 def _fetch() -> pd.DataFrame:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     q = f"""
         SELECT symbol, bucket AS ts, open, high, low, close, volume
@@ -142,7 +152,9 @@ def run() -> None:
         ts_np = g["ts"].to_numpy()
 
         idxs = np.where(signal)[0]
-        idxs = idxs[(idxs >= max(WARMUP, RANK_WINDOW + RVOL_WINDOW)) & (idxs < len(g) - HORIZON_BARS)]
+        idxs = idxs[
+            (idxs >= max(WARMUP, RANK_WINDOW + RVOL_WINDOW)) & (idxs < len(g) - HORIZON_BARS)
+        ]
 
         for i in idxs:
             atr = atr_series[i]
@@ -153,7 +165,9 @@ def run() -> None:
             n_events += 1
             baseline_rets.append(_simulate_baseline(low, close, i, entry, sl, HORIZON_BARS))
             evol_rets.append(
-                _simulate_evol_exit(low, close, evol, i, entry, sl, HORIZON_BARS, EVOL_THRESHOLD, EVOL_MIN_HOLD_BARS)
+                _simulate_evol_exit(
+                    low, close, evol, i, entry, sl, HORIZON_BARS, EVOL_THRESHOLD, EVOL_MIN_HOLD_BARS
+                )
             )
             opened_ats.append(pd.Timestamp(ts_np[i]))
 
@@ -171,9 +185,15 @@ def run() -> None:
 
     def _print_row(name, rets):
         arr = np.array(rets)
-        for label, mask in (("tum", np.ones(len(arr), dtype=bool)), ("ilk_yari", first_mask), ("ikinci_yari", ~first_mask)):
+        for label, mask in (
+            ("tum", np.ones(len(arr), dtype=bool)),
+            ("ilk_yari", first_mask),
+            ("ikinci_yari", ~first_mask),
+        ):
             s = _stats(arr[mask])
-            print(f"{name:28} {label:12} {s.get('n',0):>6} {s.get('wr',0):>6} {s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+            print(
+                f"{name:28} {label:12} {s.get('n',0):>6} {s.get('wr',0):>6} {s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+            )
 
     _print_row("SL=3xATR tek başına (mevcut)", baseline_rets)
     _print_row(f"+ EVOL-çıkış <{EVOL_THRESHOLD} (mh={EVOL_MIN_HOLD_BARS})", evol_rets)

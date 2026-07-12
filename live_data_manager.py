@@ -6,40 +6,44 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-import redis.asyncio as aioredis
-
 import numpy as np
 import pandas as pd
-
-from utils.asyncio_ws_client import AsyncioBinanceStreamManager
+import redis.asyncio as aioredis
+from sqlalchemy import text
 
 from binance_client import BinanceClientManager
-from utils.exceptions import BinanceAPIError
-from indicators.core import add_all_indicators, truncate_after_gap
-from indicators.incremental import IndicatorState, bootstrap_state, update_state, RESYNC_INTERVAL
+from config import Config
 from database.crud import (
     bulk_insert_price_data,
     bulk_insert_price_data_multi,
+    delete_symbol_data,
     get_cagg_klines,
     get_last_timestamp,
     get_oldest_timestamp,
     get_recent_klines,
     initialize_database,
-    delete_symbol_data,
 )
 from database.engine import get_session, run_with_db_timeout
-from sqlalchemy import text
-from signals.signal_processor import process_and_enrich_signals, trim_to_closed_bar
+from indicators.core import add_all_indicators, truncate_after_gap
+from indicators.incremental import RESYNC_INTERVAL, IndicatorState, bootstrap_state, update_state
+from signals.paper_trade_manager import (
+    do_kirilimi_manager,
+    do_open_streak_manager,
+    ha_cross_manager,
+    manual_manager,
+    paper_trade_manager,
+    rsi_15m_manager,
+)
 from signals.risk_manager import risk_manager
-from signals.paper_trade_manager import paper_trade_manager, ha_cross_manager, rsi_15m_manager, manual_manager, do_kirilimi_manager, do_open_streak_manager
+from signals.signal_processor import process_and_enrich_signals, trim_to_closed_bar
+from utils.asyncio_ws_client import AsyncioBinanceStreamManager
 from utils.exceptions import BinanceAPIError, DatabaseError
-from config import Config
-from utils.kline_schema import check_kline_schema
-from utils.timeframe_aggregator import TimeframeAggregator
-from utils.redis_client import RedisClient
 from utils.heartbeat import beat, record_activity
-from utils.telegram_notify import send_telegram_message
+from utils.kline_schema import check_kline_schema
 from utils.logger import get_logger
+from utils.redis_client import RedisClient
+from utils.telegram_notify import send_telegram_message
+from utils.timeframe_aggregator import TimeframeAggregator
 
 # MTF init/refresh için ayrı thread pool — default executor'ı (WS sinyalleri) bloklamaz
 # 12→4 (10 Tem 2026): incremental indikatör hesaplama (17.8x hızlanma, ~2.9ms/çağrı)
@@ -47,15 +51,24 @@ from utils.logger import get_logger
 # yaratıyorlardı — bu da (WS artık aynı event loop'ta olduğu için) ping/pong
 # gecikmesine ve DB timeout'larına yol açıyordu. Bkz. memory: project_data_layer_debt.md.
 _MTF_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="mtf_init")
-_TICK_TF_WHITELIST = {'1m', '5m', '15m', '30m', '1h', '4h', '6h', '8h', '12h', '1d'}
-_TICK_THROTTLE_SECS = {'1m': 2, '5m': 2, '15m': 2, '30m': 2,
-                       '1h': 30, '4h': 60, '6h': 60, '8h': 60, '12h': 120, '1d': 120}
+_TICK_TF_WHITELIST = {"1m", "5m", "15m", "30m", "1h", "4h", "6h", "8h", "12h", "1d"}
+_TICK_THROTTLE_SECS = {
+    "1m": 2,
+    "5m": 2,
+    "15m": 2,
+    "30m": 2,
+    "1h": 30,
+    "4h": 60,
+    "6h": 60,
+    "8h": 60,
+    "12h": 120,
+    "1d": 120,
+}
 
 # İndikatör incremental bootstrap'ı için minimum bar sayısı — SuperTrend(ATR=10) ve
 # ADX(14+14) bunun altında anlamlı seed alamaz. 4h(limit=12)/1d(limit=7) gibi kısa
 # buffer'lı TF'ler bu eşiğin altında kalıp hep tam hesaplamaya düşer (zararsız, ucuz).
 _MIN_BOOTSTRAP_BARS = 30
-
 
 
 def _merge_tick_row(buf: pd.DataFrame, tick_row: dict, limit: int) -> pd.DataFrame:
@@ -89,7 +102,10 @@ def _has_gap(existing: pd.DataFrame, new_open_time: int) -> bool:
 
 
 def _merge_closed_bar_and_index(
-    existing: pd.DataFrame, new_row: dict, limit: int, state: Optional[IndicatorState],
+    existing: pd.DataFrame,
+    new_row: dict,
+    limit: int,
+    state: Optional[IndicatorState],
     use_incremental: bool = False,
 ):
     """Kapanan bar'ı buffer'a ekler + indikatörleri hesaplar — executor'da çalıştırılır
@@ -114,14 +130,20 @@ def _merge_closed_bar_and_index(
     # doğrudan tam hesaplamaya git — zaten ucuz (az satır).
     if not use_incremental or len(existing) < _MIN_BOOTSTRAP_BARS:
         new_df = pd.DataFrame([new_row])
-        merged = pd.concat([existing, new_df], ignore_index=True).drop_duplicates(
-            subset=["open_time"], keep="last"
-        ).tail(limit)
+        merged = (
+            pd.concat([existing, new_df], ignore_index=True)
+            .drop_duplicates(subset=["open_time"], keep="last")
+            .tail(limit)
+        )
         merged = truncate_after_gap(merged)
         return add_all_indicators(merged), None
 
     try:
-        if state is None or state.steps_since_bootstrap >= RESYNC_INTERVAL or _has_gap(existing, int(new_row["open_time"])):
+        if (
+            state is None
+            or state.steps_since_bootstrap >= RESYNC_INTERVAL
+            or _has_gap(existing, int(new_row["open_time"]))
+        ):
             # İlk çağrı VEYA periyodik resync — state'in kendi içinde biriken
             # floating-point farkını ground-truth'tan (tam yeniden hesaplama) sıfırlar.
             existing = truncate_after_gap(existing)
@@ -138,21 +160,27 @@ def _merge_closed_bar_and_index(
         roc_period = Config.ROC_PERIOD
         if len(existing) >= roc_period:
             close_then = float(existing["close"].iloc[-roc_period])
-            new_indicators["momentum"] = ((new_row["close"] - close_then) / close_then) * 100 if close_then else np.nan
+            new_indicators["momentum"] = (
+                ((new_row["close"] - close_then) / close_then) * 100 if close_then else np.nan
+            )
         else:
             new_indicators["momentum"] = np.nan
 
         new_row_full = {**new_row, **new_indicators}
-        merged = pd.concat(
-            [existing, pd.DataFrame([new_row_full])], ignore_index=True
-        ).drop_duplicates(subset=["open_time"], keep="last").tail(limit)
+        merged = (
+            pd.concat([existing, pd.DataFrame([new_row_full])], ignore_index=True)
+            .drop_duplicates(subset=["open_time"], keep="last")
+            .tail(limit)
+        )
         return merged, state
     except Exception as e:  # pylint: disable=broad-exception-caught
         logger.warning("İncremental indikatör hatası, tam yeniden hesaplamaya dönülüyor: %s", e)
         new_df = pd.DataFrame([new_row])
-        merged = pd.concat([existing, new_df], ignore_index=True).drop_duplicates(
-            subset=["open_time"], keep="last"
-        ).tail(limit)
+        merged = (
+            pd.concat([existing, new_df], ignore_index=True)
+            .drop_duplicates(subset=["open_time"], keep="last")
+            .tail(limit)
+        )
         merged = truncate_after_gap(merged)
         return add_all_indicators(merged), None
 
@@ -195,8 +223,7 @@ def _build_derived_closed_bar(df_1m: pd.DataFrame, closing_tf: str) -> Optional[
 
     close_time = period_bars["close_time"].iloc[-1] if "close_time" in period_bars.columns else None
     close_time_ms = (
-        int(close_time) if close_time is not None and pd.notna(close_time)
-        else period_end - 1
+        int(close_time) if close_time is not None and pd.notna(close_time) else period_end - 1
     )
 
     return {
@@ -280,27 +307,29 @@ class LiveDataManager:
         self.symbols = list(dict.fromkeys(symbols))  # Duplike varsa kaldır
 
         self.interval = interval
-        
+
         # MTF Configuration
-        self.mtf_enabled = getattr(Config, 'MTF_ENABLED', True)
-        self.supported_timeframes = getattr(Config, 'MTF_TIMEFRAMES', ['1m', '5m', '15m'])
-        self.mtf_buffer_limits = getattr(Config, 'MTF_BUFFER_LIMITS', {
-            '1m': 1000,   # 16+ hours
-            '5m': 200,    # 16+ hours  
-            '15m': 67,    # 16+ hours
-            '1h': 24,     # 24 hours
-            '4h': 12,     # 48 hours
-            '1d': 7       # 7 days
-        })
+        self.mtf_enabled = getattr(Config, "MTF_ENABLED", True)
+        self.supported_timeframes = getattr(Config, "MTF_TIMEFRAMES", ["1m", "5m", "15m"])
+        self.mtf_buffer_limits = getattr(
+            Config,
+            "MTF_BUFFER_LIMITS",
+            {
+                "1m": 1000,  # 16+ hours
+                "5m": 200,  # 16+ hours
+                "15m": 67,  # 16+ hours
+                "1h": 24,  # 24 hours
+                "4h": 12,  # 48 hours
+                "1d": 7,  # 7 days
+            },
+        )
         # Multi-WebSocket istemcileri: Her connection için ayrı client
         self.ws_clients: Dict[int, Any] = {}  # connection_id -> ws_client
         # Asyncio-native WS taşıma katmanı yöneticisi (utils/asyncio_ws_client.py) —
         # thread-per-connection yerine aynı event loop'ta task modeli.
         self._asyncio_ws_manager: Optional[AsyncioBinanceStreamManager] = None
         self.is_ws_connected = False
-        self.last_message_time: Optional[float] = (
-            None  # Son WebSocket mesajının zamanını takip et
-        )
+        self.last_message_time: Optional[float] = None  # Son WebSocket mesajının zamanını takip et
         # Tekil bağlantı ölümünü yakalamak için: her bağlantının kendi son-mesaj zamanı.
         # Global last_message_time herhangi bir bağlantıdan mesaj gelince sıfırlandığı
         # için tek bir bağlantının sessizce ölmesini maskeliyordu (3 Tem vakası).
@@ -326,18 +355,16 @@ class LiveDataManager:
 
         # Multi-WebSocket configuration
         self.max_streams_per_connection = 200  # Binance limit
-        
+
         # Keep-Alive Ping/Pong Tracking
         self.ping_task: Optional[asyncio.Task] = None
         self.last_ping_time: Optional[float] = None
-        self.ping_interval = getattr(Config, 'WS_PING_INTERVAL', 20)
+        self.ping_interval = getattr(Config, "WS_PING_INTERVAL", 20)
         self.connection_health_ok = True
-        
+
         # Legacy single timeframe buffer (backward compatibility)
-        self.kline_data: Dict[str, pd.DataFrame] = {
-            symbol: pd.DataFrame() for symbol in symbols
-        }
-        
+        self.kline_data: Dict[str, pd.DataFrame] = {symbol: pd.DataFrame() for symbol in symbols}
+
         # NEW: Multi-timeframe buffers
         if self.mtf_enabled:
             self.mtf_buffers: Dict[str, Dict[str, pd.DataFrame]] = {}
@@ -345,14 +372,16 @@ class LiveDataManager:
                 self.mtf_buffers[symbol] = {}
                 for tf in self.supported_timeframes:
                     self.mtf_buffers[symbol][tf] = pd.DataFrame()
-            logger.info(f"MTF buffers initialized for {len(symbols)} symbols, {len(self.supported_timeframes)} timeframes")
+            logger.info(
+                f"MTF buffers initialized for {len(symbols)} symbols, {len(self.supported_timeframes)} timeframes"
+            )
 
         # İndikatör incremental hesaplama durumu (Faz D, 6 Tem): sembol -> TF ->
         # IndicatorState. _merge_closed_bar_and_index'te bootstrap edilip güncellenir;
         # ana event loop thread'inde okunup yazılır (executor thread'leri sadece
         # kendilerine verilen state nesnesini mutasyona uğratır — thread-safe).
         self._indicator_state: Dict[str, Dict[str, IndicatorState]] = {}
-        
+
         self.processing_tasks: set[asyncio.Task] = set()
         self._last_prices: Dict[str, float] = {}
         self._ticker_prices: Dict[str, float] = {}
@@ -384,7 +413,9 @@ class LiveDataManager:
 
         # Paralel işleme - maksimum hız için
         # Semaphore ile eşzamanlı istek sayısını kontrol et
-        semaphore = asyncio.Semaphore(2)  # Aynı anda max 2 istek (arka plan görevi, rate limit dostu)
+        semaphore = asyncio.Semaphore(
+            2
+        )  # Aynı anda max 2 istek (arka plan görevi, rate limit dostu)
         fill_starts: Dict[str, int] = {}
 
         async def sync_with_semaphore(symbol):
@@ -396,9 +427,7 @@ class LiveDataManager:
                     logger.info(f"[{symbol}] Tarihsel veri senkronizasyonu tamamlandı.")
                     return True
                 except Exception as e:
-                    logger.error(
-                        f"[{symbol}] Tarihsel veri senkronizasyonu sırasında hata: {e}"
-                    )
+                    logger.error(f"[{symbol}] Tarihsel veri senkronizasyonu sırasında hata: {e}")
                     return False
 
         # Tüm sembolleri paralel olarak işle
@@ -428,8 +457,14 @@ class LiveDataManager:
         first_fill_open_time: Optional[int] = None
         try:
             _INTERVAL_MS_MAP = {
-                "1m": 60_000, "3m": 180_000, "5m": 300_000, "15m": 900_000,
-                "30m": 1_800_000, "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000,
+                "1m": 60_000,
+                "3m": 180_000,
+                "5m": 300_000,
+                "15m": 900_000,
+                "30m": 1_800_000,
+                "1h": 3_600_000,
+                "4h": 14_400_000,
+                "1d": 86_400_000,
             }
             interval_ms = _INTERVAL_MS_MAP.get(self.interval, 60_000)
             desired_bars = 1500
@@ -480,11 +515,11 @@ class LiveDataManager:
                     first_fill_open_time = int(df_missing["open_time"].iloc[0])
 
                 async with self.db_lock:
-                    await bulk_insert_price_data(
-                        symbol, df_missing, interval=self.interval
-                    )
+                    await bulk_insert_price_data(symbol, df_missing, interval=self.interval)
                 total_inserted += len(df_missing)
-                logger.info(f"[{symbol}] {len(df_missing)} mum kaydedildi (toplam: {total_inserted})")
+                logger.info(
+                    f"[{symbol}] {len(df_missing)} mum kaydedildi (toplam: {total_inserted})"
+                )
 
                 if len(df_missing) < 1500:
                     break
@@ -496,7 +531,9 @@ class LiveDataManager:
                 if self.mtf_enabled:
                     await self._refresh_mtf_redis(symbol)
             elif BinanceClientManager.is_banned():
-                logger.warning(f"[{symbol}] Ban cooldown aktifken senkronizasyon denendi, sonuç belirsiz (gap-heal telafi edecek).")
+                logger.warning(
+                    f"[{symbol}] Ban cooldown aktifken senkronizasyon denendi, sonuç belirsiz (gap-heal telafi edecek)."
+                )
             else:
                 logger.info(f"[{symbol}] Yeni veri bulunamadı, sistem güncel.")
 
@@ -576,7 +613,10 @@ class LiveDataManager:
                 # Son 24 saatlik (96 * 15dk) veride hacim kontrolü
                 recent_data = result.tail(96)
                 # Referans sembolü asla filtreleme
-                if symbol != Config.MARKET_REFERENCE_SYMBOL and recent_data["volume"].sum() < Config.MIN_VOLUME_THRESHOLD:
+                if (
+                    symbol != Config.MARKET_REFERENCE_SYMBOL
+                    and recent_data["volume"].sum() < Config.MIN_VOLUME_THRESHOLD
+                ):
                     logger.info(
                         f"[{symbol}] Düşük hacimli (son 24s hacim < {Config.MIN_VOLUME_THRESHOLD}), izlemeden çıkarılıyor."
                     )
@@ -609,9 +649,7 @@ class LiveDataManager:
         """Helper to fetch initial kline data for one symbol."""
         try:
             # We fetch 500 to have enough data for indicators like MA200
-            return await BinanceClientManager.fetch_klines(
-                symbol, self.interval, limit=500
-            )
+            return await BinanceClientManager.fetch_klines(symbol, self.interval, limit=500)
         except BinanceAPIError as e:
             logger.error(
                 f"[{symbol}] Başlangıç verisi çekilirken Binance API hatası: {e}",
@@ -662,7 +700,8 @@ class LiveDataManager:
                         asyncio.run_coroutine_threadsafe(
                             self._process_closed_1m_and_derive(
                                 symbol, interval, kline, int(kline["T"]) + 1
-                            ), self.loop
+                            ),
+                            self.loop,
                         )
                     else:
                         tick_key = f"{symbol}:{interval}"
@@ -679,9 +718,7 @@ class LiveDataManager:
         except json.JSONDecodeError:
             logger.error(f"WebSocket'ten bozuk JSON verisi alındı: {msg}")
         except Exception as e:
-            logger.error(
-                f"WebSocket mesaj işleme hatası: {e} | Mesaj: {msg}", exc_info=True
-            )
+            logger.error(f"WebSocket mesaj işleme hatası: {e} | Mesaj: {msg}", exc_info=True)
 
     async def _handle_tick(self, symbol: str, interval: str, kline_data: Dict) -> None:
         """Açık mumu kapalı buffer'a ekleyerek Redis'e yazar ve pub/sub tetikler."""
@@ -764,7 +801,9 @@ class LiveDataManager:
                 return
             new_row = df_1d.iloc[-1].to_dict()
             logger.info(f"🕯️ [{symbol}] 1d mum kapandı (REST'ten). Fiyat: {new_row['close']}")
-            await self._update_and_process_symbol_mtf(symbol, "1d", self._new_row_to_kline_dict(new_row))
+            await self._update_and_process_symbol_mtf(
+                symbol, "1d", self._new_row_to_kline_dict(new_row)
+            )
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.debug("[1d-Refresh] %s hata: %s", symbol, exc)
 
@@ -795,18 +834,23 @@ class LiveDataManager:
         # olmayan TF'leri baştan ele. Gerçek bir hata değil, geçici ısınma durumu.
         n_bars = len(df_1m)
         closing_tfs = [
-            tf for tf in closing_tfs
-            if n_bars >= TimeframeAggregator.TIMEFRAME_MINUTES.get(tf, 0)
+            tf for tf in closing_tfs if n_bars >= TimeframeAggregator.TIMEFRAME_MINUTES.get(tf, 0)
         ]
         if not closing_tfs:
             return
         loop = asyncio.get_event_loop()
         for tf in closing_tfs:
-            new_row = await loop.run_in_executor(_MTF_EXECUTOR, _build_derived_closed_bar, df_1m, tf)
+            new_row = await loop.run_in_executor(
+                _MTF_EXECUTOR, _build_derived_closed_bar, df_1m, tf
+            )
             if new_row is None:
                 continue
-            logger.info(f"🕯️ [{symbol}] {tf} mum kapandı (1m'den türetildi). Fiyat: {new_row['close']}")
-            await self._update_and_process_symbol_mtf(symbol, tf, self._new_row_to_kline_dict(new_row))
+            logger.info(
+                f"🕯️ [{symbol}] {tf} mum kapandı (1m'den türetildi). Fiyat: {new_row['close']}"
+            )
+            await self._update_and_process_symbol_mtf(
+                symbol, tf, self._new_row_to_kline_dict(new_row)
+            )
 
     async def _derive_and_dispatch_forming_tfs(self, symbol: str) -> None:
         """1m-türetme projesi: her 1m tick'inde (throttle zaten _handle_websocket_message'ta
@@ -854,7 +898,9 @@ class LiveDataManager:
         # içinde "period_bars boşsa None dön" ile sessizce ele alınıyor.
         loop = asyncio.get_event_loop()
         for tf in due_tfs:
-            new_row = await loop.run_in_executor(_MTF_EXECUTOR, _build_derived_forming_bar, df_1m, tf)
+            new_row = await loop.run_in_executor(
+                _MTF_EXECUTOR, _build_derived_forming_bar, df_1m, tf
+            )
             if new_row is None:
                 continue
             await self._handle_tick(symbol, tf, self._new_row_to_kline_dict(new_row))
@@ -914,34 +960,42 @@ class LiveDataManager:
                     self._indicator_state.setdefault(symbol, {}).pop(interval, None)
 
                 # Cache to Redis
-                await RedisClient.set_mtf_klines(symbol, interval, self.mtf_buffers[symbol][interval])
+                await RedisClient.set_mtf_klines(
+                    symbol, interval, self.mtf_buffers[symbol][interval]
+                )
                 logger.debug(f"[{symbol}] {interval} buffer updated and cached")
                 # do_kirilimi/do_open_streak tetikleme artık signal_service.py'de
                 # (bkz. paper trading ayrıştırması, 10 Tem 2026 cutover).
 
             # Legacy 1m buffer (kline_data) — sadece DB batch insert için tutuluyor
-            if interval == '1m':
+            if interval == "1m":
                 new_df = pd.DataFrame([new_row])
                 self.kline_data[symbol] = pd.concat(
                     [self.kline_data[symbol], new_df], ignore_index=True
                 ).tail(1000)
 
             # Batch insert için buffer'a ekle (sadece 1m için - diğer TF'ler opsiyonel)
-            if interval == '1m':
+            if interval == "1m":
                 await self._add_to_batch_buffer(symbol, new_row)
-
 
             # Sinyal üretimi (her timeframe için)
             if self.mtf_enabled:
                 # Get reference data for this timeframe
                 ref_df = pd.DataFrame()
-                if self.ref_symbol in self.mtf_buffers and interval in self.mtf_buffers[self.ref_symbol]:
+                if (
+                    self.ref_symbol in self.mtf_buffers
+                    and interval in self.mtf_buffers[self.ref_symbol]
+                ):
                     ref_df = await loop.run_in_executor(
-                        _MTF_EXECUTOR, pd.DataFrame.copy, self.mtf_buffers[self.ref_symbol][interval]
+                        _MTF_EXECUTOR,
+                        pd.DataFrame.copy,
+                        self.mtf_buffers[self.ref_symbol][interval],
                     )
 
                 # Minimum bar requirements per timeframe
-                min_bars = {'1m': 200, '5m': 100, '15m': 67, '1h': 24, '4h': 12, '1d': 7}.get(interval, 100)
+                min_bars = {"1m": 200, "5m": 100, "15m": 67, "1h": 24, "4h": 12, "1d": 7}.get(
+                    interval, 100
+                )
 
                 if not ref_df.empty and len(self.mtf_buffers[symbol][interval]) >= min_bars:
                     # Cutover sonrası (SIGNAL_SOURCE=yeni) signal_service.py gerçek
@@ -974,12 +1028,12 @@ class LiveDataManager:
                         self.processing_tasks.add(task)
                         task.add_done_callback(self.processing_tasks.discard)
                         logger.info(f"🎯 [{symbol}] {interval} sinyal üretimi başlatıldı")
-                    await RedisClient.publish_kline_closed_event(symbol, interval, new_row["open_time"])
+                    await RedisClient.publish_kline_closed_event(
+                        symbol, interval, new_row["open_time"]
+                    )
 
         except Exception as e:
-            logger.error(
-                f"[{symbol}] {interval} veri güncelleme hatası: {e}", exc_info=True
-            )
+            logger.error(f"[{symbol}] {interval} veri güncelleme hatası: {e}", exc_info=True)
 
     async def _purge_symbol_data(self, symbol: str):
         """Deletes all data for a given symbol from the database."""
@@ -1028,14 +1082,20 @@ class LiveDataManager:
         for sym, ok in redis_results:
             if ok:
                 redis_hit.add(sym)
-        logger.info("[MTF] Redis hızlı yükleme: %d/%d sembol tam yüklendi.", len(redis_hit), len(self.symbols))
+        logger.info(
+            "[MTF] Redis hızlı yükleme: %d/%d sembol tam yüklendi.",
+            len(redis_hit),
+            len(self.symbols),
+        )
 
         # ── Batch yükleme: Redis'te eksik/yetersiz olanlar + zorla yenilenmesi gerekenler ────────
         force_reload = reload_symbols if reload_symbols is not None else set()
         symbols_to_reload = [s for s in self.symbols if s not in redis_hit or s in force_reload]
 
         if not symbols_to_reload:
-            logger.info("🎉 MTF Batch Initialization tamamlandı! WebSocket canlı mod başlatılabilir.")
+            logger.info(
+                "🎉 MTF Batch Initialization tamamlandı! WebSocket canlı mod başlatılabilir."
+            )
             return
 
         # 10 Tem 2026 akşam: batch_size 10→30. Eskiden burada REST çağrı sayısına göre
@@ -1056,7 +1116,7 @@ class LiveDataManager:
 
         # Sembolleri batch'lere böl
         for i in range(0, total_symbols, batch_size):
-            batch = symbols_to_reload[i:i + batch_size]
+            batch = symbols_to_reload[i : i + batch_size]
             batch_num = (i // batch_size) + 1
 
             logger.info(f"📦 Batch {batch_num}/{total_batches}: {len(batch)} sembol yükleniyor...")
@@ -1073,12 +1133,16 @@ class LiveDataManager:
             if pending:
                 logger.warning(f"⚠️ Batch {batch_num}: {len(pending)} sembol timeout ile atlandı.")
 
-            results = [t.result() if not t.cancelled() and t.exception() is None else None for t in done]
+            results = [
+                t.result() if not t.cancelled() and t.exception() is None else None for t in done
+            ]
 
             # Başarı oranını hesapla
             success_count = sum(1 for r in results if r is not None)
             total_rest_calls = sum(r[1] for r in results if r is not None)
-            logger.info(f"✅ Batch {batch_num}/{total_batches} tamamlandı ({success_count}/{len(batch)} başarılı, {total_rest_calls} REST çağrısı)")
+            logger.info(
+                f"✅ Batch {batch_num}/{total_batches} tamamlandı ({success_count}/{len(batch)} başarılı, {total_rest_calls} REST çağrısı)"
+            )
 
         logger.info("🎉 MTF Batch Initialization tamamlandı! WebSocket canlı mod başlatılabilir.")
 
@@ -1097,9 +1161,9 @@ class LiveDataManager:
         try:
             # Binance'ten çekilecek TF'ler (1m ve aggregate edilebilecekler hariç)
             binance_timeframe_limits = {
-                '1h': 250,   # ~10 gün  — aggregate için 1m yetersiz (15k bar lazım)
-                '4h': 250,   # ~41 gün
-                '1d': 250,   # ~250 gün
+                "1h": 250,  # ~10 gün  — aggregate için 1m yetersiz (15k bar lazım)
+                "4h": 250,  # ~41 gün
+                "1d": 250,  # ~250 gün
             }
 
             loaded_count = 0
@@ -1112,16 +1176,20 @@ class LiveDataManager:
             if df_1m.empty:
                 logger.warning(f"[{symbol}] 1m DB'de yok, Binance'ten çekiliyor...")
                 rest_call_count += 1
-                df_1m = await BinanceClientManager.fetch_klines(symbol=symbol, interval="1m", limit=1500)
+                df_1m = await BinanceClientManager.fetch_klines(
+                    symbol=symbol, interval="1m", limit=1500
+                )
 
             if not df_1m.empty:
                 df_1m_ind = await loop.run_in_executor(_MTF_EXECUTOR, add_all_indicators, df_1m)
-                self.mtf_buffers[symbol]['1m'] = df_1m_ind.tail(self.mtf_buffer_limits.get('1m', 250))
-                await RedisClient.set_mtf_klines(symbol, '1m', self.mtf_buffers[symbol]['1m'])
+                self.mtf_buffers[symbol]["1m"] = df_1m_ind.tail(
+                    self.mtf_buffer_limits.get("1m", 250)
+                )
+                await RedisClient.set_mtf_klines(symbol, "1m", self.mtf_buffers[symbol]["1m"])
                 loaded_count += 1
 
             # ── 5m/15m/30m/6h/8h/12h: Redis-first (REST sadece ilk kurulumda) ──
-            for ws_tf in ['5m', '15m', '30m', '6h', '8h', '12h']:
+            for ws_tf in ["5m", "15m", "30m", "6h", "8h", "12h"]:
                 limit = self.mtf_buffer_limits.get(ws_tf, 250)
                 cached = await RedisClient.get_mtf_klines(symbol, ws_tf, limit=limit)
                 check_kline_schema(cached, f"RedisCache.{ws_tf}")
@@ -1132,20 +1200,28 @@ class LiveDataManager:
                 else:
                     binance_call_made = True
                     rest_call_count += 1
-                    df_ws = await BinanceClientManager.fetch_klines(symbol=symbol, interval=ws_tf, limit=limit)
+                    df_ws = await BinanceClientManager.fetch_klines(
+                        symbol=symbol, interval=ws_tf, limit=limit
+                    )
                     if not df_ws.empty:
-                        df_ind = await loop.run_in_executor(_MTF_EXECUTOR, add_all_indicators, df_ws)
+                        df_ind = await loop.run_in_executor(
+                            _MTF_EXECUTOR, add_all_indicators, df_ws
+                        )
                         self.mtf_buffers[symbol][ws_tf] = df_ind.tail(limit)
-                        await RedisClient.set_mtf_klines(symbol, ws_tf, self.mtf_buffers[symbol][ws_tf])
+                        await RedisClient.set_mtf_klines(
+                            symbol, ws_tf, self.mtf_buffers[symbol][ws_tf]
+                        )
                         loaded_count += 1
 
             # ── 1h / 4h: CA view'larından (boşluksuz, 1m'den otomatik türetilmiş) ──
-            for tf in ['1h', '4h']:
+            for tf in ["1h", "4h"]:
                 limit = self.mtf_buffer_limits.get(tf, 250)
                 ca_df = await get_cagg_klines(symbol, tf, limit)
                 if not ca_df.empty:
                     df_ind = await loop.run_in_executor(_MTF_EXECUTOR, add_all_indicators, ca_df)
-                    self.mtf_buffers[symbol][tf] = df_ind.drop_duplicates(subset=["open_time"], keep="last")
+                    self.mtf_buffers[symbol][tf] = df_ind.drop_duplicates(
+                        subset=["open_time"], keep="last"
+                    )
                     await RedisClient.set_mtf_klines(symbol, tf, self.mtf_buffers[symbol][tf])
                     loaded_count += 1
                     logger.debug(f"[{symbol}] {tf}: CA'dan yüklendi ({len(ca_df)} bar)")
@@ -1153,93 +1229,101 @@ class LiveDataManager:
                     logger.warning(f"[{symbol}] {tf}: CA boş")
 
             # ── 1d: Redis cache → yoksa Binance (CA için çok fazla 1m gerekir) ──
-            limit_1d = binance_timeframe_limits.get('1d', 250)
-            cached_df = await RedisClient.get_mtf_klines(symbol, '1d', limit=limit_1d)
+            limit_1d = binance_timeframe_limits.get("1d", 250)
+            cached_df = await RedisClient.get_mtf_klines(symbol, "1d", limit=limit_1d)
             if cached_df is not None and len(cached_df) >= limit_1d // 2:
-                self.mtf_buffers[symbol]['1d'] = cached_df.drop_duplicates(subset=["open_time"], keep="last")
+                self.mtf_buffers[symbol]["1d"] = cached_df.drop_duplicates(
+                    subset=["open_time"], keep="last"
+                )
                 loaded_count += 1
                 logger.debug(f"[{symbol}] 1d: Redis cache'den yüklendi ({len(cached_df)} bar)")
             else:
                 binance_call_made = True
                 rest_call_count += 1
-                df_1d = await BinanceClientManager.fetch_klines(symbol=symbol, interval='1d', limit=limit_1d)
+                df_1d = await BinanceClientManager.fetch_klines(
+                    symbol=symbol, interval="1d", limit=limit_1d
+                )
                 if not df_1d.empty:
                     df_ind = await loop.run_in_executor(_MTF_EXECUTOR, add_all_indicators, df_1d)
-                    self.mtf_buffers[symbol]['1d'] = df_ind.tail(limit_1d).drop_duplicates(subset=["open_time"], keep="last")
-                    await RedisClient.set_mtf_klines(symbol, '1d', self.mtf_buffers[symbol]['1d'])
+                    self.mtf_buffers[symbol]["1d"] = df_ind.tail(limit_1d).drop_duplicates(
+                        subset=["open_time"], keep="last"
+                    )
+                    await RedisClient.set_mtf_klines(symbol, "1d", self.mtf_buffers[symbol]["1d"])
                     loaded_count += 1
                     logger.debug(f"[{symbol}] 1d: Binance'ten çekildi ({len(df_1d)} bar)")
                 else:
                     logger.warning(f"[{symbol}] 1d: Veri boş")
 
             src = "REST" if binance_call_made else "Redis"
-            logger.info(f"✅ [{symbol}] {loaded_count} TF yüklendi (1m=DB, 5m-12h={src}, 1h/4h=CA, 1d=cache)")
+            logger.info(
+                f"✅ [{symbol}] {loaded_count} TF yüklendi (1m=DB, 5m-12h={src}, 1h/4h=CA, 1d=cache)"
+            )
             return not binance_call_made, rest_call_count
 
         except Exception as e:
             logger.error(f"❌ [{symbol}] Yükleme hatası: {e}", exc_info=False)
             return False, rest_call_count
-    
+
     def get_mtf_data(self, symbol: str, timeframe: str) -> Optional[pd.DataFrame]:
         """
         Returns MTF data for a specific symbol and timeframe.
-        
+
         Args:
             symbol: Symbol name
             timeframe: Timeframe (1m, 5m, 15m, etc.)
-            
+
         Returns:
             DataFrame or None if not available
         """
         if not self.mtf_enabled or symbol not in self.mtf_buffers:
             return None
-        
+
         return self.mtf_buffers[symbol].get(timeframe)
-    
+
     def get_mtf_stats(self) -> Dict[str, Dict[str, int]]:
         """
         Returns statistics about MTF buffers.
-        
+
         Returns:
             Dict with buffer sizes for each symbol and timeframe
         """
         if not self.mtf_enabled:
             return {}
-        
+
         stats: Dict[str, Dict[str, int]] = {}
         for symbol in self.mtf_buffers:
             stats[symbol] = {}
             for tf in self.supported_timeframes:
                 df = self.mtf_buffers[symbol].get(tf)
                 stats[symbol][tf] = len(df) if df is not None else 0
-        
+
         return stats
 
     async def _keep_alive_ping_loop(self):
         """
         Proaktif keep-alive: WebSocket bağlantısını canlı tutmak için
         periyodik olarak connection health check yapar.
-        
+
         Binance sunucuları idle bağlantıları ~60 dakika sonra kapatıyor.
         Bu task her 20 saniyede kontrol yaparak bağlantının sağlıklı
         kalmasını garantiler.
         """
         logger.info(f"Keep-Alive ping task başlatıldı (interval: {self.ping_interval}s)")
-        
+
         while True:
             try:
                 await asyncio.sleep(self.ping_interval)
-                
+
                 if not self.is_ws_connected:
                     logger.debug("WebSocket bağlı değil, ping atlanıyor")
                     continue
-                
+
                 current_time = self.loop.time()
-                
+
                 # Son mesajdan bu yana geçen süre
                 if self.last_message_time:
                     time_since_last_msg = current_time - self.last_message_time
-                    
+
                     # Eğer 30 saniyedir mesaj gelmiyorsa proaktif reconnect
                     if time_since_last_msg > 30:
                         logger.warning(
@@ -1249,7 +1333,7 @@ class LiveDataManager:
                         self.connection_health_ok = False
                         self.is_ws_connected = False
                         continue
-                    
+
                     # Health check - her 20 saniyede log
                     logger.info(
                         f"💚 Keep-Alive Health Check: Bağlantı sağlıklı "
@@ -1263,7 +1347,8 @@ class LiveDataManager:
                     # sessizce ölmesini maskeleyebilir (3 Tem vakası) — her bağlantıyı
                     # ayrı ayrı kontrol et.
                     stale_conns = [
-                        conn_id for conn_id, ts in self._conn_last_message_time.items()
+                        conn_id
+                        for conn_id, ts in self._conn_last_message_time.items()
                         if current_time - ts > 60
                     ]
                     if stale_conns:
@@ -1286,7 +1371,7 @@ class LiveDataManager:
                         continue
                 else:
                     logger.debug("Keep-Alive: last_message_time henüz set edilmemiş")
-                    
+
             except asyncio.CancelledError:
                 logger.info("Keep-Alive ping task iptal edildi")
                 break
@@ -1302,24 +1387,29 @@ class LiveDataManager:
 
         # 1m-türetme (10 Tem 2026 cutover): sadece kline_1m'e abone olunur, diğer
         # TF'ler 1m buffer'ından türetilir (bkz. _derive_and_dispatch_closing_tfs).
-        stream_tfs = ['1m']
+        stream_tfs = ["1m"]
 
-        logger.info(f"🚀 Multi-Timeframe WebSocket başlatılıyor: {len(self.symbols)} sembol × {len(stream_tfs)} TF")
+        logger.info(
+            f"🚀 Multi-Timeframe WebSocket başlatılıyor: {len(self.symbols)} sembol × {len(stream_tfs)} TF"
+        )
 
         all_streams = [f"{symbol.lower()}@kline_1m" for symbol in self.symbols]
 
         total_streams = len(all_streams)
         # Allow override from central config (new tunable)
         self.max_streams_per_connection = getattr(
-            Config, 'WS_MAX_STREAMS_PER_CONNECTION', self.max_streams_per_connection
+            Config, "WS_MAX_STREAMS_PER_CONNECTION", self.max_streams_per_connection
         )
         connections_needed = (
-            (total_streams + self.max_streams_per_connection - 1)
-            // self.max_streams_per_connection
-        )
+            total_streams + self.max_streams_per_connection - 1
+        ) // self.max_streams_per_connection
 
-        logger.info(f"📊 Toplam stream: {total_streams} ({len(self.symbols)} sembol × {len(stream_tfs)} TF)")
-        logger.info(f"🔌 Gerekli connection: {connections_needed} (max {self.max_streams_per_connection} stream/connection)")
+        logger.info(
+            f"📊 Toplam stream: {total_streams} ({len(self.symbols)} sembol × {len(stream_tfs)} TF)"
+        )
+        logger.info(
+            f"🔌 Gerekli connection: {connections_needed} (max {self.max_streams_per_connection} stream/connection)"
+        )
 
         try:
             # Eski bağlantıları güvenli şekilde kapat
@@ -1334,7 +1424,7 @@ class LiveDataManager:
             # kendi OS thread'i yerine aynı event loop'ta bir task (10 Tem 2026 cutover,
             # thread-tabanlı binance-connector kalıcı olarak kaldırıldı — gölge testlerle
             # doğrulanmıştı, bkz. modül docstring'i).
-            base_url = getattr(Config, 'BINANCE_WS_BASE', 'wss://fstream.binance.com/market')
+            base_url = getattr(Config, "BINANCE_WS_BASE", "wss://fstream.binance.com/market")
             self._asyncio_ws_manager = AsyncioBinanceStreamManager(
                 base_url=base_url,
                 on_message=self._handle_websocket_message,
@@ -1345,8 +1435,12 @@ class LiveDataManager:
                 self.ws_clients[connection_id] = conn
                 self._socket_mgr_to_conn_id[id(conn)] = connection_id
                 self._conn_last_message_time[connection_id] = self.loop.time()
-                self._conn_symbols[connection_id] = sorted({s.split("@")[0].upper() for s in conn.streams})
-                logger.info(f"✅ Connection #{connection_id} başarıyla kuruldu ({len(conn.streams)} stream, asyncio)")
+                self._conn_symbols[connection_id] = sorted(
+                    {s.split("@")[0].upper() for s in conn.streams}
+                )
+                logger.info(
+                    f"✅ Connection #{connection_id} başarıyla kuruldu ({len(conn.streams)} stream, asyncio)"
+                )
 
             # Bağlantılar kurulduktan sonra kısa bir bekleme
             await asyncio.sleep(2)
@@ -1354,7 +1448,9 @@ class LiveDataManager:
             self.is_ws_connected = True
             self.reconnect_attempt = 0  # Başarılı bağlantıda backoff'u sıfırla
             self.connection_health_ok = True  # Health durumunu sıfırla
-            logger.info(f"🎉 Multi-WebSocket başarıyla başlatıldı: {connections_needed} connection, {total_streams} stream")
+            logger.info(
+                f"🎉 Multi-WebSocket başarıyla başlatıldı: {connections_needed} connection, {total_streams} stream"
+            )
 
             # Keep-Alive ping task'ını başlat
             await self._start_ping_task()
@@ -1367,7 +1463,9 @@ class LiveDataManager:
     async def _deferred_sync_historical(self, delay_seconds: int = 30):
         """sync_historical_data'yı gecikmeyle arka planda çalıştırır."""
         await asyncio.sleep(delay_seconds)
-        logger.info(f"🔄 Tarihsel veri senkronizasyonu başlatılıyor (arka plan, {delay_seconds}s sonra)...")
+        logger.info(
+            f"🔄 Tarihsel veri senkronizasyonu başlatılıyor (arka plan, {delay_seconds}s sonra)..."
+        )
         await self.sync_historical_data()
 
     async def _startup_gap_fill(self) -> set[str]:
@@ -1385,11 +1483,13 @@ class LiveDataManager:
         try:
             async with get_session() as session:
                 result = await session.execute(
-                    text("""
+                    text(
+                        """
                         SELECT MAX(timestamp)
                         FROM price_data
                         WHERE symbol = ANY(:syms) AND interval = '1m'
-                    """),
+                    """
+                    ),
                     {"syms": symbols_list},
                 )
                 row = result.fetchone()
@@ -1416,7 +1516,8 @@ class LiveDataManager:
         try:
             async with get_session() as session:
                 result = await session.execute(
-                    text("""
+                    text(
+                        """
                         SELECT symbol, prev_ts, curr_ts
                         FROM (
                             SELECT symbol,
@@ -1429,7 +1530,8 @@ class LiveDataManager:
                         WHERE prev_ts IS NOT NULL
                           AND EXTRACT(EPOCH FROM (curr_ts - prev_ts)) * 1000 > :thresh
                         ORDER BY symbol, prev_ts
-                    """),
+                    """
+                    ),
                     {"syms": symbols_list, "days": lookback_days, "thresh": _THRESHOLD_MS},
                 )
                 rows = result.fetchall()
@@ -1447,12 +1549,14 @@ class LiveDataManager:
         try:
             async with get_session() as session:
                 result = await session.execute(
-                    text("""
+                    text(
+                        """
                         SELECT symbol, MAX(timestamp)
                         FROM price_data
                         WHERE symbol = ANY(:syms) AND interval = '1m'
                         GROUP BY symbol
-                    """),
+                    """
+                    ),
                     {"syms": symbols_list},
                 )
                 tail_rows = result.fetchall()
@@ -1469,7 +1573,11 @@ class LiveDataManager:
 
         if all_gaps:
             total_gaps = sum(len(g) for g in all_gaps.values())
-            logger.info("[Startup] 1m: %d sembolde %d gap bulundu, dolduruluyor...", len(all_gaps), total_gaps)
+            logger.info(
+                "[Startup] 1m: %d sembolde %d gap bulundu, dolduruluyor...",
+                len(all_gaps),
+                total_gaps,
+            )
 
             # 10 Tem 2026 akşam: sembol başına sıralı (her fetch öncesi 0.5s sleep)
             # çalışıyordu — 538 sembolde bu tek başına ~4.5dk + hata/retry'lerle
@@ -1493,11 +1601,19 @@ class LiveDataManager:
                             try:
                                 rest_calls += 1
                                 df = await BinanceClientManager.fetch_klines(
-                                    symbol=sym, interval="1m", limit=1000, startTime=fetch_start,
+                                    symbol=sym,
+                                    interval="1m",
+                                    limit=1000,
+                                    startTime=fetch_start,
                                 )
                                 break
                             except Exception as exc:
-                                logger.warning("[Startup] %s API hatası (deneme %d/3): %s", sym, attempt + 1, exc)
+                                logger.warning(
+                                    "[Startup] %s API hatası (deneme %d/3): %s",
+                                    sym,
+                                    attempt + 1,
+                                    exc,
+                                )
                                 if attempt < 2:
                                     await asyncio.sleep(30)
                         if df is None or df.empty:
@@ -1517,7 +1633,7 @@ class LiveDataManager:
             total_filled = 0
             items = list(all_gaps.items())
             for i in range(0, len(items), _GAP_BATCH_SIZE):
-                batch = items[i:i + _GAP_BATCH_SIZE]
+                batch = items[i : i + _GAP_BATCH_SIZE]
                 results = await asyncio.gather(
                     *[_fill_one_symbol(sym, gaps) for sym, gaps in batch],
                     return_exceptions=True,
@@ -1525,7 +1641,9 @@ class LiveDataManager:
                 total_filled += sum(r[0] for r in results if isinstance(r, tuple))
                 total_rest_calls = sum(r[1] for r in results if isinstance(r, tuple))
                 if i + _GAP_BATCH_SIZE < len(items):
-                    wait = max(0.5, (total_rest_calls * _WEIGHT_PER_CALL_GAP / _WEIGHT_BUDGET_PER_MIN) * 60)
+                    wait = max(
+                        0.5, (total_rest_calls * _WEIGHT_PER_CALL_GAP / _WEIGHT_BUDGET_PER_MIN) * 60
+                    )
                     await asyncio.sleep(wait)
 
             logger.info("[Startup] 1m gap fill tamamlandı: %d bar eklendi", total_filled)
@@ -1548,7 +1666,9 @@ class LiveDataManager:
 
         return set(all_gaps.keys())
 
-    async def _replay_filter_state_for_gaps(self, gap_starts: Dict[str, int], source: str = "") -> None:
+    async def _replay_filter_state_for_gaps(
+        self, gap_starts: Dict[str, int], source: str = ""
+    ) -> None:
         """Gap'i olan semboller için SignalFilter referans noktalarını (bkz.
         SignalEngine.replay_filter_state) downtime süresince gerçekleşen fiyat
         hareketiyle senkronize eder. Binance'ten DOĞRUDAN gap aralığını çeker —
@@ -1596,13 +1716,17 @@ class LiveDataManager:
             try:
                 if total_bars <= _MAX_API_LIMIT:
                     df = await BinanceClientManager.fetch_klines(
-                        symbol=sym, interval=tf, limit=total_bars,
+                        symbol=sym,
+                        interval=tf,
+                        limit=total_bars,
                         startTime=gap_start - _CONTEXT_BARS * bar_ms,
                     )
                 else:
                     # Gap API limitinden uzun — en güncel (şu ana en yakın) kısmı önceliklendir.
                     df = await BinanceClientManager.fetch_klines(
-                        symbol=sym, interval=tf, limit=_MAX_API_LIMIT,
+                        symbol=sym,
+                        interval=tf,
+                        limit=_MAX_API_LIMIT,
                     )
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.debug("[Replay] %s %s veri çekilemedi: %s", sym, tf, exc)
@@ -1615,7 +1739,7 @@ class LiveDataManager:
         replay_bars = 0
         total_pairs = len(pairs)
         for i in range(0, total_pairs, _BATCH_SIZE):
-            batch = pairs[i:i + _BATCH_SIZE]
+            batch = pairs[i : i + _BATCH_SIZE]
             results = await asyncio.gather(
                 *[_replay_one(sym, tf, gap_start) for sym, tf, gap_start in batch],
                 return_exceptions=True,
@@ -1628,7 +1752,9 @@ class LiveDataManager:
         logger.info(
             "[%s] SignalFilter replay: %d sembol, %d bar "
             "(gap sırasında kaçırılan crossover'lar referans noktalarına yansıtıldı)",
-            source or "Replay", len(gap_starts), replay_bars,
+            source or "Replay",
+            len(gap_starts),
+            replay_bars,
         )
 
     async def _continuous_gap_heal_loop(self) -> None:
@@ -1659,7 +1785,9 @@ class LiveDataManager:
         try:
             await asyncio.wait_for(self._startup_complete_event.wait(), timeout=600)
         except asyncio.TimeoutError:
-            logger.warning("[GapHeal] Startup tamamlanma sinyali 600s'de gelmedi, yine de başlanıyor.")
+            logger.warning(
+                "[GapHeal] Startup tamamlanma sinyali 600s'de gelmedi, yine de başlanıyor."
+            )
 
         while True:
             scan_start_ms = int(_t.time() * 1000)
@@ -1673,7 +1801,9 @@ class LiveDataManager:
                         return scan_start_ms - int(self._startup_lookback_days * 86_400_000)
                     return scan_start_ms - 3_600_000  # mevcut eski davranış: ~1 saat
 
-                floor_ms = min((_watermark_for(s) for s in symbols_list), default=scan_start_ms - 3_600_000)
+                floor_ms = min(
+                    (_watermark_for(s) for s in symbols_list), default=scan_start_ms - 3_600_000
+                )
                 floor_dt = datetime.fromtimestamp(floor_ms / 1000)
 
                 # İç gap tespiti (LAG) — tek batched sorgu (en eski watermark'tan itibaren),
@@ -1681,7 +1811,8 @@ class LiveDataManager:
                 async def _fetch_lag_gaps():
                     async with get_session() as session:
                         result = await session.execute(
-                            text("""
+                            text(
+                                """
                                 SELECT symbol, prev_ts, curr_ts
                                 FROM (
                                     SELECT symbol,
@@ -1694,7 +1825,8 @@ class LiveDataManager:
                                 WHERE prev_ts IS NOT NULL
                                   AND EXTRACT(EPOCH FROM (curr_ts - prev_ts)) * 1000 > :thresh
                                 ORDER BY symbol, prev_ts
-                            """),
+                            """
+                            ),
                             {"syms": symbols_list, "floor": floor_dt, "thresh": _THRESHOLD_MS},
                         )
                         return result.fetchall()
@@ -1713,12 +1845,14 @@ class LiveDataManager:
                 async def _fetch_tail_gaps():
                     async with get_session() as session:
                         tail_result = await session.execute(
-                            text("""
+                            text(
+                                """
                                 SELECT symbol, MAX(timestamp)
                                 FROM price_data
                                 WHERE symbol = ANY(:syms) AND interval = '1m'
                                 GROUP BY symbol
-                            """),
+                            """
+                            ),
                             {"syms": symbols_list},
                         )
                         return tail_result.fetchall()
@@ -1734,7 +1868,9 @@ class LiveDataManager:
                         if not any(gs >= tail_ms for gs, _ in existing):
                             gaps.setdefault(sym, []).append((tail_ms, scan_start_ms - _INTERVAL_MS))
 
-                async def _fill_gap(sym: str, gap_start_ms: int, gap_end_ms: int) -> tuple[int, bool]:
+                async def _fill_gap(
+                    sym: str, gap_start_ms: int, gap_end_ms: int
+                ) -> tuple[int, bool]:
                     """Gap'i doldurur, (eklenen bar sayısı, tamamen kapandı mı) döner.
                     "Kapandı" = son eklenen bar gap_end_ms'e ulaştı — ban/boş-yanıt/
                     hata yüzünden erken kesilirse False (watermark ilerlemez)."""
@@ -1745,7 +1881,10 @@ class LiveDataManager:
                         await asyncio.sleep(0.3)
                         try:
                             df = await BinanceClientManager.fetch_klines(
-                                symbol=sym, interval="1m", limit=1000, startTime=fetch_start,
+                                symbol=sym,
+                                interval="1m",
+                                limit=1000,
+                                startTime=fetch_start,
                             )
                         except Exception:
                             closed = False
@@ -1795,7 +1934,8 @@ class LiveDataManager:
                         if retry >= _MAX_RETRY_TURNS:
                             logger.warning(
                                 "[GapHeal] %s %d turdur gap kapanmadı, watermark zorla ilerletiliyor (pes edildi).",
-                                sym, retry,
+                                sym,
+                                retry,
                             )
                             self._gap_watermark_ms[sym] = scan_start_ms
                             self._gap_retry_count[sym] = 0
@@ -1811,7 +1951,9 @@ class LiveDataManager:
                     if self.mtf_enabled:
                         for sym in mtf_refresh_syms:
                             await self._refresh_mtf_redis(sym)
-                        logger.info("[GapHeal] %d sembol MTF Redis yenilendi.", len(mtf_refresh_syms))
+                        logger.info(
+                            "[GapHeal] %d sembol MTF Redis yenilendi.", len(mtf_refresh_syms)
+                        )
                     await self._replay_filter_state_for_gaps(gap_starts, source="GapHeal")
                 else:
                     logger.debug("[GapHeal] Gap yok.")
@@ -1831,11 +1973,15 @@ class LiveDataManager:
             df_1m = await get_recent_klines(symbol, "1m", limit_1m)
             if not df_1m.empty:
                 df_1m_ind = await loop.run_in_executor(_MTF_EXECUTOR, add_all_indicators, df_1m)
-                self.mtf_buffers[symbol]["1m"] = df_1m_ind.tail(self.mtf_buffer_limits.get("1m", 1000))
+                self.mtf_buffers[symbol]["1m"] = df_1m_ind.tail(
+                    self.mtf_buffer_limits.get("1m", 1000)
+                )
                 await RedisClient.set_mtf_klines(symbol, "1m", self.mtf_buffers[symbol]["1m"])
             for ws_tf in ["5m", "15m", "30m", "6h", "8h", "12h", "1d"]:
                 limit = self.mtf_buffer_limits.get(ws_tf, 250)
-                df_ws = await BinanceClientManager.fetch_klines(symbol=symbol, interval=ws_tf, limit=limit)
+                df_ws = await BinanceClientManager.fetch_klines(
+                    symbol=symbol, interval=ws_tf, limit=limit
+                )
                 if df_ws.empty:
                     continue
                 df_ind = await loop.run_in_executor(_MTF_EXECUTOR, add_all_indicators, df_ws)
@@ -1847,7 +1993,9 @@ class LiveDataManager:
                 if ca_df.empty:
                     continue
                 df_ind = await loop.run_in_executor(_MTF_EXECUTOR, add_all_indicators, ca_df)
-                self.mtf_buffers[symbol][ca_tf] = df_ind.drop_duplicates(subset=["open_time"], keep="last")
+                self.mtf_buffers[symbol][ca_tf] = df_ind.drop_duplicates(
+                    subset=["open_time"], keep="last"
+                )
                 await RedisClient.set_mtf_klines(symbol, ca_tf, self.mtf_buffers[symbol][ca_tf])
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.debug("[MTF-Refresh] %s hata: %s", symbol, exc)
@@ -1868,7 +2016,9 @@ class LiveDataManager:
                     BinanceClientManager.get_funding_rates(),
                     BinanceClientManager.get_equity_underlying_symbols(),
                 )
-                funding_map = {f["symbol"]: float(f.get("lastFundingRate", 0)) for f in funding_stats}
+                funding_map = {
+                    f["symbol"]: float(f.get("lastFundingRate", 0)) for f in funding_stats
+                }
                 ticker_prices: Dict[str, float] = {}
                 pipe = redis_conn.pipeline()
                 written = 0
@@ -1883,14 +2033,16 @@ class LiveDataManager:
                     change_pct = round(float(t.get("priceChangePercent", 0)), 2)
                     pipe.set(
                         f"ticker:{sym}",
-                        json.dumps({
-                            "price": float(t.get("lastPrice", 0)),
-                            "change_pct": change_pct,
-                            "volume": float(t.get("quoteVolume", 0)),
-                            "high": float(t.get("highPrice", 0)),
-                            "low": float(t.get("lowPrice", 0)),
-                            "funding_rate": funding_map.get(sym, 0.0),
-                        }),
+                        json.dumps(
+                            {
+                                "price": float(t.get("lastPrice", 0)),
+                                "change_pct": change_pct,
+                                "volume": float(t.get("quoteVolume", 0)),
+                                "high": float(t.get("highPrice", 0)),
+                                "low": float(t.get("lowPrice", 0)),
+                                "funding_rate": funding_map.get(sym, 0.0),
+                            }
+                        ),
                         ex=_TTL,
                     )
                 await pipe.execute()
@@ -1909,16 +2061,25 @@ class LiveDataManager:
 
         while True:
             try:
+                from sqlalchemy import select as _sel
+
                 from database.engine import get_session as _gs
                 from database.models import Signal as _Sig
-                from sqlalchemy import select as _sel
-                from utils.vpmv import compute_post, PRE_BARS, POST_BARS
+                from utils.vpmv import POST_BARS, PRE_BARS, compute_post
 
                 async with _gs() as _s:
-                    rows = (await _s.execute(_sel(_Sig).where(
-                        _Sig.vpmv_post_avg.is_(None),
-                        _Sig.vpmv_pre_avg.isnot(None),
-                    ))).scalars().all()
+                    rows = (
+                        (
+                            await _s.execute(
+                                _sel(_Sig).where(
+                                    _Sig.vpmv_post_avg.is_(None),
+                                    _Sig.vpmv_pre_avg.isnot(None),
+                                )
+                            )
+                        )
+                        .scalars()
+                        .all()
+                    )
 
                 updated = 0
                 for sig in rows:
@@ -1936,24 +2097,34 @@ class LiveDataManager:
                             continue
 
                         sig_time = sig.opened_at
-                        if hasattr(raw.index, 'tz'):
+                        if hasattr(raw.index, "tz"):
                             raw_times = raw.index
                         else:
                             if "open_time" in raw.columns:
-                                raw_times = pd.to_datetime(raw["open_time"], unit="ms", utc=True).dt.tz_convert("Europe/Istanbul").dt.tz_localize(None)
+                                raw_times = (
+                                    pd.to_datetime(raw["open_time"], unit="ms", utc=True)
+                                    .dt.tz_convert("Europe/Istanbul")
+                                    .dt.tz_localize(None)
+                                )
                             else:
                                 raw_times = raw.index
 
                         diffs = (raw_times - pd.Timestamp(sig_time)).abs()
                         bar_idx = int(diffs.argmin())
-                        post_avg, post_delta = compute_post(raw, sig.signal_type, bar_idx, POST_BARS)
+                        post_avg, post_delta = compute_post(
+                            raw, sig.signal_type, bar_idx, POST_BARS
+                        )
                         if post_avg is None:
                             continue
 
                         async with _gs() as _s2:
-                            _row = (await _s2.execute(_sel(_Sig).where(_Sig.id == sig.id))).scalars().first()
+                            _row = (
+                                (await _s2.execute(_sel(_Sig).where(_Sig.id == sig.id)))
+                                .scalars()
+                                .first()
+                            )
                             if _row:
-                                _row.vpmv_post_avg   = round(post_avg, 2)
+                                _row.vpmv_post_avg = round(post_avg, 2)
                                 _row.vpmv_post_delta = round(post_delta, 2)
                                 await _s2.commit()
                                 updated += 1
@@ -1999,7 +2170,12 @@ class LiveDataManager:
                     if prev_oi and prev_oi != 0:
                         change_pct = round((oi_val - prev_oi) / prev_oi * 100, 2)
 
-                    entry = {"oi": oi_val, "prev_oi": prev_oi, "change_pct": change_pct, "ts": now_ts}
+                    entry = {
+                        "oi": oi_val,
+                        "prev_oi": prev_oi,
+                        "change_pct": change_pct,
+                        "ts": now_ts,
+                    }
                     self._oi_cache[sym] = entry
                     pipe.set(key, json.dumps(entry), ex=_TTL)
 
@@ -2023,14 +2199,18 @@ class LiveDataManager:
             try:
                 if redis_conn is None:
                     redis_conn = aioredis.from_url(
-                        Config.REDIS_URL, decode_responses=True,
-                        socket_timeout=5, socket_connect_timeout=5,
+                        Config.REDIS_URL,
+                        decode_responses=True,
+                        socket_timeout=5,
+                        socket_connect_timeout=5,
                     )
                 await asyncio.wait_for(
                     redis_conn.set("prices:live", json.dumps(prices), ex=15), timeout=5
                 )
             except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.warning("[PricePublish] prices:live yazılamadı, bağlantı yenilenecek: %s", exc)
+                logger.warning(
+                    "[PricePublish] prices:live yazılamadı, bağlantı yenilenecek: %s", exc
+                )
                 try:
                     if redis_conn is not None:
                         await redis_conn.aclose()
@@ -2048,7 +2228,10 @@ class LiveDataManager:
                 if val:
                     await manual_manager.load_open_symbols()
                     await redis.delete("manual_trade:refresh")
-                    logger.info("[ManualTrade] Cache yenilendi: %d açık sembol", len(manual_manager._open_symbols))  # noqa: SLF001
+                    logger.info(
+                        "[ManualTrade] Cache yenilendi: %d açık sembol",
+                        len(manual_manager._open_symbols),
+                    )  # noqa: SLF001
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.debug("[ManualTrade] refresh kontrolü başarısız: %s", exc)
 
@@ -2068,9 +2251,7 @@ class LiveDataManager:
 
         try:
             async with get_session() as session:
-                result = await session.execute(
-                    sa_select(Signal).where(Signal.status == "active")
-                )
+                result = await session.execute(sa_select(Signal).where(Signal.status == "active"))
                 active_signals = result.scalars().all()
         except Exception as exc:
             recon_log.error("Aktif sinyal sorgusu başarısız: %s", exc)
@@ -2116,7 +2297,10 @@ class LiveDataManager:
                 if ok:
                     recon_log.info(
                         "[%s] %s kapatıldı — offline reversal: %s → %s",
-                        symbol, interval, sig.signal_type, last_direction,
+                        symbol,
+                        interval,
+                        sig.signal_type,
+                        last_direction,
                     )
                     closed += 1
 
@@ -2136,7 +2320,11 @@ class LiveDataManager:
             logger.info("[BackgroundStartup] Başladı (WebSocket zaten aktif).")
             filled_symbols = await self._startup_gap_fill()
             if filled_symbols:
-                gap_starts = {sym: self._gap_start_ms[sym] for sym in filled_symbols if sym in self._gap_start_ms}
+                gap_starts = {
+                    sym: self._gap_start_ms[sym]
+                    for sym in filled_symbols
+                    if sym in self._gap_start_ms
+                }
                 await self._replay_filter_state_for_gaps(gap_starts, source="BackgroundStartup")
             if self.mtf_enabled:
                 await self._initialize_mtf_dataframes(reload_symbols=filled_symbols)
@@ -2183,8 +2371,7 @@ class LiveDataManager:
                     reconnect_reason = "WebSocket bağlantısı koptu."
                 elif (
                     self.last_message_time
-                    and (self.loop.time() - self.last_message_time)
-                    > Config.WEBSOCKET_TIMEOUT
+                    and (self.loop.time() - self.last_message_time) > Config.WEBSOCKET_TIMEOUT
                 ):
                     reconnect_reason = (
                         f"WebSocket zaman aşımına uğradı ({Config.WEBSOCKET_TIMEOUT}s)."
@@ -2205,9 +2392,7 @@ class LiveDataManager:
                         max_delay = getattr(Config, "WS_RECONNECT_BACKOFF_MAX", 30)
 
                     # Üstel backoff + jitter
-                    delay = min(
-                        max_delay, base_delay * (2 ** min(self.reconnect_attempt, 6))
-                    )
+                    delay = min(max_delay, base_delay * (2 ** min(self.reconnect_attempt, 6)))
                     # Basit jitter: +/- 20%
                     jitter = max(0.5, delay * 0.2)
                     import random
@@ -2216,9 +2401,7 @@ class LiveDataManager:
                     logger.warning(
                         f"{reconnect_reason} {sleep_for:.1f} saniye içinde yeniden bağlanma denenecek... (attempt={self.reconnect_attempt})"
                     )
-                    self.is_ws_connected = (
-                        False  # Yeniden bağlanma sürecini başlatmak için
-                    )
+                    self.is_ws_connected = False  # Yeniden bağlanma sürecini başlatmak için
                     await asyncio.sleep(sleep_for)
                     try:
                         logger.info("Yeni WebSocket bağlantısı kuruluyor...")
@@ -2273,19 +2456,13 @@ class LiveDataManager:
                             jitter = max(0.5, delay * 0.2)
                             import random
 
-                            sleep_for = max(
-                                1.0, delay + random.uniform(-jitter, jitter)
-                            )
-                            logger.info(
-                                f"{sleep_for:.1f} saniye sonra tekrar denenecek."
-                            )
+                            sleep_for = max(1.0, delay + random.uniform(-jitter, jitter))
+                            logger.info(f"{sleep_for:.1f} saniye sonra tekrar denenecek.")
                             await asyncio.sleep(sleep_for)
                 else:
                     # Bağlantı sağlamsa, döngüyü tıkamadan bekle
                     # Ping/Pong watchdog: belirli aralıkla heartbeat kontrolü
-                    await asyncio.sleep(
-                        getattr(Config, "WS_HEARTBEAT_CHECK_INTERVAL", 5)
-                    )
+                    await asyncio.sleep(getattr(Config, "WS_HEARTBEAT_CHECK_INTERVAL", 5))
         except asyncio.CancelledError:
             logger.info("Ana çalıştırma döngüsü iptal edildi.")
         finally:
@@ -2300,11 +2477,11 @@ class LiveDataManager:
                 await self.ping_task
             except asyncio.CancelledError:
                 pass
-        
+
         # Yeni ping task başlat
         self.ping_task = asyncio.create_task(self._keep_alive_ping_loop())
         logger.info("Keep-Alive ping task başlatıldı")
-    
+
     async def _stop_ping_task(self):
         """Keep-alive ping task'ını durdurur."""
         if self.ping_task and not self.ping_task.done():
@@ -2314,7 +2491,7 @@ class LiveDataManager:
             except asyncio.CancelledError:
                 pass
             logger.info("Keep-Alive ping task durduruldu")
-    
+
     async def _safe_close_websocket(self):
         """Tüm WebSocket bağlantılarını güvenli şekilde kapatır."""
         # Önce ping task'ını durdur
@@ -2334,13 +2511,17 @@ class LiveDataManager:
         # Thread-tabanlı WebSocket client'larını kapat (senkron .stop())
         if self.ws_clients:
             for connection_id, ws_client in list(self.ws_clients.items()):
-                if ws_client and hasattr(ws_client, "stop") and not asyncio.iscoroutinefunction(ws_client.stop):
+                if (
+                    ws_client
+                    and hasattr(ws_client, "stop")
+                    and not asyncio.iscoroutinefunction(ws_client.stop)
+                ):
                     try:
                         # Timeout ile güvenli kapatma
-                        await asyncio.wait_for(
-                            asyncio.to_thread(ws_client.stop), timeout=5.0
+                        await asyncio.wait_for(asyncio.to_thread(ws_client.stop), timeout=5.0)
+                        logger.debug(
+                            f"WebSocket connection #{connection_id} güvenli şekilde kapatıldı."
                         )
-                        logger.debug(f"WebSocket connection #{connection_id} güvenli şekilde kapatıldı.")
                     except asyncio.TimeoutError:
                         logger.warning(
                             f"WebSocket connection #{connection_id} kapatma işlemi timeout oldu, zorla kapatılıyor."
@@ -2426,9 +2607,7 @@ async def main():
     logger.info(f"{len(symbols_to_track)} adet sembol bulundu.")
 
     if not symbols_to_track:
-        logger.error(
-            "İzlenecek sembol bulunamadı. Binance API veya bağlantı sorunu olabilir."
-        )
+        logger.error("İzlenecek sembol bulunamadı. Binance API veya bağlantı sorunu olabilir.")
         return
 
     manager = LiveDataManager(symbols=symbols_to_track, interval=Config.KLINE_INTERVAL)

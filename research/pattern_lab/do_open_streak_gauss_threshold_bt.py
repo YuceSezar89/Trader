@@ -5,6 +5,7 @@ long_perc=%2.52, gauss=4.44 — eşiğin (4.5) hemen altında kaldığı için �
 Gate mantığına DOKUNULMUYOR (do_break_or_lift_bt.py'de test edilip reddedildi),
 SADECE gauss eşiği değişiyor.
 """
+
 import os
 import sys
 
@@ -19,7 +20,10 @@ from indicators.core import calculate_atr  # pylint: disable=wrong-import-positi
 from research.pattern_lab.vol_exhaustion_bt import _stats  # pylint: disable=wrong-import-position
 from signals.do_kirilimi import _daily_open  # pylint: disable=wrong-import-position
 from signals.do_open_streak import (  # pylint: disable=wrong-import-position
-    MAX_HOLD_HOURS, SL_ATR_MULT, STREAK_THRESHOLD, _gauss_sum,
+    MAX_HOLD_HOURS,
+    SL_ATR_MULT,
+    STREAK_THRESHOLD,
+    _gauss_sum,
 )
 
 DAYS = 60
@@ -32,8 +36,11 @@ GAUSS_THRESHOLDS_TO_TEST = [4.5, 4.44, 4.0, 3.0]
 
 def _fetch() -> pd.DataFrame:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     q = f"""
         SELECT symbol, bucket AS ts, open, high, low, close, volume
@@ -173,8 +180,10 @@ def _placebo_for_variant(df: pd.DataFrame, gauss_threshold: float, real_pf: floa
         return
     arr = np.array(placebo_pfs)
     rank = float((arr < real_pf).mean() * 100)
-    print(f"placebo (n={len(arr)}) PF ort={arr.mean():.3f} p90={np.percentile(arr,90):.3f} "
-          f"max={arr.max():.3f} | gerçek PF={real_pf:.3f} (placebo'nun %{rank:.0f}'ini geçiyor)")
+    print(
+        f"placebo (n={len(arr)}) PF ort={arr.mean():.3f} p90={np.percentile(arr,90):.3f} "
+        f"max={arr.max():.3f} | gerçek PF={real_pf:.3f} (placebo'nun %{rank:.0f}'ini geçiyor)"
+    )
 
 
 def run() -> None:
@@ -196,9 +205,15 @@ def run() -> None:
         first_mask = (ts_arr < mid).to_numpy()
         arr = np.array(rets)
 
-        for label, mask in (("tum", np.ones(len(arr), dtype=bool)), ("ilk_yari", first_mask), ("ikinci_yari", ~first_mask)):
+        for label, mask in (
+            ("tum", np.ones(len(arr), dtype=bool)),
+            ("ilk_yari", first_mask),
+            ("ikinci_yari", ~first_mask),
+        ):
             s = _stats(arr[mask])
-            print(f"{th:<12} {label:12} {s.get('n',0):>6} {s.get('wr',0):>6} {s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+            print(
+                f"{th:<12} {label:12} {s.get('n',0):>6} {s.get('wr',0):>6} {s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+            )
         print()
 
     print("── Placebo (eşik=4.5 dışındaki her varyant için) ──")

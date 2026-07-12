@@ -21,6 +21,7 @@ ikiye bölünür), indikatör ailesine göre kırılım.
 
 Kullanım: python -m research.pattern_lab.cohort_rank_bt
 """
+
 import json
 import warnings
 
@@ -41,8 +42,11 @@ _COMPONENTS = ["devisso_score", "cvd_slope", "oi_delta"]
 
 def _fetch() -> pd.DataFrame:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     q = """
         SELECT symbol, indicators, signal_type, interval, opened_at,
@@ -78,8 +82,8 @@ def _placebo(df: pd.DataFrame, seed: int = 42) -> pd.DataFrame:
     kendisinden değil rastgele bir artefakttan geliyor demektir)."""
     rng = np.random.default_rng(seed)
     out = df.copy()
-    out["composite_rank"] = (
-        out.groupby(_COHORT_KEY)["composite_rank"].transform(lambda s: rng.permutation(s.values))
+    out["composite_rank"] = out.groupby(_COHORT_KEY)["composite_rank"].transform(
+        lambda s: rng.permutation(s.values)
     )
     return out
 
@@ -98,7 +102,9 @@ def _report_buckets(df: pd.DataFrame, label: str) -> None:
         sub = df[df["signal_type"] == sig_type]
         if len(sub) < 30:
             continue
-        tercile = pd.qcut(sub["composite_rank"], 3, labels=["alt", "orta", "üst"], duplicates="drop")
+        tercile = pd.qcut(
+            sub["composite_rank"], 3, labels=["alt", "orta", "üst"], duplicates="drop"
+        )
         g = sub.groupby(tercile, observed=True)["realized_pnl"].agg(
             ort_pnl="mean", n="count", wr=lambda s: (s > 0).mean()
         )
@@ -112,7 +118,9 @@ def main() -> None:
 
     cohorts = _build_cohorts(df)
     n_cohorts = cohorts.groupby(_COHORT_KEY).ngroups
-    print(f"Kohort (boyut>={_MIN_COHORT_SIZE}) sayısı: {n_cohorts}, içindeki sinyal: {len(cohorts)}\n")
+    print(
+        f"Kohort (boyut>={_MIN_COHORT_SIZE}) sayısı: {n_cohorts}, içindeki sinyal: {len(cohorts)}\n"
+    )
 
     print("=== ANA TEST (gerçek kohort-içi sıralama) ===")
     _report_correlation(cohorts, "gerçek")

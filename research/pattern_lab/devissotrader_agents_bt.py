@@ -15,6 +15,7 @@ i+h'ye ayrı ölçülüyor. Baseline = ilgili TF'deki TÜM barlar, sinyal = ajan
 ürettiği buy/sell anları. Kronolojik ilk/ikinci yarı ile sağlamlık kontrolü
 (vol_exhaustion_bt / do_open_streak_split_check ile aynı desen).
 """
+
 import os
 import sys
 
@@ -25,7 +26,11 @@ import psycopg2
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from config import Config  # pylint: disable=wrong-import-position
-from indicators.core import calculate_bollinger_bands, calculate_macd, calculate_rsi_sma  # pylint: disable=wrong-import-position
+from indicators.core import (  # pylint: disable=wrong-import-position
+    calculate_bollinger_bands,
+    calculate_macd,
+    calculate_rsi_sma,
+)
 from research.pattern_lab.vol_exhaustion_bt import _stats  # pylint: disable=wrong-import-position
 
 DAYS = 270
@@ -54,8 +59,11 @@ VB_HORIZONS = MR_HORIZONS
 
 def _fetch(interval: str) -> pd.DataFrame:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     q = f"""
         SELECT symbol, bucket AS ts, open, high, low, close, volume
@@ -151,8 +159,10 @@ def _run_agent(name: str, interval: str, horizons: dict, signal_fn) -> None:
     df = _fetch(interval)
     t_min, t_max = df["ts"].min(), df["ts"].max()
     mid = t_min + (t_max - t_min) / 2
-    print(f"\n{'='*74}\n{name} ({interval})  —  {df['symbol'].nunique()} sembol, {len(df):,} bar\n"
-          f"dönem: {t_min} .. {t_max} | orta nokta: {mid}\n{'='*74}")
+    print(
+        f"\n{'='*74}\n{name} ({interval})  —  {df['symbol'].nunique()} sembol, {len(df):,} bar\n"
+        f"dönem: {t_min} .. {t_max} | orta nokta: {mid}\n{'='*74}"
+    )
 
     labels = ["baseline", "buy", "sell"]
     halves = ["tum", "ilk_yari", "ikinci_yari"]
@@ -197,8 +207,10 @@ def _run_agent(name: str, interval: str, horizons: dict, signal_fn) -> None:
                 arrs = res[h_name][lbl][half]
                 rets = np.concatenate(arrs) if arrs else np.array([])
                 s = _stats(rets)
-                print(f"{lbl:10} {half:12} {s.get('n',0):>7} {s.get('wr',0):>6} "
-                      f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+                print(
+                    f"{lbl:10} {half:12} {s.get('n',0):>7} {s.get('wr',0):>6} "
+                    f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+                )
         print()
 
 

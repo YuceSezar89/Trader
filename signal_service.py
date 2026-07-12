@@ -16,20 +16,24 @@ from concurrent.futures.process import BrokenProcessPool
 
 import pandas as pd
 
-from utils.logger import get_logger
-from utils.redis_client import RedisClient, SAFE_EXTERNAL_TIMEOUT
-from utils.heartbeat import beat, watchdog_loop, record_activity, throughput_watchdog_loop
-from utils.telegram_notify import send_telegram_message
-from indicators.financial_metrics import calculate_metrics
-from signals.signal_processor import process_and_enrich_signals, trim_to_closed_bar
-from signals.risk_manager import risk_manager
-from signals.paper_trade_manager import (
-    paper_trade_manager, ha_cross_manager, rsi_15m_manager, manual_manager,
-    do_kirilimi_manager, do_open_streak_manager,
-)
-from signals.do_kirilimi import do_kirilimi_detector, btc_day_context
-from signals.do_open_streak import do_open_streak_detector
 from config import Config
+from indicators.financial_metrics import calculate_metrics
+from signals.do_kirilimi import btc_day_context, do_kirilimi_detector
+from signals.do_open_streak import do_open_streak_detector
+from signals.paper_trade_manager import (
+    do_kirilimi_manager,
+    do_open_streak_manager,
+    ha_cross_manager,
+    manual_manager,
+    paper_trade_manager,
+    rsi_15m_manager,
+)
+from signals.risk_manager import risk_manager
+from signals.signal_processor import process_and_enrich_signals, trim_to_closed_bar
+from utils.heartbeat import beat, record_activity, throughput_watchdog_loop, watchdog_loop
+from utils.logger import get_logger
+from utils.redis_client import SAFE_EXTERNAL_TIMEOUT, RedisClient
+from utils.telegram_notify import send_telegram_message
 
 _RISK_CHECK_INTERVAL = 5  # saniye — live_data_manager.py::_risk_check_loop ile aynı
 _EVOL_EXIT_CHECK_INTERVAL = 60  # saniye — EVOL anlık fiyat kadar sık değişmiyor
@@ -41,12 +45,18 @@ _GROUP = "signal_service"
 _CONSUMER = "signal_service-1"
 _PID_FILE = "signal_service.pid"
 _METRICS_POOL_WORKERS = 5
-_IDEMPOTENCY_TTL = 3600  # saniye — aynı bar'ın crash/redelivery sonrası tekrar işlenmesini bu pencerede engeller
+_IDEMPOTENCY_TTL = (
+    3600  # saniye — aynı bar'ın crash/redelivery sonrası tekrar işlenmesini bu pencerede engeller
+)
 _QUEUE_LAG_KEY = "metrics:signal_service:pending"
 _QUEUE_LAG_CHECK_INTERVAL = 30  # saniye
 _QUEUE_LAG_WARN_THRESHOLD = 500  # bu sayıyı aşarsa tüketim üretimin gerisinde kalıyor demektir
-_CONCURRENCY = 10  # aynı anda işlenecek maksimum event sayısı (5 process-pool worker + I/O örtüşmesi payı)
-_CLAIM_IDLE_MS = 60_000  # bu süreden uzun süredir ack'lenmemiş mesajlar crash sonrası sahipsiz sayılır
+_CONCURRENCY = (
+    10  # aynı anda işlenecek maksimum event sayısı (5 process-pool worker + I/O örtüşmesi payı)
+)
+_CLAIM_IDLE_MS = (
+    60_000  # bu süreden uzun süredir ack'lenmemiş mesajlar crash sonrası sahipsiz sayılır
+)
 _CLAIM_CHECK_INTERVAL = 30  # saniye
 
 _metrics_pool = ProcessPoolExecutor(max_workers=_METRICS_POOL_WORKERS)
@@ -69,7 +79,8 @@ async def _calculate_metrics_via_pool(
     except BrokenProcessPool as e:
         logger.warning(
             "ENDİŞE: Metrics process pool çöktü — pool yeniden oluşturuluyor, "
-            "bu event senkron fallback ile hesaplanıyor (yavaş yol): %s", e,
+            "bu event senkron fallback ile hesaplanıyor (yavaş yol): %s",
+            e,
         )
         _metrics_pool.shutdown(wait=False)
         _metrics_pool = ProcessPoolExecutor(max_workers=_METRICS_POOL_WORKERS)
@@ -83,13 +94,19 @@ async def _queue_lag_loop() -> None:
     client = RedisClient.get_client()
     while True:
         try:
-            info = await asyncio.wait_for(client.xpending(_STREAM, _GROUP), timeout=SAFE_EXTERNAL_TIMEOUT)
+            info = await asyncio.wait_for(
+                client.xpending(_STREAM, _GROUP), timeout=SAFE_EXTERNAL_TIMEOUT
+            )
             count = info.get("pending", 0) if isinstance(info, dict) else 0
-            await asyncio.wait_for(client.set(_QUEUE_LAG_KEY, count, ex=120), timeout=SAFE_EXTERNAL_TIMEOUT)
+            await asyncio.wait_for(
+                client.set(_QUEUE_LAG_KEY, count, ex=120), timeout=SAFE_EXTERNAL_TIMEOUT
+            )
             if count > _QUEUE_LAG_WARN_THRESHOLD:
                 logger.warning(
                     "ENDİŞE: kuyruk gecikmesi yüksek — %d mesaj bekliyor (grup=%s, eşik=%d)",
-                    count, _GROUP, _QUEUE_LAG_WARN_THRESHOLD,
+                    count,
+                    _GROUP,
+                    _QUEUE_LAG_WARN_THRESHOLD,
                 )
         except asyncio.CancelledError:
             raise
@@ -120,12 +137,17 @@ async def _claim_event(symbol: str, interval: str, open_time: str) -> bool:
     key = f"processed:signal_service:{symbol}:{interval}:{open_time}"
     try:
         client = RedisClient.get_client()
-        claimed = await asyncio.wait_for(client.set(key, "1", nx=True, ex=_IDEMPOTENCY_TTL), timeout=SAFE_EXTERNAL_TIMEOUT)
+        claimed = await asyncio.wait_for(
+            client.set(key, "1", nx=True, ex=_IDEMPOTENCY_TTL), timeout=SAFE_EXTERNAL_TIMEOUT
+        )
         return bool(claimed)
     except Exception as e:  # pylint: disable=broad-exception-caught
         logger.warning(
             "ENDİŞE: idempotency kontrolü başarısız [%s:%s:%s], fail-open ile işleniyor: %s",
-            symbol, interval, open_time, e,
+            symbol,
+            interval,
+            open_time,
+            e,
         )
         return True
 
@@ -149,7 +171,12 @@ async def _process_event(fields: dict) -> None:
     record_activity("signal_service")
 
     if not await _claim_event(symbol, interval, open_time):
-        logger.debug("[%s] %s open_time=%s zaten işlenmiş, atlanıyor (idempotency)", symbol, interval, open_time)
+        logger.debug(
+            "[%s] %s open_time=%s zaten işlenmiş, atlanıyor (idempotency)",
+            symbol,
+            interval,
+            open_time,
+        )
         await _incr_metric("metrics:sigsvc:idempotency_skip")
         return
 
@@ -165,7 +192,9 @@ async def _process_event(fields: dict) -> None:
         df = trim_to_closed_bar(df, closed_open_time)
         ref_df = trim_to_closed_bar(ref_df, closed_open_time)
     except (TypeError, ValueError):
-        logger.warning("[%s] %s geçersiz open_time=%r, kırpma atlanıyor", symbol, interval, open_time)
+        logger.warning(
+            "[%s] %s geçersiz open_time=%r, kırpma atlanıyor", symbol, interval, open_time
+        )
     if df.empty or ref_df.empty:
         logger.debug("[%s] %s kırpma sonrası buffer eksik, atlanıyor", symbol, interval)
         await _incr_metric("metrics:sigsvc:buffer_eksik")
@@ -173,7 +202,9 @@ async def _process_event(fields: dict) -> None:
 
     oi_data_json = None
     try:
-        oi_data_json = await asyncio.wait_for(RedisClient.get_client().get(f"oi:{symbol}"), timeout=SAFE_EXTERNAL_TIMEOUT)
+        oi_data_json = await asyncio.wait_for(
+            RedisClient.get_client().get(f"oi:{symbol}"), timeout=SAFE_EXTERNAL_TIMEOUT
+        )
     except Exception as e:  # pylint: disable=broad-exception-caught
         logger.debug("oi_data okunamadı [%s]: %s", symbol, e)
 
@@ -181,7 +212,10 @@ async def _process_event(fields: dict) -> None:
     loop = asyncio.get_running_loop()
     t0 = loop.time()
     await process_and_enrich_signals(
-        symbol, df, ref_df, interval,
+        symbol,
+        df,
+        ref_df,
+        interval,
         oi_data=oi_data_json,
         metrics_calculator=_calculate_metrics_via_pool,
         dry_run=dry_run,
@@ -202,7 +236,9 @@ async def _check_do_kirilimi(symbol: str, df_5m: pd.DataFrame, btc_df_5m: pd.Dat
     self.mtf_buffers'tan değil, zaten elde olan ref_df'ten (MARKET_REFERENCE_SYMBOL
     = BTCUSDT) hesaplanıyor — process ayrımı sonrası in-process state erişimi yok."""
     try:
-        btc_ctx = btc_day_context(btc_df_5m) if btc_df_5m is not None and not btc_df_5m.empty else None
+        btc_ctx = (
+            btc_day_context(btc_df_5m) if btc_df_5m is not None and not btc_df_5m.empty else None
+        )
         loop = asyncio.get_running_loop()
         entry = await loop.run_in_executor(None, do_kirilimi_detector.check, symbol, df_5m, btc_ctx)
         if not entry:
@@ -265,7 +301,9 @@ async def _risk_check_loop() -> None:
     while True:
         await asyncio.sleep(_RISK_CHECK_INTERVAL)
         try:
-            raw = await asyncio.wait_for(RedisClient.get_client().get("prices:live"), timeout=SAFE_EXTERNAL_TIMEOUT)
+            raw = await asyncio.wait_for(
+                RedisClient.get_client().get("prices:live"), timeout=SAFE_EXTERNAL_TIMEOUT
+            )
         except Exception as e:  # pylint: disable=broad-exception-caught
             logger.warning("[RiskCheck] prices:live okunamadı: %s", e)
             continue
@@ -313,9 +351,15 @@ async def _handle_message(client, msg_id: str, fields: dict) -> None:
             logger.error("[%s] event işleme hatası: %s", fields, e, exc_info=True)
         finally:
             try:
-                await asyncio.wait_for(client.xack(_STREAM, _GROUP, msg_id), timeout=SAFE_EXTERNAL_TIMEOUT)
+                await asyncio.wait_for(
+                    client.xack(_STREAM, _GROUP, msg_id), timeout=SAFE_EXTERNAL_TIMEOUT
+                )
             except Exception as e:  # pylint: disable=broad-exception-caught
-                logger.warning("ENDİŞE: xack başarısız [%s], mesaj PEL'de kalıp reclaim'e düşecek: %s", msg_id, e)
+                logger.warning(
+                    "ENDİŞE: xack başarısız [%s], mesaj PEL'de kalıp reclaim'e düşecek: %s",
+                    msg_id,
+                    e,
+                )
 
 
 async def _consume_loop() -> None:
@@ -323,7 +367,9 @@ async def _consume_loop() -> None:
     await _ensure_group(client)
     logger.info(
         "Signal service tüketimi başladı (grup=%s, consumer=%s, eşzamanlılık=%d)",
-        _GROUP, _CONSUMER, _CONCURRENCY,
+        _GROUP,
+        _CONSUMER,
+        _CONCURRENCY,
     )
 
     while True:
@@ -361,7 +407,12 @@ async def _reclaim_stale_loop() -> None:
         try:
             cursor, claimed, _deleted = await asyncio.wait_for(
                 client.xautoclaim(
-                    _STREAM, _GROUP, _CONSUMER, min_idle_time=_CLAIM_IDLE_MS, start_id=cursor, count=50,
+                    _STREAM,
+                    _GROUP,
+                    _CONSUMER,
+                    min_idle_time=_CLAIM_IDLE_MS,
+                    start_id=cursor,
+                    count=50,
                 ),
                 timeout=5,
             )
@@ -387,7 +438,9 @@ async def _supervised(coro, name: str) -> None:
     except asyncio.CancelledError:
         raise
     except Exception as e:  # pylint: disable=broad-exception-caught
-        logger.error("[%s] görev beklenmedik şekilde sonlandı, izole edildi: %s", name, e, exc_info=True)
+        logger.error(
+            "[%s] görev beklenmedik şekilde sonlandı, izole edildi: %s", name, e, exc_info=True
+        )
 
 
 async def run_all() -> None:
@@ -400,8 +453,10 @@ async def run_all() -> None:
         client = RedisClient.get_client()
         await asyncio.wait_for(
             client.delete(
-                "metrics:sigsvc:invocation", "metrics:sigsvc:idempotency_skip",
-                "metrics:sigsvc:buffer_eksik", "metrics:sigsvc:dry_run_signal",
+                "metrics:sigsvc:invocation",
+                "metrics:sigsvc:idempotency_skip",
+                "metrics:sigsvc:buffer_eksik",
+                "metrics:sigsvc:dry_run_signal",
             ),
             timeout=SAFE_EXTERNAL_TIMEOUT,
         )
@@ -422,16 +477,21 @@ async def run_all() -> None:
         _supervised(_consume_loop(), "signal_service_consume"), name="signal_service_consume"
     )
     risk_check_task = asyncio.create_task(
-        _supervised(_risk_check_loop(), "signal_service_risk_check"), name="signal_service_risk_check"
+        _supervised(_risk_check_loop(), "signal_service_risk_check"),
+        name="signal_service_risk_check",
     )
     evol_exit_task = asyncio.create_task(
         _supervised(_ha_cross_evol_exit_loop(), "ha_cross_evol_exit"), name="ha_cross_evol_exit"
     )
     watchdog_task = asyncio.create_task(
         _supervised(
-            watchdog_loop(max_age_seconds={
-                "signal_service": 120, "paper_trading_risk_check": 60, "ha_cross_evol_exit": 180,
-            }),
+            watchdog_loop(
+                max_age_seconds={
+                    "signal_service": 120,
+                    "paper_trading_risk_check": 60,
+                    "ha_cross_evol_exit": 180,
+                }
+            ),
             "signal_service_watchdog",
         ),
         name="signal_service_watchdog",
@@ -449,7 +509,15 @@ async def run_all() -> None:
         ),
         name="signal_service_throughput",
     )
-    tasks = {consume_task, risk_check_task, evol_exit_task, watchdog_task, queue_lag_task, reclaim_task, throughput_task}
+    tasks = {
+        consume_task,
+        risk_check_task,
+        evol_exit_task,
+        watchdog_task,
+        queue_lag_task,
+        reclaim_task,
+        throughput_task,
+    }
 
     def _handler(sig_name: str) -> None:
         logger.info("Sinyal alındı: %s. Signal service kapanıyor...", sig_name)
@@ -465,9 +533,13 @@ async def run_all() -> None:
             pass
 
     if Config.SIGNAL_SOURCE != "yeni":
-        logger.info("Signal service başlatıldı (dry-run mod — DB'ye yazmıyor, paper trade tetiklemiyor).")
+        logger.info(
+            "Signal service başlatıldı (dry-run mod — DB'ye yazmıyor, paper trade tetiklemiyor)."
+        )
     else:
-        logger.info("Signal service başlatıldı (canlı mod — DB'ye yazıyor, paper trade tetikliyor).")
+        logger.info(
+            "Signal service başlatıldı (canlı mod — DB'ye yazıyor, paper trade tetikliyor)."
+        )
     try:
         await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
     except asyncio.CancelledError:
@@ -486,7 +558,9 @@ def _acquire_pid_lock() -> bool:
             with open(_PID_FILE) as f:
                 old_pid = int(f.read().strip())
             os.kill(old_pid, 0)
-            logger.error("signal_service zaten çalışıyor (PID %d). Yeni instance başlatılmıyor.", old_pid)
+            logger.error(
+                "signal_service zaten çalışıyor (PID %d). Yeni instance başlatılmıyor.", old_pid
+            )
             return False
         except (ValueError, ProcessLookupError, PermissionError):
             pass

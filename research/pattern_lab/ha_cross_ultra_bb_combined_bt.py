@@ -14,6 +14,7 @@ birebir aynı taban, v2-13'ün 5m+15m birleşiminden FARKLI — bu yüzden mutla
 $/ay rakamları v2-13'teki ile birebir kıyaslanamaz, konsept karşılaştırması
 için taban sabitlendi).
 """
+
 import os
 import sys
 
@@ -22,11 +23,24 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from research.pattern_lab.rsi_cross_vpmv_jump_bt import MIN_HISTORY, _fetch_symbol_history, _signal_bar_ts  # pylint: disable=wrong-import-position
-from research.pattern_lab.ha_cross_combined_test import _fetch_ha_cross_signals  # pylint: disable=wrong-import-position
-from research.pattern_lab.ha_cross_bb_squeeze_bt import _bb_width_rank_series  # pylint: disable=wrong-import-position
-from research.pattern_lab.ha_cross_mtf_alignment_bt import CONFIRM_TFS  # pylint: disable=wrong-import-position
-from research.pattern_lab.mtf_helpers import _fetch_dir_data, _confirm_count  # pylint: disable=wrong-import-position
+from research.pattern_lab.ha_cross_bb_squeeze_bt import (
+    _bb_width_rank_series,  # pylint: disable=wrong-import-position
+)
+from research.pattern_lab.ha_cross_combined_test import (
+    _fetch_ha_cross_signals,  # pylint: disable=wrong-import-position
+)
+from research.pattern_lab.ha_cross_mtf_alignment_bt import (
+    CONFIRM_TFS,  # pylint: disable=wrong-import-position
+)
+from research.pattern_lab.mtf_helpers import (  # pylint: disable=wrong-import-position
+    _confirm_count,
+    _fetch_dir_data,
+)
+from research.pattern_lab.rsi_cross_vpmv_jump_bt import (  # pylint: disable=wrong-import-position
+    MIN_HISTORY,
+    _fetch_symbol_history,
+    _signal_bar_ts,
+)
 
 POSITION_USD = 100.0
 FEE_RATE = 0.0005
@@ -40,9 +54,15 @@ def _dollar_stats(rets: np.ndarray, days_span: float) -> dict:
     total = float(pnl.sum())
     per_month = total / days_span * 30 if days_span > 0 else 0.0
     return {
-        "n": len(rets), "wr": round(float((pnl > 0).mean() * 100), 1),
-        "pf": round(float(pnl[pnl > 0].sum() / abs(pnl[pnl < 0].sum())), 3) if (pnl < 0).any() else float("inf"),
-        "avg_usd": round(float(pnl.mean()), 3), "total_usd": round(total, 1),
+        "n": len(rets),
+        "wr": round(float((pnl > 0).mean() * 100), 1),
+        "pf": (
+            round(float(pnl[pnl > 0].sum() / abs(pnl[pnl < 0].sum())), 3)
+            if (pnl < 0).any()
+            else float("inf")
+        ),
+        "avg_usd": round(float(pnl.mean()), 3),
+        "total_usd": round(total, 1),
         "usd_per_month": round(per_month, 1),
     }
 
@@ -78,12 +98,14 @@ def _build_dataset() -> pd.DataFrame:
             if confirm_count is None:
                 continue
 
-            rows.append({
-                "bb_rank": bb_val,
-                "confirm_count": confirm_count,
-                "realized_pnl": row["realized_pnl"],
-                "opened_at": row["opened_at"],
-            })
+            rows.append(
+                {
+                    "bb_rank": bb_val,
+                    "confirm_count": confirm_count,
+                    "realized_pnl": row["realized_pnl"],
+                    "opened_at": row["opened_at"],
+                }
+            )
 
     return pd.DataFrame(rows)
 
@@ -134,15 +156,19 @@ def run():
         if s.get("n", 0) == 0:
             print(f"{name:30} {'0':>6}")
             continue
-        print(f"{name:30} {s['n']:>6} {s['wr']:>6} {s['pf']:>7} "
-              f"{s['avg_usd']:>12} {s['usd_per_month']:>10}")
+        print(
+            f"{name:30} {s['n']:>6} {s['wr']:>6} {s['pf']:>7} "
+            f"{s['avg_usd']:>12} {s['usd_per_month']:>10}"
+        )
 
     n_bb = int(bb_mask.sum())
     n_ultra = int(ultra_mask.sum())
     n_both = int((bb_mask & ultra_mask).sum())
-    print(f"\nörtüşme: BB-geniş grubunun %{100*n_both/n_bb:.0f}'i aynı zamanda ULTRA "
-          f"({n_both}/{n_bb}) | ULTRA grubunun %{100*n_both/n_ultra:.0f}'i aynı zamanda BB-geniş "
-          f"({n_both}/{n_ultra})")
+    print(
+        f"\nörtüşme: BB-geniş grubunun %{100*n_both/n_bb:.0f}'i aynı zamanda ULTRA "
+        f"({n_both}/{n_bb}) | ULTRA grubunun %{100*n_both/n_ultra:.0f}'i aynı zamanda BB-geniş "
+        f"({n_both}/{n_ultra})"
+    )
 
 
 if __name__ == "__main__":

@@ -18,6 +18,7 @@ Metodoloji: BAŞTAN split-period + SADECE 3 Tem 19:22:16 sonrası (commit
 e81aa34, temiz ters-sinyal/timeout rejimi). cumDelta state'i SEMBOL BAZINDA
 (Pine'ın tek-sembollü indikatör mantığıyla aynı) ayrı ayrı takip ediliyor.
 """
+
 import os
 import sys
 
@@ -27,10 +28,13 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from indicators.core import calculate_rsi  # pylint: disable=wrong-import-position
-from research.pattern_lab.vol_exhaustion_bt import _stats  # pylint: disable=wrong-import-position
 from research.pattern_lab.rsi_cross_vpmv_jump_bt import (  # pylint: disable=wrong-import-position
-    MIN_HISTORY, INTERVALS, _fetch_signals, _fetch_symbol_history,
+    INTERVALS,
+    MIN_HISTORY,
+    _fetch_signals,
+    _fetch_symbol_history,
 )
+from research.pattern_lab.vol_exhaustion_bt import _stats  # pylint: disable=wrong-import-position
 
 
 def _print_tercile_table(df: pd.DataFrame, col: str, q1: float, q2: float) -> None:
@@ -43,8 +47,10 @@ def _print_tercile_table(df: pd.DataFrame, col: str, q1: float, q2: float) -> No
     for name in ("düşük", "orta", "yüksek"):
         rets = df.loc[df["tercil"] == name, "realized_pnl"].to_numpy() / 100
         s = _stats(rets)
-        print(f"{name:10} {s.get('n',0):>7} {s.get('wr',0):>6} "
-              f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+        print(
+            f"{name:10} {s.get('n',0):>7} {s.get('wr',0):>6} "
+            f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+        )
 
 
 def run():
@@ -83,12 +89,14 @@ def run():
                     cum_delta = cum_delta + dpx_val
                 prev_type = row["signal_type"]
 
-                rows.append({
-                    "dpx": abs(dpx_val),
-                    "cum_delta": abs(cum_delta),
-                    "realized_pnl": row["realized_pnl"],
-                    "opened_at": row["opened_at"],
-                })
+                rows.append(
+                    {
+                        "dpx": abs(dpx_val),
+                        "cum_delta": abs(cum_delta),
+                        "realized_pnl": row["realized_pnl"],
+                        "opened_at": row["opened_at"],
+                    }
+                )
 
     df = pd.DataFrame(rows)
     print(f"\ntoplam eşleşen sinyal: {len(df):,}\n")
@@ -98,15 +106,21 @@ def run():
 
     s = _stats(df["realized_pnl"].to_numpy() / 100)
     print(f"{'grup':20} {'n':>7} {'WR%':>6} {'ort%':>8} {'PF':>7}")
-    print(f"{'baseline (tümü)':20} {s.get('n',0):>7} {s.get('wr',0):>6} "
-          f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+    print(
+        f"{'baseline (tümü)':20} {s.get('n',0):>7} {s.get('wr',0):>6} "
+        f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+    )
 
     q1, q2 = df["dpx"].quantile([0.333, 0.667])
-    print(f"\n── SADECE dpx (birikimsiz, tek sinyalin kendi RSI değişimi) terciline göre ── (q1={q1:.2f}, q2={q2:.2f})")
+    print(
+        f"\n── SADECE dpx (birikimsiz, tek sinyalin kendi RSI değişimi) terciline göre ── (q1={q1:.2f}, q2={q2:.2f})"
+    )
     _print_tercile_table(df, "dpx", q1, q2)
 
     q1c, q2c = df["cum_delta"].quantile([0.333, 0.667])
-    print(f"\n── cumDelta (ardışık aynı yönlü sinyallerde biriken) terciline göre ── (q1={q1c:.2f}, q2={q2c:.2f})")
+    print(
+        f"\n── cumDelta (ardışık aynı yönlü sinyallerde biriken) terciline göre ── (q1={q1c:.2f}, q2={q2c:.2f})"
+    )
     _print_tercile_table(df, "cum_delta", q1c, q2c)
 
     t_min, t_max = df["opened_at"].min(), df["opened_at"].max()

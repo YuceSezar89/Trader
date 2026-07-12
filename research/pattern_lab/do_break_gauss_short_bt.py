@@ -13,6 +13,7 @@ olabilir) — ikisi de bilgi değeri taşıyor.
 _stats() pozitif getiriyi "iyi" sayıyor — short için ham getiri NEGATİF
 edilerek geçiriliyor (fiyat düştükçe short kâr eder).
 """
+
 import os
 import sys
 
@@ -20,14 +21,20 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from signals.do_kirilimi import _daily_open  # pylint: disable=wrong-import-position
-from research.pattern_lab.vol_exhaustion_bt import _stats  # pylint: disable=wrong-import-position
 from research.pattern_lab.do_open_streak_bt import (  # pylint: disable=wrong-import-position
-    DAYS, HORIZON_BARS, MIN_BARS, STREAK_THRESHOLDS, _fetch,
+    DAYS,
+    HORIZON_BARS,
+    MIN_BARS,
+    STREAK_THRESHOLDS,
+    _fetch,
 )
 from research.pattern_lab.do_open_touch_gauss_bt import (  # pylint: disable=wrong-import-position
-    GAUSS_STREAK_THRESHOLD, _gauss_sum, _threshold_events,
+    GAUSS_STREAK_THRESHOLD,
+    _gauss_sum,
+    _threshold_events,
 )
+from research.pattern_lab.vol_exhaustion_bt import _stats  # pylint: disable=wrong-import-position
+from signals.do_kirilimi import _daily_open  # pylint: disable=wrong-import-position
 
 
 def _do_break_gate_down(o: np.ndarray, c: np.ndarray, daily_open: np.ndarray) -> np.ndarray:
@@ -119,8 +126,12 @@ def run():
 
         ev3 = _threshold_events(count_short, gate, GAUSS_STREAK_THRESHOLD)
         gauss_perc = _gauss_sum(np.round(short_perc[ev3], 2))
-        valid_idx = [i for i, gv in zip(ev3, gauss_perc) if np.isfinite(gv) and i < len(c) - HORIZON_BARS]
-        valid_gauss = [gv for i, gv in zip(ev3, gauss_perc) if np.isfinite(gv) and i < len(c) - HORIZON_BARS]
+        valid_idx = [
+            i for i, gv in zip(ev3, gauss_perc) if np.isfinite(gv) and i < len(c) - HORIZON_BARS
+        ]
+        valid_gauss = [
+            gv for i, gv in zip(ev3, gauss_perc) if np.isfinite(gv) and i < len(c) - HORIZON_BARS
+        ]
         per_symbol_cache.append((c, valid_idx, valid_gauss))
         all_gauss_vals.extend(valid_gauss)
 
@@ -128,21 +139,27 @@ def run():
     print("── do_break (DO aşağı kırılımı) gate ile ardışık kırmızı eşikleri (Short) ──")
     print(f"{'grup':38} {'n':>7} {'WR%':>6} {'ort%':>8} {'PF':>7}")
     s = _stats(np.concatenate(baseline_fwd) if baseline_fwd else np.array([]))
-    print(f"{'baseline (tüm barlar, short)':38} {s.get('n',0):>7} {s.get('wr',0):>6} "
-          f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+    print(
+        f"{'baseline (tüm barlar, short)':38} {s.get('n',0):>7} {s.get('wr',0):>6} "
+        f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+    )
     for th in STREAK_THRESHOLDS:
         rets = np.concatenate(down_streak_fwd[th]) if down_streak_fwd[th] else np.array([])
         s = _stats(rets)
         label = f"do_break_down + {th} ardışık kırmızı"
-        print(f"{label:38} {s.get('n',0):>7} {s.get('wr',0):>6} "
-              f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}  (olay={n_down_events[th]})")
+        print(
+            f"{label:38} {s.get('n',0):>7} {s.get('wr',0):>6} "
+            f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}  (olay={n_down_events[th]})"
+        )
 
     if not all_gauss_vals:
         print("\nGauss analizi için yeterli olay yok.")
         return
     q1, q2 = np.percentile(all_gauss_vals, [33.3, 66.7])
-    print(f"\n── streak=={GAUSS_STREAK_THRESHOLD} grubu (Short), gauss_short_perc terciline göre ── "
-          f"(q1={q1:.2f}, q2={q2:.2f})")
+    print(
+        f"\n── streak=={GAUSS_STREAK_THRESHOLD} grubu (Short), gauss_short_perc terciline göre ── "
+        f"(q1={q1:.2f}, q2={q2:.2f})"
+    )
 
     for c, idx_list, gauss_list in per_symbol_cache:
         for i, gv in zip(idx_list, gauss_list):
@@ -154,8 +171,10 @@ def run():
     for name in ("düşük", "orta", "yüksek"):
         rets = np.array(gauss_tercile_fwd[name])
         s = _stats(rets)
-        print(f"{name:10} {s.get('n',0):>7} {s.get('wr',0):>6} "
-              f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+        print(
+            f"{name:10} {s.get('n',0):>7} {s.get('wr',0):>6} "
+            f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+        )
 
 
 if __name__ == "__main__":

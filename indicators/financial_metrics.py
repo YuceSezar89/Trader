@@ -13,14 +13,28 @@ RSI_LENGTH = 14
 
 # Interval bazında lookback ve yıllık bar sayısı
 _LOOKBACK_BY_TF: dict[str, int] = {
-    "1m": 500,  "5m": 288,  "15m": 200, "30m": 192,
-    "1h": 168,  "4h": 180,  "6h": 120,  "8h": 90,
-    "12h": 60,  "1d": 250,
+    "1m": 500,
+    "5m": 288,
+    "15m": 200,
+    "30m": 192,
+    "1h": 168,
+    "4h": 180,
+    "6h": 120,
+    "8h": 90,
+    "12h": 60,
+    "1d": 250,
 }
 _BARS_PER_YEAR: dict[str, int] = {
-    "1m": 525600, "5m": 105120, "15m": 35040, "30m": 17520,
-    "1h": 8760,   "4h": 2190,   "6h": 1460,   "8h": 1095,
-    "12h": 730,   "1d": 365,
+    "1m": 525600,
+    "5m": 105120,
+    "15m": 35040,
+    "30m": 17520,
+    "1h": 8760,
+    "4h": 2190,
+    "6h": 1460,
+    "8h": 1095,
+    "12h": 730,
+    "1d": 365,
 }
 
 logger = logging.getLogger(__name__)
@@ -33,8 +47,8 @@ def calculate_metrics(df, ref_df=None, beta_window=50, alpha_window=20, interval
     # SettingWithCopyWarning uyarılarını önlemek için olası dilimleri kopyaya çevir
     df = df.copy()
 
-    lookback    = _LOOKBACK_BY_TF.get(interval, LOOKBACK_COMMON)
-    ann_sqrt    = _BARS_PER_YEAR.get(interval, 8760) ** 0.5
+    lookback = _LOOKBACK_BY_TF.get(interval, LOOKBACK_COMMON)
+    ann_sqrt = _BARS_PER_YEAR.get(interval, 8760) ** 0.5
     beta_window = lookback
 
     if not isinstance(df, pd.DataFrame):
@@ -86,18 +100,14 @@ def calculate_metrics(df, ref_df=None, beta_window=50, alpha_window=20, interval
             # Referans verinin de zaman dilimini ayarla (sadece DatetimeIndex için)
             if hasattr(ref_df.index, "tz") and hasattr(ref_df.index, "tz_localize"):
                 if ref_df.index.tz is None:
-                    ref_df.index = ref_df.index.tz_localize("UTC").tz_convert(
-                        "Europe/Istanbul"
-                    )
+                    ref_df.index = ref_df.index.tz_localize("UTC").tz_convert("Europe/Istanbul")
                 else:
                     ref_df.index = ref_df.index.tz_convert("Europe/Istanbul")
             # RangeIndex veya diğer index tipleri için date sütununu kullan
             elif "date" in ref_df.columns:
                 ref_df = ref_df.set_index("date")
                 if ref_df.index.tz is None:
-                    ref_df.index = ref_df.index.tz_localize("UTC").tz_convert(
-                        "Europe/Istanbul"
-                    )
+                    ref_df.index = ref_df.index.tz_localize("UTC").tz_convert("Europe/Istanbul")
                 else:
                     ref_df.index = ref_df.index.tz_convert("Europe/Istanbul")
 
@@ -122,26 +132,18 @@ def calculate_metrics(df, ref_df=None, beta_window=50, alpha_window=20, interval
                 aligned_ref_df = ref_df.loc[common_index]
 
                 # Getirileri hesapla
-                asset_returns = (
-                    aligned_df["close"].pct_change(fill_method=None).fillna(0)
-                )
-                market_returns = (
-                    aligned_ref_df["close"].pct_change(fill_method=None).fillna(0)
-                )
+                asset_returns = aligned_df["close"].pct_change(fill_method=None).fillna(0)
+                market_returns = aligned_ref_df["close"].pct_change(fill_method=None).fillna(0)
 
                 # Kovaryans ve varyansı hesapla (en az 2 veri noktası gerekli)
                 if len(asset_returns) > 1 and len(market_returns) > 1:
                     # Tekrar hizala, çünkü pct_change sonrası bir index kayabilir
-                    common_returns_index = asset_returns.index.intersection(
-                        market_returns.index
-                    )
+                    common_returns_index = asset_returns.index.intersection(market_returns.index)
                     asset_returns = asset_returns.reindex(common_returns_index)
                     market_returns = market_returns.reindex(common_returns_index)
 
                     # --- Rolling Beta Hesaplaması (TradingView'e göre) ---
-                    rolling_cov = asset_returns.rolling(window=beta_window).cov(
-                        market_returns
-                    )
+                    rolling_cov = asset_returns.rolling(window=beta_window).cov(market_returns)
                     rolling_var = market_returns.rolling(window=beta_window).var()
                     rolling_beta = rolling_cov / rolling_var
 
@@ -155,8 +157,7 @@ def calculate_metrics(df, ref_df=None, beta_window=50, alpha_window=20, interval
                         aligned_df["close"] - aligned_df["close"].shift(alpha_window)
                     ) / aligned_df["close"]
                     market_returns_alpha = (
-                        aligned_ref_df["close"]
-                        - aligned_ref_df["close"].shift(alpha_window)
+                        aligned_ref_df["close"] - aligned_ref_df["close"].shift(alpha_window)
                     ) / aligned_ref_df["close"]
 
                     # Pine Script Formülü: alpha = (ret2 - retb2 * beta) * 100
@@ -172,41 +173,27 @@ def calculate_metrics(df, ref_df=None, beta_window=50, alpha_window=20, interval
                     df["beta"] = df["beta"].fillna(0.0)
                     df["alpha"] = df["alpha"].fillna(0.0)
 
-                    logger.info(
-                        f"Rolling Alpha ve Beta, {beta_window} bar pencere ile hesaplandı."
-                    )
+                    logger.info(f"Rolling Alpha ve Beta, {beta_window} bar pencere ile hesaplandı.")
                 else:
-                    logger.warning(
-                        "Alpha/Beta hesaplamak için yeterli getiri verisi yok."
-                    )
+                    logger.warning("Alpha/Beta hesaplamak için yeterli getiri verisi yok.")
             else:
-                logger.warning(
-                    "Varlık ve referans verisi arasında ortak zaman aralığı bulunamadı."
-                )
+                logger.warning("Varlık ve referans verisi arasında ortak zaman aralığı bulunamadı.")
         except Exception as e:
-            logger.error(
-                f"Alpha/Beta hesaplama sırasında bir hata oluştu: {e}", exc_info=True
-            )
+            logger.error(f"Alpha/Beta hesaplama sırasında bir hata oluştu: {e}", exc_info=True)
 
     df.loc[:, "price"] = df["close"]
     df.loc[:, "price_diff"] = df["price"] - df["price"].shift(1)
-    df.loc[:, "percent_price_diff"] = (
-        df["price_diff"] / df["price"].shift(1).replace(0, 1)
-    ) * 100
-    df["normalized_price_diff"] = normalize_series(
-        df["percent_price_diff"], index=df.index
-    ).fillna(0.0)
-    df["smoothed_price_diff"] = smooth_series(
-        df["normalized_price_diff"], index=df.index
+    df.loc[:, "percent_price_diff"] = (df["price_diff"] / df["price"].shift(1).replace(0, 1)) * 100
+    df["normalized_price_diff"] = normalize_series(df["percent_price_diff"], index=df.index).fillna(
+        0.0
     )
+    df["smoothed_price_diff"] = smooth_series(df["normalized_price_diff"], index=df.index)
 
     df.loc[:, "volume_diff"] = df["volume"] - df["volume"].shift(1)
     df.loc[:, "percent_volume_diff"] = (
         df["volume_diff"] / df["volume"].shift(1).replace(0, 1)
     ) * 100
-    df["normalized_volume_diff"] = normalize_series(
-        df["percent_volume_diff"], index=df.index
-    )
+    df["normalized_volume_diff"] = normalize_series(df["percent_volume_diff"], index=df.index)
     df["smoothed_volume"] = smooth_series(df["normalized_volume_diff"], index=df.index)
 
     df.loc[:, "volatility"] = df["high"] - df["low"]
@@ -217,21 +204,15 @@ def calculate_metrics(df, ref_df=None, beta_window=50, alpha_window=20, interval
     df["normalized_volatility_diff"] = normalize_series(
         df["percent_volatility_diff"], index=df.index
     )
-    df["smoothed_volatility"] = smooth_series(
-        df["normalized_volatility_diff"], index=df.index
-    )
+    df["smoothed_volatility"] = smooth_series(df["normalized_volatility_diff"], index=df.index)
 
     df.loc[:, "momentum"] = df["price"] - df["price"].shift(MOMENTUM_LENGTH)
     df.loc[:, "momentum_diff"] = df["momentum"] - df["momentum"].shift(1)
     df.loc[:, "percent_momentum_diff"] = (
         df["momentum_diff"] / np.maximum(1, df["momentum"].shift(1).abs())
     ) * 100
-    df["normalized_momentum_diff"] = normalize_series(
-        df["percent_momentum_diff"], index=df.index
-    )
-    df["smoothed_momentum"] = smooth_series(
-        df["normalized_momentum_diff"], index=df.index
-    )
+    df["normalized_momentum_diff"] = normalize_series(df["percent_momentum_diff"], index=df.index)
+    df["smoothed_momentum"] = smooth_series(df["normalized_momentum_diff"], index=df.index)
 
     # Kendi RSI fonksiyonumuzu kullan (pandas_ta NumPy uyumsuzluğu yüzünden)
     from indicators.core import calculate_rsi
@@ -240,34 +221,22 @@ def calculate_metrics(df, ref_df=None, beta_window=50, alpha_window=20, interval
     rsi_series = calculate_rsi(df, period=RSI_LENGTH, price_col="price")
     df.loc[:, "rsi"] = rsi_series
     df.loc[:, "rsi_diff"] = df["rsi"] - df["rsi"].shift(1)
-    df.loc[:, "percent_rsi_diff"] = (
-        df["rsi_diff"] / np.maximum(1, df["rsi"].shift(1).abs())
-    ) * 100
+    df.loc[:, "percent_rsi_diff"] = (df["rsi_diff"] / np.maximum(1, df["rsi"].shift(1).abs())) * 100
     df["normalized_rsi_diff"] = normalize_series(df["percent_rsi_diff"], index=df.index)
     df["smoothed_rsi"] = smooth_series(df["normalized_rsi_diff"], index=df.index)
 
     df.loc[:, "hour"] = df.index.hour
     df.loc[:, "is_new_day"] = (df["hour"] == 3) & (df.index.minute == 0)
     df.loc[:, "daily_ref_price"] = np.where(df["is_new_day"], df["price"], np.nan)
-    df.loc[:, "daily_ref_price"] = (
-        df["daily_ref_price"].ffill().fillna(df["price"].iloc[0])
-    )
+    df.loc[:, "daily_ref_price"] = df["daily_ref_price"].ffill().fillna(df["price"].iloc[0])
     df.loc[:, "cumulative_change"] = ((df["price"] / df["daily_ref_price"]) - 1) * 100
-    df["normalized_cumulative"] = normalize_series(
-        df["cumulative_change"], index=df.index
-    )
-    df["smoothed_cumulative"] = smooth_series(
-        df["normalized_cumulative"], index=df.index
-    )
+    df["normalized_cumulative"] = normalize_series(df["cumulative_change"], index=df.index)
+    df["smoothed_cumulative"] = smooth_series(df["normalized_cumulative"], index=df.index)
 
     df.loc[:, "returns"] = (
-        np.log(df["price"] / df["price"].shift(1))
-        .replace([np.inf, -np.inf], 0)
-        .fillna(0)
+        np.log(df["price"] / df["price"].shift(1)).replace([np.inf, -np.inf], 0).fillna(0)
     )
-    df.loc[:, "avg_return"] = (
-        df["returns"].rolling(window=lookback, min_periods=1).mean()
-    )
+    df.loc[:, "avg_return"] = df["returns"].rolling(window=lookback, min_periods=1).mean()
     df.loc[:, "std_dev_return"] = (
         df["returns"].rolling(window=lookback, min_periods=1).std().fillna(0)
     )
@@ -281,10 +250,7 @@ def calculate_metrics(df, ref_df=None, beta_window=50, alpha_window=20, interval
 
     df.loc[:, "downside_returns"] = np.where(df["returns"] < 0, df["returns"], 0)
     df.loc[:, "std_dev_downside"] = (
-        df["downside_returns"]
-        .rolling(window=lookback, min_periods=1)
-        .std()
-        .fillna(0)
+        df["downside_returns"].rolling(window=lookback, min_periods=1).std().fillna(0)
     )
     # Annualize: raw_sortino * sqrt(bars_per_year)
     df.loc[:, "sortino_ratio"] = np.where(
@@ -296,19 +262,15 @@ def calculate_metrics(df, ref_df=None, beta_window=50, alpha_window=20, interval
 
     # Calmar: annualized return / max drawdown (peak-to-current, tek geçiş)
     rolling_peak = df["price"].rolling(window=lookback, min_periods=1).max()
-    current_dd   = ((df["price"] - rolling_peak) / rolling_peak.replace(0, np.nan)).abs().add(1e-6)
-    ann_return   = df["avg_return"] * _BARS_PER_YEAR.get(interval, 8760)
+    current_dd = ((df["price"] - rolling_peak) / rolling_peak.replace(0, np.nan)).abs().add(1e-6)
+    ann_return = df["avg_return"] * _BARS_PER_YEAR.get(interval, 8760)
     df.loc[:, "calmar_ratio"] = ann_return / current_dd
     df["calmar_ratio"] = df["calmar_ratio"].fillna(0).clip(-50, 50)
 
     df.loc[:, "positive_returns"] = np.where(df["returns"] > 0, df["returns"], 0)
-    df["positive_returns"] = (
-        df["positive_returns"].rolling(window=lookback, min_periods=1).sum()
-    )
+    df["positive_returns"] = df["positive_returns"].rolling(window=lookback, min_periods=1).sum()
     df.loc[:, "negative_returns"] = np.where(df["returns"] < 0, -df["returns"], 0)
-    df["negative_returns"] = (
-        df["negative_returns"].rolling(window=lookback, min_periods=1).sum()
-    )
+    df["negative_returns"] = df["negative_returns"].rolling(window=lookback, min_periods=1).sum()
     df.loc[:, "omega_ratio"] = np.where(
         df["negative_returns"] == 0,
         0,
@@ -330,17 +292,11 @@ def calculate_metrics(df, ref_df=None, beta_window=50, alpha_window=20, interval
         asset_returns = aligned_df["returns"]
         # Explicitly set fill_method=None to avoid FutureWarning in newer pandas versions
         market_returns = aligned_ref_df["close"].pct_change(fill_method=None).fillna(0)
-        mean_market_return = market_returns.rolling(
-            window=lookback, min_periods=1
-        ).mean()
-        covar = (asset_returns - df["avg_return"]) * (
-            market_returns - mean_market_return
-        )
+        mean_market_return = market_returns.rolling(window=lookback, min_periods=1).mean()
+        covar = (asset_returns - df["avg_return"]) * (market_returns - mean_market_return)
         rolling_cov = covar.rolling(window=lookback, min_periods=1).mean()
         rolling_var = (
-            market_returns.rolling(window=lookback, min_periods=1)
-            .var()
-            .replace(0, np.nan)
+            market_returns.rolling(window=lookback, min_periods=1).var().replace(0, np.nan)
         )
         beta = rolling_cov / rolling_var
         beta = beta.replace([np.inf, -np.inf], 0).fillna(0)
@@ -356,9 +312,7 @@ def calculate_metrics(df, ref_df=None, beta_window=50, alpha_window=20, interval
         excess_returns = asset_returns - market_returns
 
         # Rolling tracking error hesaplama (minimum 30 veri noktası)
-        tracking_error = excess_returns.rolling(
-            window=max(30, lookback), min_periods=30
-        ).std()
+        tracking_error = excess_returns.rolling(window=max(30, lookback), min_periods=30).std()
 
         # Rolling excess return ortalama
         mean_excess_returns = excess_returns.rolling(
@@ -402,9 +356,7 @@ def calculate_metrics(df, ref_df=None, beta_window=50, alpha_window=20, interval
         + df["treynor_ratio"]
         + df["information_ratio"]
     ) / 6
-    df["normalized_composite"] = normalize_series(
-        df["composite_ratio"], index=df.index
-    ).fillna(0.0)
+    df["normalized_composite"] = normalize_series(df["composite_ratio"], index=df.index).fillna(0.0)
     df["smoothed_composite"] = smooth_series(df["normalized_composite"], index=df.index)
     # Scaled avg normalized (0-100) devisso uyumlu
     df["scaled_avg_normalized"] = (
@@ -432,15 +384,10 @@ def calculate_metrics(df, ref_df=None, beta_window=50, alpha_window=20, interval
     ) * 100
     df["zscore_ratio_percent"] = df["zscore_ratio_percent"].fillna(0.0)
 
-    df.loc[:, "signal_momentum_percent"] = (
-        (df["price"] / df["open"].replace(0, 1)) - 1
-    ) * 100
+    df.loc[:, "signal_momentum_percent"] = ((df["price"] / df["open"].replace(0, 1)) - 1) * 100
     df["normalized_signal_momentum"] = normalize_series(
         df["signal_momentum_percent"], index=df.index
     )
-    df["smoothed_signal_momentum"] = smooth_series(
-        df["normalized_signal_momentum"], index=df.index
-    )
-
+    df["smoothed_signal_momentum"] = smooth_series(df["normalized_signal_momentum"], index=df.index)
 
     return df

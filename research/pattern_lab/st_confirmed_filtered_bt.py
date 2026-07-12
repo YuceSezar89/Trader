@@ -21,6 +21,7 @@ bakılarak forward-fill edilip kullanılıyor — 11 Tem'deki iki hatadan
 TF'ler arası look-ahead — burada TEK bir TF/sembol içinde kalındığı için
 uygulanmıyor) etkilenmiyor.
 """
+
 import os
 import sys
 
@@ -32,9 +33,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from config import Config  # pylint: disable=wrong-import-position
 from indicators.core import calculate_supertrend  # pylint: disable=wrong-import-position
+from research.pattern_lab.rsi_cross_sl_sweep_bt import (
+    _apply_signal_filter,  # pylint: disable=wrong-import-position
+)
+from research.pattern_lab.rsi_cross_vpmv_jump_bt import (  # pylint: disable=wrong-import-position
+    _fetch_symbol_history,
+    _signal_bar_ts,
+)
 from research.pattern_lab.vol_exhaustion_bt import _stats  # pylint: disable=wrong-import-position
-from research.pattern_lab.rsi_cross_vpmv_jump_bt import _fetch_symbol_history, _signal_bar_ts  # pylint: disable=wrong-import-position
-from research.pattern_lab.rsi_cross_sl_sweep_bt import _apply_signal_filter  # pylint: disable=wrong-import-position
 
 INDICATORS = ["RSI_Cross(9,24)", "HA_Cross", "MA200_Cross"]
 DIRECTIONS = ["Long", "Short"]
@@ -87,8 +93,11 @@ def _filtered_st_direction_series(symbol: str, interval: str) -> pd.DataFrame:
 
 def _fetch_signals(indicator: str, direction: str, interval: str) -> pd.DataFrame:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     q = """
         SELECT symbol, realized_pnl, opened_at
@@ -124,13 +133,16 @@ def run():
                         if i is None or not np.isfinite(bullish_arr[i]):
                             continue
                         st_bullish = bullish_arr[i] == 1.0
-                        st_confirmed_new = (direction == "Long" and st_bullish) or \
-                                            (direction == "Short" and not st_bullish)
-                        rows.append({
-                            "st_confirmed_new": st_confirmed_new,
-                            "realized_pnl": row["realized_pnl"],
-                            "opened_at": row["opened_at"],
-                        })
+                        st_confirmed_new = (direction == "Long" and st_bullish) or (
+                            direction == "Short" and not st_bullish
+                        )
+                        rows.append(
+                            {
+                                "st_confirmed_new": st_confirmed_new,
+                                "realized_pnl": row["realized_pnl"],
+                                "opened_at": row["opened_at"],
+                            }
+                        )
 
             df = pd.DataFrame(rows)
             print(f"\n{'='*70}\n{indicator} — {direction}  (n={len(df):,})\n{'='*70}")
@@ -140,17 +152,23 @@ def run():
 
             baseline = _pf(df)
             print(f"{'grup':22} {'n':>7} {'WR%':>6} {'ort%':>8} {'PF':>7}")
-            print(f"{'baseline (tümü)':22} {baseline.get('n',0):>7} {baseline.get('wr',0):>6} "
-                  f"{baseline.get('ort_%',0):>8} {baseline.get('pf',0):>7}")
+            print(
+                f"{'baseline (tümü)':22} {baseline.get('n',0):>7} {baseline.get('wr',0):>6} "
+                f"{baseline.get('ort_%',0):>8} {baseline.get('pf',0):>7}"
+            )
 
             confirmed = df[df["st_confirmed_new"]]
             unconfirmed = df[~df["st_confirmed_new"]]
             s_c = _pf(confirmed)
-            print(f"{'st_confirmed_YENİ=True':22} {s_c.get('n',0):>7} {s_c.get('wr',0):>6} "
-                  f"{s_c.get('ort_%',0):>8} {s_c.get('pf',0):>7}")
+            print(
+                f"{'st_confirmed_YENİ=True':22} {s_c.get('n',0):>7} {s_c.get('wr',0):>6} "
+                f"{s_c.get('ort_%',0):>8} {s_c.get('pf',0):>7}"
+            )
             s_u = _pf(unconfirmed)
-            print(f"{'st_confirmed_YENİ=False':22} {s_u.get('n',0):>7} {s_u.get('wr',0):>6} "
-                  f"{s_u.get('ort_%',0):>8} {s_u.get('pf',0):>7}")
+            print(
+                f"{'st_confirmed_YENİ=False':22} {s_u.get('n',0):>7} {s_u.get('wr',0):>6} "
+                f"{s_u.get('ort_%',0):>8} {s_u.get('pf',0):>7}"
+            )
 
             t_min, t_max = df["opened_at"].min(), df["opened_at"].max()
             mid = t_min + (t_max - t_min) / 2
@@ -159,11 +177,15 @@ def run():
             first_u = unconfirmed[unconfirmed["opened_at"] < mid]
             second_u = unconfirmed[unconfirmed["opened_at"] >= mid]
             print("-- split-period (True) --")
-            print(f"  ilk yarı: PF={_pf(first_c).get('pf',0):>6} (n={_pf(first_c).get('n',0)}) | "
-                  f"ikinci yarı: PF={_pf(second_c).get('pf',0):>6} (n={_pf(second_c).get('n',0)})")
+            print(
+                f"  ilk yarı: PF={_pf(first_c).get('pf',0):>6} (n={_pf(first_c).get('n',0)}) | "
+                f"ikinci yarı: PF={_pf(second_c).get('pf',0):>6} (n={_pf(second_c).get('n',0)})"
+            )
             print("-- split-period (False) --")
-            print(f"  ilk yarı: PF={_pf(first_u).get('pf',0):>6} (n={_pf(first_u).get('n',0)}) | "
-                  f"ikinci yarı: PF={_pf(second_u).get('pf',0):>6} (n={_pf(second_u).get('n',0)})")
+            print(
+                f"  ilk yarı: PF={_pf(first_u).get('pf',0):>6} (n={_pf(first_u).get('n',0)}) | "
+                f"ikinci yarı: PF={_pf(second_u).get('pf',0):>6} (n={_pf(second_u).get('n',0)})"
+            )
 
 
 if __name__ == "__main__":

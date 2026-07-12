@@ -21,6 +21,7 @@ Yöntem (3 kapı, bugünün disiplinine uygun):
 Long ve Short AYRI ayrı optimize edilir (bugün RSI_Cross'ta görülen asimetri
 nedeniyle aynı kurala tabi tutulmazlar).
 """
+
 import os
 import sys
 
@@ -42,8 +43,11 @@ DIRECTIONS = ["Long", "Short"]
 
 def _fetch_signals(indicator: str, direction: str) -> pd.DataFrame:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     q = """
         SELECT alpha, beta, realized_pnl, opened_at
@@ -70,7 +74,7 @@ def _best_single_threshold(df: pd.DataFrame, col: str, min_n: int = MIN_N, perce
         return None
     values = df[col].to_numpy()
     best = None
-    for pct in (percentiles or PERCENTILE_CANDIDATES):
+    for pct in percentiles or PERCENTILE_CANDIDATES:
         th = float(np.percentile(values, pct))
         for op in (">=", "<="):
             sub = df[df[col] >= th] if op == ">=" else df[df[col] <= th]
@@ -125,7 +129,9 @@ def _single_var_search(is_df: pd.DataFrame, col: str, percentiles=None) -> tuple
     return rule, stats.get("pf", 0), stats.get("n", 0)
 
 
-def _single_var_placebo_distribution(is_df: pd.DataFrame, col: str, n_shuffles: int = N_PLACEBO, percentiles=None) -> list:
+def _single_var_placebo_distribution(
+    is_df: pd.DataFrame, col: str, n_shuffles: int = N_PLACEBO, percentiles=None
+) -> list:
     pnl_vals = is_df["realized_pnl"].to_numpy().copy()
     placebo_pfs = []
     rng = np.random.default_rng(42)
@@ -173,8 +179,12 @@ def _run_single_var_on_df(label: str, df: pd.DataFrame, col: str, percentiles=No
     oos_stats = _pf(oos_filtered) if len(oos_filtered) > 0 else {"pf": 0, "n": 0, "wr": 0}
 
     print(f"\n── OOS (sabit eşikle) ──")
-    print(f"baseline:  PF={oos_baseline.get('pf',0):.3f} WR%={oos_baseline.get('wr',0)} n={oos_baseline.get('n',0)}")
-    print(f"filtreli:  PF={oos_stats.get('pf',0):.3f} WR%={oos_stats.get('wr',0)} n={oos_stats.get('n',0)}")
+    print(
+        f"baseline:  PF={oos_baseline.get('pf',0):.3f} WR%={oos_baseline.get('wr',0)} n={oos_baseline.get('n',0)}"
+    )
+    print(
+        f"filtreli:  PF={oos_stats.get('pf',0):.3f} WR%={oos_stats.get('wr',0)} n={oos_stats.get('n',0)}"
+    )
 
     oos_mid = mid + (t_max - mid) / 2
     oos_first = _apply_rule(oos_df[oos_df["opened_at"] < oos_mid], rule)
@@ -190,10 +200,18 @@ def _run_single_var_on_df(label: str, df: pd.DataFrame, col: str, percentiles=No
         placebo_arr = np.array(placebo_pfs)
         rank = float((placebo_arr < is_pf).mean() * 100)
         print(f"\n── Placebo (n={len(placebo_pfs)} karıştırma) ──")
-        print(f"placebo PF ort={placebo_arr.mean():.3f} p90={np.percentile(placebo_arr,90):.3f} "
-              f"max={placebo_arr.max():.3f} | gerçek IS PF={is_pf:.3f} (placebo'nun %{rank:.0f}'ini geçiyor)")
-        verdict = "GEÇERLİ ADAY" if rank >= 90 and oos_stats.get("pf", 0) > oos_baseline.get("pf", 0) \
-            and s1.get("pf", 0) > 1 and s2.get("pf", 0) > 1 else "GÜVENİLMEZ/ZAYIF"
+        print(
+            f"placebo PF ort={placebo_arr.mean():.3f} p90={np.percentile(placebo_arr,90):.3f} "
+            f"max={placebo_arr.max():.3f} | gerçek IS PF={is_pf:.3f} (placebo'nun %{rank:.0f}'ini geçiyor)"
+        )
+        verdict = (
+            "GEÇERLİ ADAY"
+            if rank >= 90
+            and oos_stats.get("pf", 0) > oos_baseline.get("pf", 0)
+            and s1.get("pf", 0) > 1
+            and s2.get("pf", 0) > 1
+            else "GÜVENİLMEZ/ZAYIF"
+        )
         print(f"\n>>> SONUÇ: {verdict}")
 
 
@@ -228,16 +246,26 @@ def run_one(indicator: str, direction: str) -> None:
     oos_baseline = _pf(oos_df)
     oos_after_alpha = _apply_rule(oos_df, alpha_rule)
     oos_combined = _apply_rule(oos_after_alpha, beta_rule)
-    oos_stats = _pf(oos_combined) if len(oos_combined) > 0 else {"pf": 0, "n": 0, "wr": 0, "ort_%": 0}
+    oos_stats = (
+        _pf(oos_combined) if len(oos_combined) > 0 else {"pf": 0, "n": 0, "wr": 0, "ort_%": 0}
+    )
 
     print(f"\n── OOS (sabit eşiklerle) ──")
-    print(f"baseline:  PF={oos_baseline.get('pf',0):.3f} WR%={oos_baseline.get('wr',0)} n={oos_baseline.get('n',0)}")
-    print(f"filtreli:  PF={oos_stats.get('pf',0):.3f} WR%={oos_stats.get('wr',0)} n={oos_stats.get('n',0)}")
+    print(
+        f"baseline:  PF={oos_baseline.get('pf',0):.3f} WR%={oos_baseline.get('wr',0)} n={oos_baseline.get('n',0)}"
+    )
+    print(
+        f"filtreli:  PF={oos_stats.get('pf',0):.3f} WR%={oos_stats.get('wr',0)} n={oos_stats.get('n',0)}"
+    )
 
     # OOS split-period
     oos_mid = mid + (t_max - mid) / 2
-    oos_first = _apply_rule(_apply_rule(oos_df[oos_df["opened_at"] < oos_mid], alpha_rule), beta_rule)
-    oos_second = _apply_rule(_apply_rule(oos_df[oos_df["opened_at"] >= oos_mid], alpha_rule), beta_rule)
+    oos_first = _apply_rule(
+        _apply_rule(oos_df[oos_df["opened_at"] < oos_mid], alpha_rule), beta_rule
+    )
+    oos_second = _apply_rule(
+        _apply_rule(oos_df[oos_df["opened_at"] >= oos_mid], alpha_rule), beta_rule
+    )
     s1 = _pf(oos_first) if len(oos_first) > 0 else {"pf": 0, "n": 0}
     s2 = _pf(oos_second) if len(oos_second) > 0 else {"pf": 0, "n": 0}
     print(f"\n── OOS split-period sağlamlık ──")
@@ -250,11 +278,19 @@ def run_one(indicator: str, direction: str) -> None:
         placebo_arr = np.array(placebo_pfs)
         rank = float((placebo_arr < is_combined_pf).mean() * 100)
         print(f"\n── Placebo (n={len(placebo_pfs)} karıştırma) ──")
-        print(f"placebo PF ort={placebo_arr.mean():.3f} p90={np.percentile(placebo_arr,90):.3f} "
-              f"max={placebo_arr.max():.3f} | gerçek IS PF={is_combined_pf:.3f} "
-              f"(placebo'nun %{rank:.0f}'ini geçiyor)")
-        verdict = "GEÇERLİ ADAY" if rank >= 90 and oos_stats.get("pf", 0) > oos_baseline.get("pf", 0) \
-            and s1.get("pf", 0) > 1 and s2.get("pf", 0) > 1 else "GÜVENİLMEZ/ZAYIF"
+        print(
+            f"placebo PF ort={placebo_arr.mean():.3f} p90={np.percentile(placebo_arr,90):.3f} "
+            f"max={placebo_arr.max():.3f} | gerçek IS PF={is_combined_pf:.3f} "
+            f"(placebo'nun %{rank:.0f}'ini geçiyor)"
+        )
+        verdict = (
+            "GEÇERLİ ADAY"
+            if rank >= 90
+            and oos_stats.get("pf", 0) > oos_baseline.get("pf", 0)
+            and s1.get("pf", 0) > 1
+            and s2.get("pf", 0) > 1
+            else "GÜVENİLMEZ/ZAYIF"
+        )
         print(f"\n>>> SONUÇ: {verdict}")
 
 

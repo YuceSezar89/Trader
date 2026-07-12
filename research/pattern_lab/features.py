@@ -8,6 +8,7 @@ Pencereler: SHORT = son FEAT_SHORT_H saat (ateşleme),
             LONG  = ondan önceki FEAT_LONG_H − FEAT_SHORT_H saat (bağlam).
 Kıyas hep SHORT / LONG — "son saatlerde ne değişti?"
 """
+
 import numpy as np
 import pandas as pd
 
@@ -91,9 +92,11 @@ def _htf_ha_count(df: pd.DataFrame) -> int:
     n = 0
     x = df.set_index("ts")
     for minutes in (90, 180, 360, 720):
-        agg = x.resample(f"{minutes}min", origin=pd.Timestamp("2026-01-01 03:00:00")).agg(
-            o=("open", "first"), h=("high", "max"), l=("low", "min"), c=("close", "last")
-        ).dropna()
+        agg = (
+            x.resample(f"{minutes}min", origin=pd.Timestamp("2026-01-01 03:00:00"))
+            .agg(o=("open", "first"), h=("high", "max"), l=("low", "min"), c=("close", "last"))
+            .dropna()
+        )
         if len(agg) < 3:
             continue
         ha_c = (agg["o"] + agg["h"] + agg["l"] + agg["c"]) / 4
@@ -115,7 +118,7 @@ def extract_features(sym_df: pd.DataFrame, btc_close: pd.Series, t0) -> dict:
     if len(df) < LONG_BARS + SHORT_BARS + 50:
         return {}
 
-    short, long_ = df.tail(SHORT_BARS), df.iloc[-(SHORT_BARS + LONG_BARS):-SHORT_BARS]
+    short, long_ = df.tail(SHORT_BARS), df.iloc[-(SHORT_BARS + LONG_BARS) : -SHORT_BARS]
     close, out = df["close"], {}
 
     # 1 — Δhacim
@@ -125,15 +128,21 @@ def extract_features(sym_df: pd.DataFrame, btc_close: pd.Series, t0) -> dict:
 
     # 2 — Sıkışma (yay)
     atr = _atr(df)
-    out["atr_daralma"] = float(atr.tail(SHORT_BARS).mean() / atr.iloc[-(SHORT_BARS + LONG_BARS):-SHORT_BARS].mean())
+    out["atr_daralma"] = float(
+        atr.tail(SHORT_BARS).mean() / atr.iloc[-(SHORT_BARS + LONG_BARS) : -SHORT_BARS].mean()
+    )
     bw = close.rolling(60).std() / close.rolling(60).mean()
-    out["bant_daralma"] = float(bw.tail(SHORT_BARS).mean() / bw.iloc[-(SHORT_BARS + LONG_BARS):-SHORT_BARS].mean())
+    out["bant_daralma"] = float(
+        bw.tail(SHORT_BARS).mean() / bw.iloc[-(SHORT_BARS + LONG_BARS) : -SHORT_BARS].mean()
+    )
 
     # 3 — Momentum
     rsi = _rsi(close)
     out["rsi"] = float(rsi.iloc[-1])
     out["rsi_delta_6h"] = float(rsi.iloc[-1] - rsi.iloc[-SHORT_BARS])
-    out["roc_24h"] = float(close.iloc[-1] / close.iloc[-288] - 1) * 100 if len(close) > 288 else np.nan
+    out["roc_24h"] = (
+        float(close.iloc[-1] / close.iloc[-288] - 1) * 100 if len(close) > 288 else np.nan
+    )
 
     # 4 — DO / WO konumu
     day_key = (df["ts"] - pd.Timedelta(hours=DO_HOUR)).dt.date
@@ -188,7 +197,9 @@ def extract_features(sym_df: pd.DataFrame, btc_close: pd.Series, t0) -> dict:
     if "buy_volume" in df.columns and df["buy_volume"].notna().any():
         for name, w in (("6h", short), ("48h", df.tail(SHORT_BARS + LONG_BARS))):
             tv = w["volume"].sum()
-            out[f"akis_gercek_{name}"] = float((w["buy_volume"] - w["sell_volume"]).sum() / tv) if tv > 0 else np.nan
+            out[f"akis_gercek_{name}"] = (
+                float((w["buy_volume"] - w["sell_volume"]).sum() / tv) if tv > 0 else np.nan
+            )
             hl = (w["high"] - w["low"]).clip(lower=1e-12)
             proxy = (w["volume"] * (2 * w["close"] - w["high"] - w["low"]) / hl).sum()
             out[f"akis_vekil_{name}"] = float(proxy / tv) if tv > 0 else np.nan

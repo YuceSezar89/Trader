@@ -9,23 +9,22 @@ Kullanım:
 """
 
 import argparse
-from collections import defaultdict
+import os
+import sys
 
 import numpy as np
 import pandas as pd
 import psycopg2
 
-import os
-import sys
-
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import Config
 
-DB_DSN = (f"dbname={Config.DB_NAME} user={Config.DB_USER} "
-          f"host={Config.DB_HOST} port={Config.DB_PORT}")
+DB_DSN = (
+    f"dbname={Config.DB_NAME} user={Config.DB_USER} " f"host={Config.DB_HOST} port={Config.DB_PORT}"
+)
 EMA_PERIOD = 200
-MIN_BARS   = EMA_PERIOD + 10
+MIN_BARS = EMA_PERIOD + 10
 
 _CAGG_MAP = {"5m": "cagg_5m", "15m": "cagg_15m", "1h": "cagg_1h"}
 
@@ -55,8 +54,7 @@ def fetch_price(conn, symbol, interval):
     cagg = _CAGG_MAP.get(interval)
     if cagg:
         cur.execute(
-            f"SELECT bucket, close FROM {cagg} WHERE symbol = %s ORDER BY bucket ASC",
-            (symbol,)
+            f"SELECT bucket, close FROM {cagg} WHERE symbol = %s ORDER BY bucket ASC", (symbol,)
         )
         rows = cur.fetchall()
         if not rows:
@@ -65,7 +63,7 @@ def fetch_price(conn, symbol, interval):
     else:
         cur.execute(
             "SELECT timestamp, close FROM price_data WHERE symbol = %s AND interval = %s ORDER BY timestamp ASC",
-            (symbol, interval)
+            (symbol, interval),
         )
         rows = cur.fetchall()
         if not rows:
@@ -76,16 +74,16 @@ def fetch_price(conn, symbol, interval):
 
 
 def _zscore_series(close: pd.Series) -> pd.Series:
-    ema  = close.ewm(span=EMA_PERIOD, adjust=False).mean()
-    std  = close.rolling(EMA_PERIOD).std()
+    ema = close.ewm(span=EMA_PERIOD, adjust=False).mean()
+    std = close.rolling(EMA_PERIOD).std()
     return (close - ema) / (std + 1e-12)
 
 
 def compute_zscores(conn, signals: pd.DataFrame) -> pd.DataFrame:
     results = []
     skipped = 0
-    groups  = signals.groupby(["symbol", "interval"])
-    total   = len(groups)
+    groups = signals.groupby(["symbol", "interval"])
+    total = len(groups)
 
     for g_idx, ((sym, ivl), grp) in enumerate(groups):
         if g_idx % 30 == 0:
@@ -99,7 +97,7 @@ def compute_zscores(conn, signals: pd.DataFrame) -> pd.DataFrame:
         z_series = _zscore_series(price_df["close"])
 
         for _, sig in grp.iterrows():
-            ts  = pd.Timestamp(sig["opened_at"])
+            ts = pd.Timestamp(sig["opened_at"])
             idx = price_df.index.searchsorted(ts, side="right") - 1
             if idx < MIN_BARS:
                 skipped += 1
@@ -108,27 +106,28 @@ def compute_zscores(conn, signals: pd.DataFrame) -> pd.DataFrame:
             if np.isnan(z):
                 skipped += 1
                 continue
-            results.append({
-                "id":          sig["id"],
-                "symbol":      sym,
-                "interval":    ivl,
-                "signal_type": sig["signal_type"],
-                "pnl":         sig["pnl"],
-                "vpmv":        sig["vpmv"],
-                "zscore":      z,
-            })
+            results.append(
+                {
+                    "id": sig["id"],
+                    "symbol": sym,
+                    "interval": ivl,
+                    "signal_type": sig["signal_type"],
+                    "pnl": sig["pnl"],
+                    "vpmv": sig["vpmv"],
+                    "zscore": z,
+                }
+            )
 
     print(f"\n  Atlanan: {skipped} (yetersiz veri)")
     return pd.DataFrame(results)
 
 
 def report(df: pd.DataFrame, threshold: float) -> None:
-    n = len(df)
-    vpmv_cut  = np.percentile(df["vpmv"],          100 - threshold)
-    z_cut_pos = np.percentile(df["zscore"].abs(),  100 - threshold)
+    vpmv_cut = np.percentile(df["vpmv"], 100 - threshold)
+    z_cut_pos = np.percentile(df["zscore"].abs(), 100 - threshold)
 
-    df["vpmv_top"]  = df["vpmv"] >= vpmv_cut
-    df["z_top"]     = df["zscore"].abs() >= z_cut_pos
+    df["vpmv_top"] = df["vpmv"] >= vpmv_cut
+    df["z_top"] = df["zscore"].abs() >= z_cut_pos
     df["confluence"] = df["vpmv_top"] & df["z_top"]
 
     def _stats(subset, label):
@@ -148,8 +147,8 @@ def report(df: pd.DataFrame, threshold: float) -> None:
     print(f"{'─'*75}")
 
     _stats(df, "Tüm sinyaller")
-    _stats(df[df["vpmv_top"]],   f"VPMV üst %{threshold:.0f}")
-    _stats(df[df["z_top"]],      f"|Z-score| üst %{threshold:.0f}")
+    _stats(df[df["vpmv_top"]], f"VPMV üst %{threshold:.0f}")
+    _stats(df[df["z_top"]], f"|Z-score| üst %{threshold:.0f}")
     _stats(df[df["confluence"]], f"Konfluans (VPMV + Z, üst %{threshold:.0f})")
 
     print(f"{'─'*75}")
@@ -163,17 +162,21 @@ def report(df: pd.DataFrame, threshold: float) -> None:
             if len(sub) == 0:
                 continue
             wins = (sub["pnl"] > 0).sum()
-            print(f"  {st:<8} {len(sub):>4} sinyal  "
-                  f"kazanma={wins/len(sub)*100:.1f}%  "
-                  f"ort={sub['pnl'].mean():+.3f}%")
+            print(
+                f"  {st:<8} {len(sub):>4} sinyal  "
+                f"kazanma={wins/len(sub)*100:.1f}%  "
+                f"ort={sub['pnl'].mean():+.3f}%"
+            )
 
     # Interval bazlı
     print(f"\nKonfluans — interval bazlı:")
     for ivl, sub in cf.groupby("interval"):
         wins = (sub["pnl"] > 0).sum()
-        print(f"  {ivl:<5} {len(sub):>4} sinyal  "
-              f"kazanma={wins/len(sub)*100:.1f}%  "
-              f"ort={sub['pnl'].mean():+.3f}%")
+        print(
+            f"  {ivl:<5} {len(sub):>4} sinyal  "
+            f"kazanma={wins/len(sub)*100:.1f}%  "
+            f"ort={sub['pnl'].mean():+.3f}%"
+        )
 
     # Z-score yönü: pozitif mi negatif mi daha iyi?
     print(f"\nKonfluans — Z-score yönüne göre:")
@@ -183,9 +186,11 @@ def report(df: pd.DataFrame, threshold: float) -> None:
         if len(sub) == 0:
             continue
         wins = (sub["pnl"] > 0).sum()
-        print(f"  {label:<30} {len(sub):>4}  "
-              f"kazanma={wins/len(sub)*100:.1f}%  "
-              f"ort={sub['pnl'].mean():+.3f}%")
+        print(
+            f"  {label:<30} {len(sub):>4}  "
+            f"kazanma={wins/len(sub)*100:.1f}%  "
+            f"ort={sub['pnl'].mean():+.3f}%"
+        )
 
     # Eşik hassasiyet analizi
     print(f"\nEşik hassasiyeti (konfluans):")
@@ -197,19 +202,22 @@ def report(df: pd.DataFrame, threshold: float) -> None:
         if len(sub) == 0:
             continue
         wins = (sub["pnl"] > 0).sum()
-        print(f"  üst %{t:<3}  {len(sub):>6}  "
-              f"{wins/len(sub)*100:>7.1f}%  "
-              f"{sub['pnl'].mean():>+8.3f}%")
+        print(
+            f"  üst %{t:<3}  {len(sub):>6}  "
+            f"{wins/len(sub)*100:>7.1f}%  "
+            f"{sub['pnl'].mean():>+8.3f}%"
+        )
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--interval",  default=None)
-    parser.add_argument("--threshold", type=float, default=20.0,
-                        help="Üst yüzdelik eşik (varsayılan: 20)")
+    parser.add_argument("--interval", default=None)
+    parser.add_argument(
+        "--threshold", type=float, default=20.0, help="Üst yüzdelik eşik (varsayılan: 20)"
+    )
     args = parser.parse_args()
 
-    conn    = psycopg2.connect(DB_DSN)
+    conn = psycopg2.connect(DB_DSN)
     signals = fetch_signals(conn, args.interval)
     print(f"Toplam sinyal: {len(signals)}")
 

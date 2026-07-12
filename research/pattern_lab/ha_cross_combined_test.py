@@ -8,6 +8,7 @@ büyük, sonuçlar daha güvenilir olmalı.
 Aynı disiplin: SADECE 3 Tem 19:22:16 sonrası (temiz rejim) + split-period +
 OOS ekonomik etki (eşik ilk yarıdan türetilip ikinci yarıya sabit uygulanıyor).
 """
+
 import os
 import sys
 
@@ -18,19 +19,29 @@ import psycopg2
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from config import Config  # pylint: disable=wrong-import-position
-from utils.vpmv import compute_series  # pylint: disable=wrong-import-position
-from research.pattern_lab.vol_exhaustion_bt import _stats  # pylint: disable=wrong-import-position
-from research.pattern_lab.rsi_cross_vpmv_jump_bt import (  # pylint: disable=wrong-import-position
-    MIN_HISTORY, INTERVALS, CUTOFF, _fetch_symbol_history,
+from research.pattern_lab.do_break_gauss_economic_bt import (
+    _dollar_stats,  # pylint: disable=wrong-import-position
 )
-from research.pattern_lab.rsi_cross_candle_shape_bt import _classify  # pylint: disable=wrong-import-position
-from research.pattern_lab.do_break_gauss_economic_bt import _dollar_stats  # pylint: disable=wrong-import-position
+from research.pattern_lab.rsi_cross_candle_shape_bt import (
+    _classify,  # pylint: disable=wrong-import-position
+)
+from research.pattern_lab.rsi_cross_vpmv_jump_bt import (  # pylint: disable=wrong-import-position
+    CUTOFF,
+    INTERVALS,
+    MIN_HISTORY,
+    _fetch_symbol_history,
+)
+from research.pattern_lab.vol_exhaustion_bt import _stats  # pylint: disable=wrong-import-position
+from utils.vpmv import compute_series  # pylint: disable=wrong-import-position
 
 
 def _fetch_ha_cross_signals(interval: str) -> pd.DataFrame:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     q = """
         SELECT symbol, signal_type, realized_pnl, opened_at
@@ -56,8 +67,10 @@ def _print_tercile(df: pd.DataFrame, col: str, q1: float, q2: float) -> None:
     for name in ("düşük", "orta", "yüksek"):
         rets = d.loc[d["tercil"] == name, "realized_pnl"].to_numpy() / 100
         s = _stats(rets)
-        print(f"{name:10} {s.get('n',0):>7} {s.get('wr',0):>6} "
-              f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+        print(
+            f"{name:10} {s.get('n',0):>7} {s.get('wr',0):>6} "
+            f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+        )
 
 
 def _print_category(df: pd.DataFrame, categories: list) -> None:
@@ -65,8 +78,10 @@ def _print_category(df: pd.DataFrame, categories: list) -> None:
     for name in categories:
         rets = df.loc[df["kategori"] == name, "realized_pnl"].to_numpy() / 100
         s = _stats(rets)
-        print(f"{name:20} {s.get('n',0):>7} {s.get('wr',0):>6} "
-              f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+        print(
+            f"{name:20} {s.get('n',0):>7} {s.get('wr',0):>6} "
+            f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+        )
 
 
 def run():
@@ -98,12 +113,14 @@ def run():
                 bar = hist.iloc[i]
                 kategori = _classify(bar)
 
-                rows.append({
-                    "jump": post_v - pre_v,
-                    "kategori": kategori,
-                    "realized_pnl": row["realized_pnl"],
-                    "opened_at": row["opened_at"],
-                })
+                rows.append(
+                    {
+                        "jump": post_v - pre_v,
+                        "kategori": kategori,
+                        "realized_pnl": row["realized_pnl"],
+                        "opened_at": row["opened_at"],
+                    }
+                )
 
     df = pd.DataFrame(rows)
     print(f"\ntoplam eşleşen sinyal: {len(df):,}\n")
@@ -113,8 +130,10 @@ def run():
 
     s = _stats(df["realized_pnl"].to_numpy() / 100)
     print(f"{'grup':20} {'n':>7} {'WR%':>6} {'ort%':>8} {'PF':>7}")
-    print(f"{'baseline (tümü)':20} {s.get('n',0):>7} {s.get('wr',0):>6} "
-          f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+    print(
+        f"{'baseline (tümü)':20} {s.get('n',0):>7} {s.get('wr',0):>6} "
+        f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+    )
 
     # ── 1. VPMV sıçraması ──
     q1, q2 = df["jump"].quantile([0.333, 0.667])
@@ -162,8 +181,10 @@ def run():
         if s.get("n", 0) == 0:
             print(f"{name:38} {'0':>6}")
             continue
-        print(f"{name:38} {s['n']:>6} {s['wr']:>6} {s['avg_usd']:>12} "
-              f"{s['total_usd']:>10} {s['usd_per_month']:>10}")
+        print(
+            f"{name:38} {s['n']:>6} {s['wr']:>6} {s['avg_usd']:>12} "
+            f"{s['total_usd']:>10} {s['usd_per_month']:>10}"
+        )
 
 
 if __name__ == "__main__":

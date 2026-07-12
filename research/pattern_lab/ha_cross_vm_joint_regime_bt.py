@@ -21,6 +21,7 @@ Veri: price_data (1m, buy_volume/sell_volume — [[project_directional_volume]])
 Look-ahead yok: V/M SADECE geçmiş barlarla (rolling 50/100) hesaplanıyor;
 merge_regime'in (opened_at-15dk) kesme mantığıyla bar-kapanış güvenliği korunuyor.
 """
+
 import os
 import sys
 
@@ -32,22 +33,33 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from config import Config  # pylint: disable=wrong-import-position
 from indicators.core import calculate_rsi  # pylint: disable=wrong-import-position
 from research.pattern_lab.rsi_cross_volbreakout_regime_bt import (  # pylint: disable=wrong-import-position
-    _fetch_signals, _merge_regime,
+    _fetch_signals,
+    _merge_regime,
 )
-from research.pattern_lab.threshold_optimizer import _run_single_var_on_df  # pylint: disable=wrong-import-position
-from utils.preprocessing import normalize_momentum_0_100, normalize_volume_0_100  # pylint: disable=wrong-import-position
+from research.pattern_lab.threshold_optimizer import (
+    _run_single_var_on_df,  # pylint: disable=wrong-import-position
+)
+from utils.preprocessing import (  # pylint: disable=wrong-import-position
+    normalize_momentum_0_100,
+    normalize_volume_0_100,
+)
 
 INDICATOR = "HA_Cross"
 DAYS = 20  # buy_volume temiz kapsamı 22 Haziran'dan itibaren ([[project_directional_volume]])
 BAR_DURATION = pd.Timedelta(minutes=15)
-M_THRESHOLD = 90  # ampirik: BTCUSDT'de M>=95 barların sadece %0.7'si, sigmoid pratikte hiç 100'e değmiyor
+M_THRESHOLD = (
+    90  # ampirik: BTCUSDT'de M>=95 barların sadece %0.7'si, sigmoid pratikte hiç 100'e değmiyor
+)
 LOOKBACK_BARS = 8  # ~2 saat @ 15m — V100_kirmizi'de kullanılan pencereyle aynı
 
 
 def _fetch_15m_with_dir_volume(symbols: list) -> pd.DataFrame:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     q = f"""
         SELECT symbol, time_bucket('15 minutes', timestamp) AS ts,
@@ -91,7 +103,11 @@ def _fetch_regime_vm(symbols: list, side: float, col_name: str) -> pd.DataFrame:
             continue
         state = _vm_joint_series(g, side)
         out.append(pd.DataFrame({"symbol": sym, "ts": g["ts"], col_name: state}))
-    return pd.concat(out, ignore_index=True) if out else pd.DataFrame(columns=["symbol", "ts", col_name])
+    return (
+        pd.concat(out, ignore_index=True)
+        if out
+        else pd.DataFrame(columns=["symbol", "ts", col_name])
+    )
 
 
 def run() -> None:
@@ -104,11 +120,15 @@ def run() -> None:
         col_name = "vm_joint_extreme"
         regime_df = _fetch_regime_vm(sig_df["symbol"].unique().tolist(), side, col_name)
         merged = _merge_regime(sig_df, regime_df, col_name, BAR_DURATION)
-        print(f"{INDICATOR} — {direction}: {len(sig_df):,} sinyal, {len(merged):,} durumla eşleşti "
-              f"(V>=99.99 VE M>={M_THRESHOLD} oranı={merged[col_name].mean():.2%})")
+        print(
+            f"{INDICATOR} — {direction}: {len(sig_df):,} sinyal, {len(merged):,} durumla eşleşti "
+            f"(V>=99.99 VE M>={M_THRESHOLD} oranı={merged[col_name].mean():.2%})"
+        )
 
         if merged[col_name].sum() < 30:
-            print(f"  Olay sayısı çok az ({int(merged[col_name].sum())}), güvenilir test için yetersiz.\n")
+            print(
+                f"  Olay sayısı çok az ({int(merged[col_name].sum())}), güvenilir test için yetersiz.\n"
+            )
             continue
 
         label = f"{INDICATOR} — {direction} — V+M birlikte aşırı (V>=99.99, M>={M_THRESHOLD})"

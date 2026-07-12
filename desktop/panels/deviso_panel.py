@@ -24,14 +24,14 @@ from PyQt6.QtWidgets import (  # pylint: disable=no-name-in-module
 
 from desktop.theme import COLORS
 
-_COL_RANK   = 0
+_COL_RANK = 0
 _COL_SYMBOL = 1
-_COL_TF     = 2
-_COL_DIR    = 3
-_COL_SCORE  = 4
-_COL_DELTA  = 5
-_COL_RATIO  = 6
-_COL_TIME   = 7
+_COL_TF = 2
+_COL_DIR = 3
+_COL_SCORE = 4
+_COL_DELTA = 5
+_COL_RATIO = 6
+_COL_TIME = 7
 _HEADERS = ["#", "Sembol", "TF", "Yön", "Score", "Δ", "Ratio", "Zaman"]
 
 _TOOLTIPS = [
@@ -45,19 +45,20 @@ _TOOLTIPS = [
     "Sinyalin açılma zamanı",
 ]
 
-_C_GREEN  = QColor(COLORS["green"])
-_C_RED    = QColor(COLORS["red"])
-_C_MUTED  = QColor(COLORS["text_muted"])
-_C_WHITE  = QColor(COLORS["text_primary"])
+_C_GREEN = QColor(COLORS["green"])
+_C_RED = QColor(COLORS["red"])
+_C_MUTED = QColor(COLORS["text_muted"])
+_C_WHITE = QColor(COLORS["text_primary"])
 
-_BG_HIGH  = QColor(0, 120, 40, 100)
-_BG_LOW   = QColor(180, 20, 20, 80)
+_BG_HIGH = QColor(0, 120, 40, 100)
+_BG_LOW = QColor(180, 20, 20, 80)
 
 _TF_OPTIONS = ["Tüm TF", "1m", "5m", "15m", "1h", "4h", "1d"]
 
 
 class _NumItem(QTableWidgetItem):
     """Sayısal sıralama için UserRole verisini kullanan item."""
+
     def __lt__(self, other: "QTableWidgetItem") -> bool:
         v1 = self.data(Qt.ItemDataRole.UserRole)
         v2 = other.data(Qt.ItemDataRole.UserRole)
@@ -150,11 +151,13 @@ class DevisoPanel(QWidget):
             _COL_SYMBOL, QHeaderView.ResizeMode.ResizeToContents
         )
         self._table.setSortingEnabled(True)
-        self._table.setStyleSheet("""
+        self._table.setStyleSheet(
+            """
             QTableWidget { font-size: 12px; }
             QHeaderView::section { font-size: 11px; font-weight: bold; }
             QHeaderView::section:hover { background: #2a2a2a; }
-        """)
+        """
+        )
 
         bold = QFont()
         bold.setBold(True)
@@ -178,7 +181,7 @@ class DevisoPanel(QWidget):
         for name in ("tümü", "long", "short"):
             btn = getattr(self, f"_btn_{name}", None)
             if btn:
-                active = (name == label.lower())
+                active = name == label.lower()
                 btn.setChecked(active)
                 btn.setStyleSheet(self._btn_style(active))
         self._refresh()
@@ -230,7 +233,9 @@ class DevisoPanel(QWidget):
         with_score = sum(1 for r in rows if r.get("devisso_score") is not None)
         shown = len(rows)
         if shown < total:
-            self._status.setText(f"{shown}/{total} sinyal gösteriliyor | {with_score} devisso hesaplı")
+            self._status.setText(
+                f"{shown}/{total} sinyal gösteriliyor | {with_score} devisso hesaplı"
+            )
         else:
             self._status.setText(f"{total} aktif sinyal | {with_score} devisso hesaplı")
 
@@ -247,7 +252,9 @@ class DevisoPanel(QWidget):
             rank_item.setForeground(_C_MUTED)
             self._table.setItem(i, _COL_RANK, rank_item)
 
-            sym_item = _item(r.get("symbol", ""), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            sym_item = _item(
+                r.get("symbol", ""), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            )
             sym_item.setForeground(_C_WHITE)
             self._table.setItem(i, _COL_SYMBOL, sym_item)
 

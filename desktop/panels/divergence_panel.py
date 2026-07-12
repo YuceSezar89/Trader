@@ -20,9 +20,9 @@ from PyQt6.QtWidgets import (  # pylint: disable=no-name-in-module
     QHeaderView,
     QLabel,
     QLineEdit,
-    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -35,31 +35,43 @@ pg.setConfigOption("foreground", "#555566")
 _COLS = ["Sembol", "Z-score", "VPMV", "Rank", "Zaman"]
 _COL_SYMBOL = 0
 _COL_ZSCORE = 1
-_COL_VPMV   = 2
-_COL_RANK   = 3
-_COL_TIME   = 4
+_COL_VPMV = 2
+_COL_RANK = 3
+_COL_TIME = 4
 
-_C_VPMV_HIGH = QColor(80,  200,  80)
-_C_VPMV_MID  = QColor(200, 180,  60)
-_C_VPMV_LOW  = QColor(200,  80,  80)
+_C_VPMV_HIGH = QColor(80, 200, 80)
+_C_VPMV_MID = QColor(200, 180, 60)
+_C_VPMV_LOW = QColor(200, 80, 80)
 
-_C_GREEN       = QColor(COLORS["green"])
-_C_RED         = QColor(COLORS["red"])
-_C_MUTED       = QColor(COLORS["text_muted"])
+_C_GREEN = QColor(COLORS["green"])
+_C_RED = QColor(COLORS["red"])
+_C_MUTED = QColor(COLORS["text_muted"])
 _C_TRANSPARENT = QColor(0, 0, 0, 0)
 
 _BG_GREEN_STRONG = QColor(0, 120, 40, 150)
-_BG_GREEN_SOFT   = QColor(0, 80, 20, 80)
-_BG_RED_STRONG   = QColor(180, 20, 20, 150)
-_BG_RED_SOFT     = QColor(120, 10, 10, 80)
+_BG_GREEN_SOFT = QColor(0, 80, 20, 80)
+_BG_RED_STRONG = QColor(180, 20, 20, 150)
+_BG_RED_SOFT = QColor(120, 10, 10, 80)
 
 _PALETTE = [
-    (100, 220, 100), (220, 100, 100), (100, 160, 240),
-    (240, 180,  80), (180, 100, 240), (80,  220, 220),
-    (240, 240,  80), (240, 140, 180), (140, 240, 160),
-    (200, 160, 240), (240, 140,  80), (80,  180, 200),
-    (160, 240, 100), (240, 100, 140), (100, 200, 240),
-    (200, 240, 120), (240, 200,  80), (120, 120, 240),
+    (100, 220, 100),
+    (220, 100, 100),
+    (100, 160, 240),
+    (240, 180, 80),
+    (180, 100, 240),
+    (80, 220, 220),
+    (240, 240, 80),
+    (240, 140, 180),
+    (140, 240, 160),
+    (200, 160, 240),
+    (240, 140, 80),
+    (80, 180, 200),
+    (160, 240, 100),
+    (240, 100, 140),
+    (100, 200, 240),
+    (200, 240, 120),
+    (240, 200, 80),
+    (120, 120, 240),
 ]
 
 
@@ -91,9 +103,9 @@ def _make_table() -> QTableWidget:
     # görünümü verir, sürekli yeniden ölçüm olmadan.
     hh.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
     hh.setSectionResizeMode(_COL_SYMBOL, QHeaderView.ResizeMode.Interactive)
-    hh.setSectionResizeMode(_COL_VPMV,   QHeaderView.ResizeMode.Interactive)
-    hh.setSectionResizeMode(_COL_RANK,   QHeaderView.ResizeMode.Interactive)
-    hh.setSectionResizeMode(_COL_TIME,   QHeaderView.ResizeMode.Interactive)
+    hh.setSectionResizeMode(_COL_VPMV, QHeaderView.ResizeMode.Interactive)
+    hh.setSectionResizeMode(_COL_RANK, QHeaderView.ResizeMode.Interactive)
+    hh.setSectionResizeMode(_COL_TIME, QHeaderView.ResizeMode.Interactive)
     return t
 
 
@@ -113,10 +125,10 @@ class DivergencePanel(QWidget):
     """Z-score çizgi grafik + pozitif/negatif ayrışma tabloları."""
 
     _INDICATOR_FILTERS = [
-        ("Tümü",        ""),
-        ("RSI Cross",   "RSI_Cross"),
-        ("Supertrend",  "Supertrend"),
-        ("HA Cross",    "HA_Cross"),
+        ("Tümü", ""),
+        ("RSI Cross", "RSI_Cross"),
+        ("Supertrend", "Supertrend"),
+        ("HA Cross", "HA_Cross"),
         ("MA200 Cross", "MA200_Cross"),
     ]
 
@@ -159,9 +171,7 @@ class DivergencePanel(QWidget):
         ctrl.addWidget(self._ind_combo)
         ctrl.addStretch()
         self._status_label = QLabel("Sinyal bekleniyor…")
-        self._status_label.setStyleSheet(
-            f"color: {COLORS['text_muted']}; font-size: 11px;"
-        )
+        self._status_label.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px;")
         ctrl.addWidget(self._status_label)
         root.addLayout(ctrl)
 
@@ -284,7 +294,7 @@ class DivergencePanel(QWidget):
 
     def _update_chart(self, series: dict) -> None:
         active = set(series.keys())
-        stale  = set(self._curves.keys()) - active
+        stale = set(self._curves.keys()) - active
 
         # Eski sembolleri kaldır
         for sym in stale:
@@ -334,21 +344,21 @@ class DivergencePanel(QWidget):
     # ── Tablo doldurma ────────────────────────────────────────────────────
 
     def _populate(self, result: dict) -> None:
-        current        = result.get("current", {})
-        diverge_since  = result.get("diverge_since", {})
+        current = result.get("current", {})
+        diverge_since = result.get("diverge_since", {})
         indicators_map = result.get("indicators", {})
-        series         = result.get("series", {})
-        vpmv_map       = result.get("vpmv", {})
+        series = result.get("series", {})
+        vpmv_map = result.get("vpmv", {})
 
         ind_filter = self._indicator_filter
         if ind_filter:
             current = {
-                sym: z for sym, z in current.items()
+                sym: z
+                for sym, z in current.items()
                 if ind_filter in (indicators_map.get(sym) or "")
             }
             series = {
-                sym: s for sym, s in series.items()
-                if ind_filter in (indicators_map.get(sym) or "")
+                sym: s for sym, s in series.items() if ind_filter in (indicators_map.get(sym) or "")
             }
 
         self._update_chart(series)
@@ -358,11 +368,13 @@ class DivergencePanel(QWidget):
 
         pos_rows = sorted(
             [(sym, z) for sym, z in current.items() if z > 0],
-            key=lambda x: _score(x[0], x[1]), reverse=True,
+            key=lambda x: _score(x[0], x[1]),
+            reverse=True,
         )
         neg_rows = sorted(
             [(sym, z) for sym, z in current.items() if z <= 0],
-            key=lambda x: _score(x[0], x[1]), reverse=True,
+            key=lambda x: _score(x[0], x[1]),
+            reverse=True,
         )
 
         pos_deltas = {
@@ -379,10 +391,22 @@ class DivergencePanel(QWidget):
         self._prev_pos_ranks = {sym: i for i, (sym, _) in enumerate(pos_rows)}
         self._prev_neg_ranks = {sym: i for i, (sym, _) in enumerate(neg_rows)}
 
-        self._fill_table(self._pos_table, pos_rows, diverge_since, vpmv_map,
-                         positive=True,  rank_deltas=pos_deltas)
-        self._fill_table(self._neg_table, neg_rows, diverge_since, vpmv_map,
-                         positive=False, rank_deltas=neg_deltas)
+        self._fill_table(
+            self._pos_table,
+            pos_rows,
+            diverge_since,
+            vpmv_map,
+            positive=True,
+            rank_deltas=pos_deltas,
+        )
+        self._fill_table(
+            self._neg_table,
+            neg_rows,
+            diverge_since,
+            vpmv_map,
+            positive=False,
+            rank_deltas=neg_deltas,
+        )
         self._apply_filter(self._pos_table, self._pos_search)
         self._apply_filter(self._neg_table, self._neg_search)
 
@@ -408,13 +432,13 @@ class DivergencePanel(QWidget):
         for row_idx, (symbol, z) in enumerate(rows):
             delta = rank_deltas.get(symbol, 0)
             if delta > 0:
-                sym_text  = f"{symbol} ↑{delta}"
+                sym_text = f"{symbol} ↑{delta}"
                 sym_color = _C_GREEN
             elif delta < 0:
-                sym_text  = f"{symbol} ↓{abs(delta)}"
+                sym_text = f"{symbol} ↓{abs(delta)}"
                 sym_color = _C_RED
             else:
-                sym_text  = symbol
+                sym_text = symbol
                 sym_color = z_color
             sym_item = QTableWidgetItem(sym_text)
             sym_item.setFont(bold)
@@ -450,8 +474,7 @@ class DivergencePanel(QWidget):
 
             rank = self._ranking.get(symbol)
             rank_item = _NumericItem(str(rank) if rank is not None else "—")
-            rank_item.setData(Qt.ItemDataRole.UserRole,
-                              rank if rank is not None else 9999)
+            rank_item.setData(Qt.ItemDataRole.UserRole, rank if rank is not None else 9999)
             rank_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             rank_item.setFont(mono)
             rank_item.setForeground(_C_MUTED)
@@ -461,9 +484,7 @@ class DivergencePanel(QWidget):
             if ts:
                 dt = datetime.fromtimestamp(ts)
                 time_str = (
-                    dt.strftime("%H:%M")
-                    if dt.date() == now.date()
-                    else dt.strftime("%m/%d %H:%M")
+                    dt.strftime("%H:%M") if dt.date() == now.date() else dt.strftime("%m/%d %H:%M")
                 )
             else:
                 time_str = "—"

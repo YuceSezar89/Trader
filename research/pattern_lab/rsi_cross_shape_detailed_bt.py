@@ -9,6 +9,7 @@ düşüyordu. Bu script her kategori İÇİNDE kazanan yüzdenin büyüklüğün
 Marubozu) daha zayıfından gerçekten farklı performans verip vermediğini
 ölçer. st_confirmed (v2-23) ile birlikte de gösteriliyor.
 """
+
 import os
 import sys
 
@@ -19,9 +20,16 @@ import psycopg2
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from config import Config  # pylint: disable=wrong-import-position
+from research.pattern_lab.do_break_gauss_economic_bt import (  # pylint: disable=wrong-import-position
+    POSITION_USD,
+    ROUND_TRIP_FEE,
+)
+from research.pattern_lab.rsi_cross_vpmv_jump_bt import (  # pylint: disable=wrong-import-position
+    INTERVALS,
+    _fetch_symbol_history,
+    _signal_bar_ts,
+)
 from research.pattern_lab.vol_exhaustion_bt import _stats  # pylint: disable=wrong-import-position
-from research.pattern_lab.rsi_cross_vpmv_jump_bt import INTERVALS, _fetch_symbol_history, _signal_bar_ts  # pylint: disable=wrong-import-position
-from research.pattern_lab.do_break_gauss_economic_bt import POSITION_USD, ROUND_TRIP_FEE  # pylint: disable=wrong-import-position
 
 CATEGORIES = ["gövde-baskın", "üst-fitil-baskın", "alt-fitil-baskın"]
 MAG_TIERS = ["düşük", "orta", "yüksek"]
@@ -46,8 +54,11 @@ def _classify_detailed(row) -> tuple:
 
 def _fetch_signals(interval: str) -> pd.DataFrame:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     q = """
         SELECT symbol, signal_type, st_confirmed, realized_pnl, opened_at
@@ -72,8 +83,10 @@ def _dollar_stats(df: pd.DataFrame, days_span: float) -> dict:
     pnl = df["realized_pnl"].to_numpy() / 100 * POSITION_USD - ROUND_TRIP_FEE
     total = float(pnl.sum())
     return {
-        "n": len(pnl), "wr": round(float((pnl > 0).mean() * 100), 1),
-        "avg_usd": round(float(pnl.mean()), 3), "total_usd": round(total, 1),
+        "n": len(pnl),
+        "wr": round(float((pnl > 0).mean() * 100), 1),
+        "avg_usd": round(float(pnl.mean()), 3),
+        "total_usd": round(total, 1),
         "usd_per_month": round(total / days_span * 30, 1),
     }
 
@@ -98,13 +111,15 @@ def run():
                 kategori, magnitude = _classify_detailed(hist.iloc[i])
                 if kategori == "belirsiz" or not np.isfinite(magnitude):
                     continue
-                rows.append({
-                    "kategori": kategori,
-                    "magnitude": magnitude,
-                    "st_confirmed": row["st_confirmed"],
-                    "realized_pnl": row["realized_pnl"],
-                    "opened_at": row["opened_at"],
-                })
+                rows.append(
+                    {
+                        "kategori": kategori,
+                        "magnitude": magnitude,
+                        "st_confirmed": row["st_confirmed"],
+                        "realized_pnl": row["realized_pnl"],
+                        "opened_at": row["opened_at"],
+                    }
+                )
 
     df = pd.DataFrame(rows)
     print(f"\ntoplam eşleşen sinyal: {len(df):,}\n")
@@ -119,7 +134,9 @@ def run():
         vals = df.loc[mask, "magnitude"]
         q1, q2 = vals.quantile([0.333, 0.667])
         df.loc[mask, "mag_tier"] = pd.cut(
-            vals, bins=[-np.inf, q1, q2, np.inf], labels=MAG_TIERS,
+            vals,
+            bins=[-np.inf, q1, q2, np.inf],
+            labels=MAG_TIERS,
         ).astype(str)
 
     print(f"{'kategori':20} {'büyüklük':10} {'n':>7} {'WR%':>6} {'ort%':>8} {'PF':>7}")
@@ -127,16 +144,22 @@ def run():
         for tier in MAG_TIERS:
             sub = df[(df["kategori"] == kategori) & (df["mag_tier"] == tier)]
             s = _pf(sub)
-            print(f"{kategori:20} {tier:10} {s.get('n',0):>7} {s.get('wr',0):>6} "
-                  f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+            print(
+                f"{kategori:20} {tier:10} {s.get('n',0):>7} {s.get('wr',0):>6} "
+                f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+            )
 
     print("\n── SADECE st_confirmed=True içinde (gövde-baskın, büyüklüğe göre) ──")
-    only_true_govde = df[(df["st_confirmed"] == True) & (df["kategori"] == "gövde-baskın")]  # noqa: E712  pylint: disable=singleton-comparison
+    only_true_govde = df[
+        (df["st_confirmed"] == True) & (df["kategori"] == "gövde-baskın")
+    ]  # noqa: E712  pylint: disable=singleton-comparison
     print(f"{'büyüklük':10} {'n':>7} {'WR%':>6} {'ort%':>8} {'PF':>7}")
     for tier in MAG_TIERS:
         sub = only_true_govde[only_true_govde["mag_tier"] == tier]
         s = _pf(sub)
-        print(f"{tier:10} {s.get('n',0):>7} {s.get('wr',0):>6} {s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+        print(
+            f"{tier:10} {s.get('n',0):>7} {s.get('wr',0):>6} {s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+        )
 
     days_span = (df["opened_at"].max() - df["opened_at"].min()).total_seconds() / 86400
     print(f"\n── Ekonomik etki (${POSITION_USD:.0f} pozisyon, {days_span:.1f} gün) ──")
@@ -144,7 +167,9 @@ def run():
     best_govde_true = only_true_govde[only_true_govde["mag_tier"] == "yüksek"]
     groups = {
         "baseline (tüm RSI_Cross)": df,
-        "st_confirmed=True + gövde-baskın (hepsi)": df[(df["st_confirmed"] == True) & (df["kategori"] == "gövde-baskın")],  # noqa: E712 pylint: disable=singleton-comparison
+        "st_confirmed=True + gövde-baskın (hepsi)": df[
+            (df["st_confirmed"] == True) & (df["kategori"] == "gövde-baskın")
+        ],  # noqa: E712 pylint: disable=singleton-comparison
         "st_confirmed=True + gövde-baskın + YÜKSEK büyüklük": best_govde_true,
     }
     for name, g in groups.items():
@@ -152,8 +177,10 @@ def run():
         if s.get("n", 0) == 0:
             print(f"{name:40} {'0':>7}")
             continue
-        print(f"{name:40} {s['n']:>7} {s['wr']:>6} {s['avg_usd']:>12} "
-              f"{s['total_usd']:>10} {s['usd_per_month']:>10}")
+        print(
+            f"{name:40} {s['n']:>7} {s['wr']:>6} {s['avg_usd']:>12} "
+            f"{s['total_usd']:>10} {s['usd_per_month']:>10}"
+        )
 
 
 if __name__ == "__main__":

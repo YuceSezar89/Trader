@@ -17,6 +17,7 @@ bar çekmeye gerek yok, tek SQL sorgusu yeterli (çok daha hızlı).
 
 Kullanım: python -m research.pattern_lab.oi_theory_bt
 """
+
 import json
 import warnings
 
@@ -47,16 +48,21 @@ def _report_correlation(df: pd.DataFrame, label: str) -> None:
 
 def main() -> None:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         SELECT symbol, signal_type, interval, opened_at, oi_data, realized_pnl
         FROM signals
         WHERE status='closed' AND realized_pnl IS NOT NULL
           AND interval IN ('5m', '15m') AND oi_data IS NOT NULL
-    """)
+    """
+    )
     rows = cur.fetchall()
     conn.close()
     print(f"Toplam sinyal (oi_data dolu): {len(rows)}")
@@ -69,10 +75,16 @@ def main() -> None:
             continue
         if oi_change is None:
             continue
-        data.append({
-            "symbol": symbol, "signal_type": signal_type, "interval": interval,
-            "opened_at": opened_at, "oi_change": float(oi_change), "realized_pnl": pnl,
-        })
+        data.append(
+            {
+                "symbol": symbol,
+                "signal_type": signal_type,
+                "interval": interval,
+                "opened_at": opened_at,
+                "oi_change": float(oi_change),
+                "realized_pnl": pnl,
+            }
+        )
     df = pd.DataFrame(data)
     print(f"Geçerli OI verisi: {len(df)}\n")
 
@@ -85,10 +97,14 @@ def main() -> None:
         rising = sub[sub["oi_change"] > 0]
         falling = sub[sub["oi_change"] <= 0]
         print(f"  {sig_type}:")
-        print(f"    OI artıyor  (n={len(rising)}): PF={_pf(rising['realized_pnl']):.3f}, "
-              f"WR={(rising['realized_pnl'] > 0).mean() * 100:.1f}%")
-        print(f"    OI azalıyor (n={len(falling)}): PF={_pf(falling['realized_pnl']):.3f}, "
-              f"WR={(falling['realized_pnl'] > 0).mean() * 100:.1f}%")
+        print(
+            f"    OI artıyor  (n={len(rising)}): PF={_pf(rising['realized_pnl']):.3f}, "
+            f"WR={(rising['realized_pnl'] > 0).mean() * 100:.1f}%"
+        )
+        print(
+            f"    OI azalıyor (n={len(falling)}): PF={_pf(falling['realized_pnl']):.3f}, "
+            f"WR={(falling['realized_pnl'] > 0).mean() * 100:.1f}%"
+        )
 
     print("\n=== PLACEBO (OI değişimi rastgele karıştırıldı) ===")
     rng = np.random.default_rng(42)

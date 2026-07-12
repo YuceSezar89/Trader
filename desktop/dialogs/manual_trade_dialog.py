@@ -1,6 +1,7 @@
 """
 ManualTradeDialog — paper trade'e manuel işlem ekleme dialog'u.
 """
+
 from __future__ import annotations
 
 import logging
@@ -59,7 +60,7 @@ class ManualTradeDialog(QDialog):
 
         # Yön
         dir_row = QHBoxLayout()
-        self._btn_long  = QPushButton("LONG")
+        self._btn_long = QPushButton("LONG")
         self._btn_short = QPushButton("SHORT")
         for btn in (self._btn_long, self._btn_short):
             btn.setCheckable(True)
@@ -139,10 +140,13 @@ class ManualTradeDialog(QDialog):
 
     def _get_current_price(self, symbol: str) -> float | None:
         try:
-            r = _redis.Redis.from_url(self._redis_url, socket_connect_timeout=2, decode_responses=True)
+            r = _redis.Redis.from_url(
+                self._redis_url, socket_connect_timeout=2, decode_responses=True
+            )
             raw = r.get(f"ticker:{symbol}")
             if raw:
                 import json
+
                 d = json.loads(raw)
                 return float(d.get("price") or d.get("last_price") or 0) or None
         except Exception:
@@ -172,7 +176,8 @@ class ManualTradeDialog(QDialog):
         try:
             conn = psycopg2.connect(**self._db_config)
             with conn.cursor() as cur:
-                cur.execute("""
+                cur.execute(
+                    """
                     INSERT INTO paper_trades
                         (strategy, source, symbol, signal_type, interval,
                          position_usd, entry_price, stop_loss_price, take_profit_price,
@@ -181,7 +186,9 @@ class ManualTradeDialog(QDialog):
                         ('manual', 'manual', %s, %s, %s,
                          %s, %s, %s, %s,
                          'open', %s)
-                """, (symbol, self._direction, tf, _POSITION_USD, entry, sl, tp, now))
+                """,
+                    (symbol, self._direction, tf, _POSITION_USD, entry, sl, tp, now),
+                )
             conn.commit()
             conn.close()
         except Exception as exc:

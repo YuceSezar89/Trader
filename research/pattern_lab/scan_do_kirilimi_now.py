@@ -4,6 +4,7 @@ BTC filtresi GERÇEK (bypass yok) — canlı sistemin şu an ne göreceğini bir
 
 Kullanım: python -m research.pattern_lab.scan_do_kirilimi_now [sembol_limit]
 """
+
 import sys
 import warnings
 
@@ -13,28 +14,37 @@ import psycopg2
 warnings.filterwarnings("ignore")
 
 from config import Config
-from signals.do_kirilimi import do_kirilimi_detector, btc_day_context
+from signals.do_kirilimi import btc_day_context, do_kirilimi_detector
 
 
 def main(symbol_limit: int = 150):
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
 
     top_symbols = pd.read_sql(
         """SELECT symbol, sum(volume) v FROM cagg_5m
            WHERE bucket >= now() - interval '2 days'
            GROUP BY symbol ORDER BY v DESC LIMIT %s""",
-        conn, params=(symbol_limit,),
+        conn,
+        params=(symbol_limit,),
     )["symbol"].tolist()
     if "BTCUSDT" not in top_symbols:
         top_symbols.append("BTCUSDT")
 
-    btc_df = pd.read_sql(
-        "SELECT bucket, open, high, low, close, volume FROM cagg_5m WHERE symbol=%s ORDER BY bucket DESC LIMIT 320",
-        conn, params=("BTCUSDT",),
-    ).sort_values("bucket").reset_index(drop=True)
+    btc_df = (
+        pd.read_sql(
+            "SELECT bucket, open, high, low, close, volume FROM cagg_5m WHERE symbol=%s ORDER BY bucket DESC LIMIT 320",
+            conn,
+            params=("BTCUSDT",),
+        )
+        .sort_values("bucket")
+        .reset_index(drop=True)
+    )
     btc_df["open_time"] = (btc_df["bucket"] - pd.Timedelta(hours=3)).astype("int64") // 10**6
     btc_ctx = btc_day_context(btc_df)
     print(f"[BTC ctx] {btc_ctx}")
@@ -45,7 +55,8 @@ def main(symbol_limit: int = 150):
     for symbol in top_symbols:
         df = pd.read_sql(
             "SELECT bucket, open, high, low, close, volume FROM cagg_5m WHERE symbol=%s ORDER BY bucket DESC LIMIT 320",
-            conn, params=(symbol,),
+            conn,
+            params=(symbol,),
         )
         if df.empty:
             continue
@@ -58,11 +69,15 @@ def main(symbol_limit: int = 150):
             continue
         if result:
             fired.append((symbol, result))
-            print(f"  ✅ {symbol}: SİNYAL VAR fiyat={result['price']} pattern={result['pattern']} ayrisma={result['ayrisma']}")
+            print(
+                f"  ✅ {symbol}: SİNYAL VAR fiyat={result['price']} pattern={result['pattern']} ayrisma={result['ayrisma']}"
+            )
 
     conn.close()
     print()
-    print(f"=== SONUÇ: {len(fired)}/{len(top_symbols)} sembolde şu an gerçek filtreyle sinyal var ===")
+    print(
+        f"=== SONUÇ: {len(fired)}/{len(top_symbols)} sembolde şu an gerçek filtreyle sinyal var ==="
+    )
     if not fired:
         print("Hiçbiri şu an ateşlemiyor — bu normal (sinyal doğası gereği nadir).")
 

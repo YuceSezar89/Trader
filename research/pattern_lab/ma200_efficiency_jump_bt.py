@@ -20,6 +20,7 @@ ve 1 bar sonraki değer arasındaki sıçrama (jump) test ediliyor.
 Metodoloji: SADECE 3 Tem 19:22:16 sonrası (temiz rejim) + split-period.
 Örneklem küçük (330) — dikkatli yorumlanmalı.
 """
+
 import os
 import sys
 
@@ -31,16 +32,22 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from config import Config  # pylint: disable=wrong-import-position
 from indicators.core import calculate_rsi  # pylint: disable=wrong-import-position
-from research.pattern_lab.vol_exhaustion_bt import _stats  # pylint: disable=wrong-import-position
 from research.pattern_lab.rsi_cross_vpmv_jump_bt import (  # pylint: disable=wrong-import-position
-    MIN_HISTORY, INTERVALS, CUTOFF, _fetch_symbol_history,
+    CUTOFF,
+    INTERVALS,
+    MIN_HISTORY,
+    _fetch_symbol_history,
 )
+from research.pattern_lab.vol_exhaustion_bt import _stats  # pylint: disable=wrong-import-position
 
 
 def _fetch_ma200_signals(interval: str) -> pd.DataFrame:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     q = """
         SELECT symbol, signal_type, realized_pnl, opened_at
@@ -80,8 +87,10 @@ def _print_tercile_table(pairs: pd.DataFrame, q1: float, q2: float) -> None:
     for name in ("düşük", "orta", "yüksek"):
         rets = pairs.loc[pairs["tercil"] == name, "realized_pnl"].to_numpy() / 100
         s = _stats(rets)
-        print(f"{name:10} {s.get('n',0):>7} {s.get('wr',0):>6} "
-              f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+        print(
+            f"{name:10} {s.get('n',0):>7} {s.get('wr',0):>6} "
+            f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+        )
 
 
 def run():
@@ -108,11 +117,13 @@ def run():
                 post_v = eff_rank.iloc[i + 1]
                 if not (np.isfinite(pre_v) and np.isfinite(post_v)):
                     continue
-                all_pairs.append({
-                    "jump": post_v - pre_v,
-                    "realized_pnl": row["realized_pnl"],
-                    "opened_at": row["opened_at"],
-                })
+                all_pairs.append(
+                    {
+                        "jump": post_v - pre_v,
+                        "realized_pnl": row["realized_pnl"],
+                        "opened_at": row["opened_at"],
+                    }
+                )
 
     df = pd.DataFrame(all_pairs)
     print(f"\ntoplam eşleşen sinyal: {len(df):,}\n")
@@ -122,11 +133,15 @@ def run():
 
     s = _stats(df["realized_pnl"].to_numpy() / 100)
     print(f"{'grup':20} {'n':>7} {'WR%':>6} {'ort%':>8} {'PF':>7}")
-    print(f"{'baseline (tümü)':20} {s.get('n',0):>7} {s.get('wr',0):>6} "
-          f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+    print(
+        f"{'baseline (tümü)':20} {s.get('n',0):>7} {s.get('wr',0):>6} "
+        f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+    )
 
     q1, q2 = df["jump"].quantile([0.333, 0.667])
-    print(f"\n── Verimlilik sıçraması (post[+1] - pre[-1]) terciline göre ── (q1={q1:.1f}, q2={q2:.1f})")
+    print(
+        f"\n── Verimlilik sıçraması (post[+1] - pre[-1]) terciline göre ── (q1={q1:.1f}, q2={q2:.1f})"
+    )
     _print_tercile_table(df, q1, q2)
 
     t_min, t_max = df["opened_at"].min(), df["opened_at"].max()

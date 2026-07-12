@@ -19,6 +19,7 @@ Sonra mum 4 parçaya ayrılıyor (Pine'daki A%/K%/H%/L%, f_pct(base,value)=
 Veri: `signals` tablosundaki GERÇEK kapanmış RSI_Cross sinyalleri (st_confirmed
 dahil, v2-23 ile birlikte gösteriliyor).
 """
+
 import os
 import sys
 
@@ -30,9 +31,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from config import Config  # pylint: disable=wrong-import-position
 from indicators.core import calculate_rsi  # pylint: disable=wrong-import-position
+from research.pattern_lab.do_break_gauss_economic_bt import (  # pylint: disable=wrong-import-position
+    POSITION_USD,
+    ROUND_TRIP_FEE,
+)
+from research.pattern_lab.rsi_cross_vpmv_jump_bt import (  # pylint: disable=wrong-import-position
+    INTERVALS,
+    _fetch_symbol_history,
+    _signal_bar_ts,
+)
 from research.pattern_lab.vol_exhaustion_bt import _stats  # pylint: disable=wrong-import-position
-from research.pattern_lab.rsi_cross_vpmv_jump_bt import INTERVALS, _fetch_symbol_history, _signal_bar_ts  # pylint: disable=wrong-import-position
-from research.pattern_lab.do_break_gauss_economic_bt import POSITION_USD, ROUND_TRIP_FEE  # pylint: disable=wrong-import-position
 
 MIN_DIFF = 1e-9
 
@@ -43,8 +51,9 @@ def _pct(base: float, value: float) -> float:
     return 100.0 * (value - base) / base
 
 
-def _akhl(direction: str, o: float, h: float, l: float, c: float,
-          diff_prev: float, diff_now: float) -> tuple:
+def _akhl(
+    direction: str, o: float, h: float, l: float, c: float, diff_prev: float, diff_now: float
+) -> tuple:
     denom = diff_now - diff_prev
     if abs(denom) <= MIN_DIFF:
         return (np.nan,) * 4
@@ -66,8 +75,11 @@ def _akhl(direction: str, o: float, h: float, l: float, c: float,
 
 def _fetch_signals(interval: str) -> pd.DataFrame:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     q = """
         SELECT symbol, signal_type, st_confirmed, realized_pnl, opened_at
@@ -92,8 +104,10 @@ def _dollar_stats(df: pd.DataFrame, days_span: float) -> dict:
     pnl = df["realized_pnl"].to_numpy() / 100 * POSITION_USD - ROUND_TRIP_FEE
     total = float(pnl.sum())
     return {
-        "n": len(pnl), "wr": round(float((pnl > 0).mean() * 100), 1),
-        "avg_usd": round(float(pnl.mean()), 3), "total_usd": round(total, 1),
+        "n": len(pnl),
+        "wr": round(float((pnl > 0).mean() * 100), 1),
+        "avg_usd": round(float(pnl.mean()), 3),
+        "total_usd": round(total, 1),
         "usd_per_month": round(total / days_span * 30, 1),
     }
 
@@ -112,8 +126,10 @@ def _tercile_report(df: pd.DataFrame, col: str) -> None:
     ):
         sub = valid[mask]
         s = _pf(sub)
-        print(f"    {name:8} n={s.get('n',0):>6} WR%={s.get('wr',0):>6} "
-              f"ort%={s.get('ort_%',0):>7} PF={s.get('pf',0):>7}")
+        print(
+            f"    {name:8} n={s.get('n',0):>6} WR%={s.get('wr',0):>6} "
+            f"ort%={s.get('ort_%',0):>7} PF={s.get('pf',0):>7}"
+        )
 
 
 def run():
@@ -139,18 +155,29 @@ def run():
 
             for _, row in sub.iterrows():
                 i = ts_to_idx.get(_signal_bar_ts(row["opened_at"], interval))
-                if i is None or i - 1 < 0 or not (np.isfinite(diff[i - 1]) and np.isfinite(diff[i])):
+                if (
+                    i is None
+                    or i - 1 < 0
+                    or not (np.isfinite(diff[i - 1]) and np.isfinite(diff[i]))
+                ):
                     continue
                 direction = row["signal_type"]
-                a_pct, k_pct, h_pct, l_pct = _akhl(direction, o[i], h[i], l[i], c[i], diff[i - 1], diff[i])
+                a_pct, k_pct, h_pct, l_pct = _akhl(
+                    direction, o[i], h[i], l[i], c[i], diff[i - 1], diff[i]
+                )
                 if not all(np.isfinite(v) for v in (a_pct, k_pct, h_pct, l_pct)):
                     continue
-                rows.append({
-                    "a_pct": a_pct, "k_pct": k_pct, "h_pct": h_pct, "l_pct": l_pct,
-                    "st_confirmed": row["st_confirmed"],
-                    "realized_pnl": row["realized_pnl"],
-                    "opened_at": row["opened_at"],
-                })
+                rows.append(
+                    {
+                        "a_pct": a_pct,
+                        "k_pct": k_pct,
+                        "h_pct": h_pct,
+                        "l_pct": l_pct,
+                        "st_confirmed": row["st_confirmed"],
+                        "realized_pnl": row["realized_pnl"],
+                        "opened_at": row["opened_at"],
+                    }
+                )
 
     df = pd.DataFrame(rows)
     print(f"\ntoplam eşleşen (A/K/H/L hesaplanabilen) sinyal: {len(df):,}\n")
@@ -159,8 +186,10 @@ def run():
         return
 
     baseline = _pf(df)
-    print(f"baseline (tümü): n={baseline.get('n',0)} WR%={baseline.get('wr',0)} "
-          f"ort%={baseline.get('ort_%',0)} PF={baseline.get('pf',0)}\n")
+    print(
+        f"baseline (tümü): n={baseline.get('n',0)} WR%={baseline.get('wr',0)} "
+        f"ort%={baseline.get('ort_%',0)} PF={baseline.get('pf',0)}\n"
+    )
 
     print("── Terciller (tüm sinyaller) ──")
     for col in ("a_pct", "k_pct", "h_pct", "l_pct"):

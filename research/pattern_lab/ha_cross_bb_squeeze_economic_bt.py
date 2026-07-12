@@ -7,6 +7,7 @@ uygulanıyor, $100 pozisyon + gerçek fee (do_break_gauss_economic_bt.py deseni)
 Ayrıca mum-şekli filtresiyle (HA_Cross'un daha önce en iyi ekonomik sonucu
 veren filtresi, +$1410/ay) birleştirilince ne olduğu da test ediliyor.
 """
+
 import os
 import sys
 
@@ -15,11 +16,23 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from research.pattern_lab.rsi_cross_vpmv_jump_bt import MIN_HISTORY, INTERVALS, _fetch_symbol_history  # pylint: disable=wrong-import-position
-from research.pattern_lab.ha_cross_combined_test import _fetch_ha_cross_signals  # pylint: disable=wrong-import-position
-from research.pattern_lab.ha_cross_bb_squeeze_bt import _bb_width_rank_series  # pylint: disable=wrong-import-position
-from research.pattern_lab.rsi_cross_candle_shape_bt import _classify  # pylint: disable=wrong-import-position
-from research.pattern_lab.do_break_gauss_economic_bt import _dollar_stats  # pylint: disable=wrong-import-position
+from research.pattern_lab.do_break_gauss_economic_bt import (
+    _dollar_stats,  # pylint: disable=wrong-import-position
+)
+from research.pattern_lab.ha_cross_bb_squeeze_bt import (
+    _bb_width_rank_series,  # pylint: disable=wrong-import-position
+)
+from research.pattern_lab.ha_cross_combined_test import (
+    _fetch_ha_cross_signals,  # pylint: disable=wrong-import-position
+)
+from research.pattern_lab.rsi_cross_candle_shape_bt import (
+    _classify,  # pylint: disable=wrong-import-position
+)
+from research.pattern_lab.rsi_cross_vpmv_jump_bt import (  # pylint: disable=wrong-import-position
+    INTERVALS,
+    MIN_HISTORY,
+    _fetch_symbol_history,
+)
 
 
 def run():
@@ -46,12 +59,14 @@ def run():
                     continue
                 bar = hist.iloc[i]
                 kategori = _classify(bar)
-                rows.append({
-                    "bb_rank": val,
-                    "kategori": kategori,
-                    "realized_pnl": row["realized_pnl"],
-                    "opened_at": row["opened_at"],
-                })
+                rows.append(
+                    {
+                        "bb_rank": val,
+                        "kategori": kategori,
+                        "realized_pnl": row["realized_pnl"],
+                        "opened_at": row["opened_at"],
+                    }
+                )
 
     df = pd.DataFrame(rows)
     print(f"\ntoplam eşleşen sinyal: {len(df):,}\n")
@@ -92,8 +107,10 @@ def run():
         if s.get("n", 0) == 0:
             print(f"{name:38} {'0':>6}")
             continue
-        print(f"{name:38} {s['n']:>6} {s['wr']:>6} {s['avg_usd']:>12} "
-              f"{s['total_usd']:>10} {s['usd_per_month']:>10}")
+        print(
+            f"{name:38} {s['n']:>6} {s['wr']:>6} {s['avg_usd']:>12} "
+            f"{s['total_usd']:>10} {s['usd_per_month']:>10}"
+        )
 
 
 if __name__ == "__main__":

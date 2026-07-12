@@ -16,6 +16,7 @@ negatif = "zaten hareketliyken sönümlenen" sinyal.
 
 Kullanım: python -m research.pattern_lab.evol_trend_bt
 """
+
 import warnings
 
 import numpy as np
@@ -75,8 +76,11 @@ def _report_correlation(df: pd.DataFrame, label: str) -> None:
 
 def main() -> None:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
@@ -91,11 +95,15 @@ def main() -> None:
         trend = _compute_evol_trend(bars)
         if trend is None:
             continue
-        rows.append({
-            "symbol": sig["symbol"], "signal_type": sig["signal_type"],
-            "opened_at": sig["opened_at"], "evol_trend": trend,
-            "realized_pnl": sig["realized_pnl"],
-        })
+        rows.append(
+            {
+                "symbol": sig["symbol"],
+                "signal_type": sig["signal_type"],
+                "opened_at": sig["opened_at"],
+                "evol_trend": trend,
+                "realized_pnl": sig["realized_pnl"],
+            }
+        )
         if i % 5000 == 0:
             print(f"  [{i}/{len(signals)}] işlendi, {len(rows)} geçerli satır")
 
@@ -112,10 +120,14 @@ def main() -> None:
         waking = sub[sub["evol_trend"] > 0]
         fading = sub[sub["evol_trend"] <= 0]
         print(f"  {sig_type}:")
-        print(f"    trend>0 (uyanan)     : n={len(waking)}, PF={_pf(waking['realized_pnl']):.3f}, "
-              f"WR={(waking['realized_pnl'] > 0).mean() * 100:.1f}%")
-        print(f"    trend<=0 (sönümlenen): n={len(fading)}, PF={_pf(fading['realized_pnl']):.3f}, "
-              f"WR={(fading['realized_pnl'] > 0).mean() * 100:.1f}%")
+        print(
+            f"    trend>0 (uyanan)     : n={len(waking)}, PF={_pf(waking['realized_pnl']):.3f}, "
+            f"WR={(waking['realized_pnl'] > 0).mean() * 100:.1f}%"
+        )
+        print(
+            f"    trend<=0 (sönümlenen): n={len(fading)}, PF={_pf(fading['realized_pnl']):.3f}, "
+            f"WR={(fading['realized_pnl'] > 0).mean() * 100:.1f}%"
+        )
 
     print("\n=== PLACEBO (trend rastgele karıştırıldı) ===")
     rng = np.random.default_rng(42)

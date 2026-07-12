@@ -23,26 +23,45 @@ from PyQt6.QtGui import QColor
 from config import Config
 from desktop.theme import COLORS
 
-COLUMNS = ["Sembol", "Tip", "TF", "İndikatör", "VPMV", "MTF", "α", "β", "Z", "P&L%", "SL", "TP", "P/D", "Yapı", "FVG", "Pattern", "Süre", "Güv"]
+COLUMNS = [
+    "Sembol",
+    "Tip",
+    "TF",
+    "İndikatör",
+    "VPMV",
+    "MTF",
+    "α",
+    "β",
+    "Z",
+    "P&L%",
+    "SL",
+    "TP",
+    "P/D",
+    "Yapı",
+    "FVG",
+    "Pattern",
+    "Süre",
+    "Güv",
+]
 
-COL_SYMBOL    = 0
-COL_TYPE      = 1
-COL_TF        = 2
+COL_SYMBOL = 0
+COL_TYPE = 1
+COL_TF = 2
 COL_INDICATOR = 3
-COL_VPM       = 4
-COL_MTF       = 5
-COL_ALPHA     = 6
-COL_BETA      = 7
-COL_ZSCORE    = 8
-COL_PNL       = 9
-COL_SL        = 10
-COL_TP        = 11
-COL_PD        = 12
-COL_STRUCT    = 13
-COL_FVG       = 14
-COL_PATTERN   = 15
-COL_AGE       = 16
-COL_GUV       = 17
+COL_VPM = 4
+COL_MTF = 5
+COL_ALPHA = 6
+COL_BETA = 7
+COL_ZSCORE = 8
+COL_PNL = 9
+COL_SL = 10
+COL_TP = 11
+COL_PD = 12
+COL_STRUCT = 13
+COL_FVG = 14
+COL_PATTERN = 15
+COL_AGE = 16
+COL_GUV = 17
 
 
 def _fmt_score(v: Optional[float]) -> str:
@@ -97,7 +116,7 @@ def _fmt_age(ts: Optional[datetime], interval: str = "") -> str:
 class SignalRow:
     id: int
     symbol: str
-    signal_type: str          # "LONG" | "SHORT"
+    signal_type: str  # "LONG" | "SHORT"
     interval: str
     entry_price: float
     vpm: Optional[float]
@@ -154,7 +173,7 @@ class SignalsModel(QAbstractTableModel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._rows: list[SignalRow] = []
-        self._id_index: dict[int, int] = {}      # signal id → satır
+        self._id_index: dict[int, int] = {}  # signal id → satır
         self._sym_rows: dict[str, list[int]] = {}  # symbol → [row indices]
         # (symbol, interval, signal_type) → aktif satır sayısı — 2+ ise çoklu sinyal var
         self._coincident: dict[tuple[str, str, str], int] = {}
@@ -167,7 +186,9 @@ class SignalsModel(QAbstractTableModel):
     def columnCount(self, parent=QModelIndex()) -> int:
         return len(COLUMNS)
 
-    def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
+    def headerData(
+        self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole
+    ) -> Any:
         if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
             return COLUMNS[section]
         if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.TextAlignmentRole:
@@ -196,23 +217,40 @@ class SignalsModel(QAbstractTableModel):
 
     def _display(self, row: SignalRow, col: int) -> str:
         match col:
-            case _ if col == COL_SYMBOL:    return f"★ {row.symbol}" if row.is_confluence else row.symbol
-            case _ if col == COL_TYPE:      return row.signal_type
-            case _ if col == COL_TF:        return row.interval
-            case _ if col == COL_INDICATOR: return row.indicators or "—"
-            case _ if col == COL_VPM:       return _fmt_score(row.vpm)
-            case _ if col == COL_MTF:       return f"{int(row.mtf)}" if row.mtf is not None else "—"
-            case _ if col == COL_ALPHA:     return _fmt_ratio(row.alpha)
-            case _ if col == COL_BETA:      return _fmt_ratio(row.beta)
-            case _ if col == COL_ZSCORE:    return f"{row.zscore:+.2f}" if row.zscore is not None else "—"
-            case _ if col == COL_PNL:       return _fmt_pnl(row.pnl_pct)
-            case _ if col == COL_SL:        return _fmt_price(row.stop_loss_price)
-            case _ if col == COL_TP:        return _fmt_price(row.take_profit_price)
-            case _ if col == COL_PD:        return f"{row.pd_zone:.0f}" if row.pd_zone is not None else "—"
-            case _ if col == COL_STRUCT:    return row.market_structure or "-"
-            case _ if col == COL_FVG:       return row.fvg_tfs or "-"
-            case _ if col == COL_PATTERN:   return row.candle_pattern or "-"
-            case _ if col == COL_AGE:       return _fmt_age(row.timestamp, row.interval)
+            case _ if col == COL_SYMBOL:
+                return f"★ {row.symbol}" if row.is_confluence else row.symbol
+            case _ if col == COL_TYPE:
+                return row.signal_type
+            case _ if col == COL_TF:
+                return row.interval
+            case _ if col == COL_INDICATOR:
+                return row.indicators or "—"
+            case _ if col == COL_VPM:
+                return _fmt_score(row.vpm)
+            case _ if col == COL_MTF:
+                return f"{int(row.mtf)}" if row.mtf is not None else "—"
+            case _ if col == COL_ALPHA:
+                return _fmt_ratio(row.alpha)
+            case _ if col == COL_BETA:
+                return _fmt_ratio(row.beta)
+            case _ if col == COL_ZSCORE:
+                return f"{row.zscore:+.2f}" if row.zscore is not None else "—"
+            case _ if col == COL_PNL:
+                return _fmt_pnl(row.pnl_pct)
+            case _ if col == COL_SL:
+                return _fmt_price(row.stop_loss_price)
+            case _ if col == COL_TP:
+                return _fmt_price(row.take_profit_price)
+            case _ if col == COL_PD:
+                return f"{row.pd_zone:.0f}" if row.pd_zone is not None else "—"
+            case _ if col == COL_STRUCT:
+                return row.market_structure or "-"
+            case _ if col == COL_FVG:
+                return row.fvg_tfs or "-"
+            case _ if col == COL_PATTERN:
+                return row.candle_pattern or "-"
+            case _ if col == COL_AGE:
+                return _fmt_age(row.timestamp, row.interval)
             case _ if col == COL_GUV:
                 v = row.mae_atr_now
                 if v is None:
@@ -241,19 +279,27 @@ class SignalsModel(QAbstractTableModel):
             return "  OI: —"
 
     def _tooltip(self, row: SignalRow) -> str:
-        def _r(v, fmt=".2f"): return f"{v:{fmt}}" if v is not None else "—"
-        st = ("✓ Onaylı" if row.st_confirmed else "✗ Onaysız") if row.st_confirmed is not None else "—"
+        def _r(v, fmt=".2f"):
+            return f"{v:{fmt}}" if v is not None else "—"
+
+        st = (
+            ("✓ Onaylı" if row.st_confirmed else "✗ Onaysız")
+            if row.st_confirmed is not None
+            else "—"
+        )
         mtf = f"{int(row.mtf)}" if row.mtf is not None else "—"
         cf_line = f"  ★ KONFLUANS  Z={_r(row.z_score_entry, '+.2f')}\n" if row.is_confluence else ""
         sl_label = "Trail" if row.trailing_stop_price is not None else "SL"
-        sl_val   = row.trailing_stop_price if row.trailing_stop_price is not None else row.stop_loss_price
-        tp_val   = None if row.trailing_stop_price is not None else row.take_profit_price
+        sl_val = (
+            row.trailing_stop_price if row.trailing_stop_price is not None else row.stop_loss_price
+        )
+        tp_val = None if row.trailing_stop_price is not None else row.take_profit_price
         risk_line = f"  {sl_label}: {_r(sl_val, '.4f')}"
         if tp_val is not None:
             risk_line += f"   TP: {_r(tp_val, '.4f')}"
-        pre  = _r(row.vpmv_pre_avg, '.1f')
-        slop = _r(row.vpmv_slope,   '+.1f')
-        rat  = _r(row.vpmv_ratio,   '.3f')
+        pre = _r(row.vpmv_pre_avg, ".1f")
+        slop = _r(row.vpmv_slope, "+.1f")
+        rat = _r(row.vpmv_ratio, ".3f")
         return (
             f"{row.symbol}  {row.signal_type}  {row.interval}  |  {row.indicators}\n"
             f"{'─'*52}\n"
@@ -303,8 +349,9 @@ class SignalsModel(QAbstractTableModel):
         if col == COL_TP:
             return QColor(COLORS["green"])
         if col == COL_PD and row.pd_zone is not None:
-            aligned = (row.signal_type == "LONG" and row.pd_zone <= 50) or \
-                      (row.signal_type == "SHORT" and row.pd_zone >= 50)
+            aligned = (row.signal_type == "LONG" and row.pd_zone <= 50) or (
+                row.signal_type == "SHORT" and row.pd_zone >= 50
+            )
             return QColor(COLORS["green"] if aligned else COLORS["red"])
         if col == COL_STRUCT:
             s = row.market_structure or "-"
@@ -314,7 +361,9 @@ class SignalsModel(QAbstractTableModel):
                 return QColor(COLORS["yellow"])
             return QColor(COLORS["text_muted"])
         if col == COL_FVG:
-            return QColor(COLORS["green"] if (row.fvg_tfs and row.fvg_tfs != "-") else COLORS["text_muted"])
+            return QColor(
+                COLORS["green"] if (row.fvg_tfs and row.fvg_tfs != "-") else COLORS["text_muted"]
+            )
         if col == COL_PATTERN and row.candle_pattern and row.candle_pattern != "-":
             has_bull = "+" in row.candle_pattern
             has_bear = "-" in row.candle_pattern
@@ -450,7 +499,9 @@ class SignalsModel(QAbstractTableModel):
         if changed and self._rows:
             tl = self.index(0, COL_PNL)
             br = self.index(len(self._rows) - 1, COL_GUV)
-            self.dataChanged.emit(tl, br, [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ForegroundRole])
+            self.dataChanged.emit(
+                tl, br, [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ForegroundRole]
+            )
 
     def on_price_updated(self, symbol: str, price: float, _change_pct: float) -> None:
         indices = self._sym_rows.get(symbol, [])
@@ -458,7 +509,9 @@ class SignalsModel(QAbstractTableModel):
             self._rows[idx].update_price(price)
             tl = self.index(idx, COL_PNL)
             br = self.index(idx, COL_GUV)
-            self.dataChanged.emit(tl, br, [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ForegroundRole])
+            self.dataChanged.emit(
+                tl, br, [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ForegroundRole]
+            )
 
     def signal_at(self, row: int) -> Optional[SignalRow]:
         if 0 <= row < len(self._rows):
@@ -482,7 +535,9 @@ class SignalsProxyModel(QSortFilterProxyModel):
         self.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self.setFilterKeyColumn(COL_SYMBOL)
 
-    def set_range_filter(self, field_name: str, min_val: Optional[float], max_val: Optional[float]) -> None:
+    def set_range_filter(
+        self, field_name: str, min_val: Optional[float], max_val: Optional[float]
+    ) -> None:
         """field_name: 'vpm'|'mtf'|'alpha'|'beta'|'zscore'. None sınır konulmadığı anlamına gelir."""
         self._ranges[field_name] = [min_val, max_val]
         self.invalidateFilter()
@@ -537,7 +592,7 @@ class SignalsProxyModel(QSortFilterProxyModel):
     def lessThan(self, left: QModelIndex, right: QModelIndex) -> bool:
         src = self.sourceModel()
         col = left.column()
-        l_row = src._rows[left.row()]   # noqa: SLF001
+        l_row = src._rows[left.row()]  # noqa: SLF001
         r_row = src._rows[right.row()]  # noqa: SLF001
 
         def _cmp(a, b):
@@ -550,20 +605,29 @@ class SignalsProxyModel(QSortFilterProxyModel):
             return a < b
 
         match col:
-            case _ if col == COL_VPM:       return _cmp(l_row.vpm, r_row.vpm)
-            case _ if col == COL_MTF:       return _cmp(l_row.mtf, r_row.mtf)
-            case _ if col == COL_ALPHA:     return _cmp(l_row.alpha, r_row.alpha)
-            case _ if col == COL_BETA:      return _cmp(l_row.beta, r_row.beta)
-            case _ if col == COL_ZSCORE:    return _cmp(l_row.zscore, r_row.zscore)
-            case _ if col == COL_PNL:       return _cmp(l_row.pnl_pct, r_row.pnl_pct)
-            case _ if col == COL_PD:        return _cmp(l_row.pd_zone, r_row.pd_zone)
+            case _ if col == COL_VPM:
+                return _cmp(l_row.vpm, r_row.vpm)
+            case _ if col == COL_MTF:
+                return _cmp(l_row.mtf, r_row.mtf)
+            case _ if col == COL_ALPHA:
+                return _cmp(l_row.alpha, r_row.alpha)
+            case _ if col == COL_BETA:
+                return _cmp(l_row.beta, r_row.beta)
+            case _ if col == COL_ZSCORE:
+                return _cmp(l_row.zscore, r_row.zscore)
+            case _ if col == COL_PNL:
+                return _cmp(l_row.pnl_pct, r_row.pnl_pct)
+            case _ if col == COL_PD:
+                return _cmp(l_row.pd_zone, r_row.pd_zone)
             case _ if col == COL_AGE:
+
                 def _ts(t):
                     if t is None:
                         return datetime.max
                     if t.tzinfo is not None:
                         return t.replace(tzinfo=None)
                     return t
+
                 return _ts(l_row.timestamp) > _ts(r_row.timestamp)
             case _:
                 return super().lessThan(left, right)

@@ -18,6 +18,7 @@ kırmızı mumla kapanan gate bir sonraki yerel kırılımda tekrar açılabiliy
 Look-ahead yok: rolling referans shift(1) ile hesaplanıyor (barın kendisi hariç,
 sadece önceki N bar).
 """
+
 import os
 import sys
 
@@ -32,7 +33,11 @@ from indicators.core import calculate_atr  # pylint: disable=wrong-import-positi
 from research.pattern_lab.vol_exhaustion_bt import _stats  # pylint: disable=wrong-import-position
 from signals.do_kirilimi import _daily_open  # pylint: disable=wrong-import-position
 from signals.do_open_streak import (  # pylint: disable=wrong-import-position
-    GAUSS_THRESHOLD, MAX_HOLD_HOURS, SL_ATR_MULT, STREAK_THRESHOLD, _gauss_sum,
+    GAUSS_THRESHOLD,
+    MAX_HOLD_HOURS,
+    SL_ATR_MULT,
+    STREAK_THRESHOLD,
+    _gauss_sum,
 )
 
 DAYS = 60
@@ -45,8 +50,11 @@ N_PLACEBO = 200
 
 def _fetch() -> pd.DataFrame:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     q = f"""
         SELECT symbol, bucket AS ts, open, high, low, close, volume
@@ -157,7 +165,6 @@ def _placebo_for_variant(df: pd.DataFrame, window: int, real_pf: float) -> None:
         h = g["high"].to_numpy(float)
         l = g["low"].to_numpy(float)
         c = g["close"].to_numpy(float)
-        ts = g["ts"]
         roll_ref = pd.Series(c).shift(1).rolling(window).max().to_numpy()
         signal = _signal_series_ref(o, h, l, c, roll_ref)
         atr_series = calculate_atr(g, period=14).to_numpy()
@@ -194,8 +201,10 @@ def _placebo_for_variant(df: pd.DataFrame, window: int, real_pf: float) -> None:
         return
     arr = np.array(placebo_pfs)
     rank = float((arr < real_pf).mean() * 100)
-    print(f"placebo (n={len(arr)}) PF ort={arr.mean():.3f} p90={np.percentile(arr,90):.3f} "
-          f"max={arr.max():.3f} | gerçek PF={real_pf:.3f} (placebo'nun %{rank:.0f}'ini geçiyor)")
+    print(
+        f"placebo (n={len(arr)}) PF ort={arr.mean():.3f} p90={np.percentile(arr,90):.3f} "
+        f"max={arr.max():.3f} | gerçek PF={real_pf:.3f} (placebo'nun %{rank:.0f}'ini geçiyor)"
+    )
 
 
 def run() -> None:
@@ -209,6 +218,7 @@ def run() -> None:
     def _make_ref_rolling(window):
         def _ref(ts, o, h, l, c):
             return pd.Series(c).shift(1).rolling(window).max().to_numpy()
+
         return _ref
 
     variants = [("mevcut (DO-anchor)", _ref_daily_open)]
@@ -230,9 +240,15 @@ def run() -> None:
         first_mask = (ts_arr < mid).to_numpy()
         arr = np.array(rets)
 
-        for label, mask in (("tum", np.ones(len(arr), dtype=bool)), ("ilk_yari", first_mask), ("ikinci_yari", ~first_mask)):
+        for label, mask in (
+            ("tum", np.ones(len(arr), dtype=bool)),
+            ("ilk_yari", first_mask),
+            ("ikinci_yari", ~first_mask),
+        ):
             s = _stats(arr[mask])
-            print(f"{name:32} {label:12} {s.get('n',0):>6} {s.get('wr',0):>6} {s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+            print(
+                f"{name:32} {label:12} {s.get('n',0):>6} {s.get('wr',0):>6} {s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+            )
         print()
 
     print(f"analiz edilen sembol sayısı ~{df['symbol'].nunique()} (MIN_BARS={MIN_BARS} filtreli)\n")

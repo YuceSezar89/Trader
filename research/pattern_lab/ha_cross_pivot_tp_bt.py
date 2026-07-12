@@ -18,6 +18,7 @@ Look-ahead yok: pivot seviyeleri DAİMA önceki takvim gününün H/L/C'sinden
 hangisi önce değdi belli değil) — SL/TP1/TP2 kontrolü SL-önce varsayımıyla
 KONSERVATİF (do_break_gauss_sltp_bt.py ile aynı disiplin).
 """
+
 import os
 import sys
 
@@ -32,16 +33,19 @@ from indicators.core import calculate_fib_pivots  # pylint: disable=wrong-import
 from research.pattern_lab.vol_exhaustion_bt import _stats  # pylint: disable=wrong-import-position
 
 DAYS = 60
-SL_MULT = Config.RISK_SL_MULTIPLIER   # 1.5
-TP_MULT = Config.RISK_TP_MULTIPLIER   # 3.0
+SL_MULT = Config.RISK_SL_MULTIPLIER  # 1.5
+TP_MULT = Config.RISK_TP_MULTIPLIER  # 3.0
 HORIZON_HOURS = 24.0
 HORIZON_BARS = {"5m": int(HORIZON_HOURS * 12), "15m": int(HORIZON_HOURS * 4)}
 
 
 def _fetch_signals(direction: str) -> pd.DataFrame:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     q = """
         SELECT symbol, interval, open_price, atr, opened_at
@@ -59,8 +63,11 @@ def _fetch_daily_pivots(symbols: list) -> dict:
     """symbol -> {date: {pp,r1,r2,r3,s1,s2,s3}} — 4h barlardan günlük H/L/C,
     ÖNCEKİ günün pivotu bugüne uygulanacak şekilde shift(1) edilmiş."""
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     q = f"""
         SELECT symbol, bucket AS ts, high, low, close
@@ -77,7 +84,9 @@ def _fetch_daily_pivots(symbols: list) -> dict:
         daily = g.resample("D").agg({"high": "max", "low": "min", "close": "last"}).dropna()
         if len(daily) < 2:
             continue
-        pivots = daily.apply(lambda r: calculate_fib_pivots(r["high"], r["low"], r["close"]), axis=1)
+        pivots = daily.apply(
+            lambda r: calculate_fib_pivots(r["high"], r["low"], r["close"]), axis=1
+        )
         pivots.index = pivots.index.date
         pivots = pivots.shift(1)  # bugünün pivotu DÜNÜN H/L/C'sinden
         out[sym] = pivots.dropna().to_dict()
@@ -86,8 +95,11 @@ def _fetch_daily_pivots(symbols: list) -> dict:
 
 def _fetch_execution_bars(symbols: list, interval: str) -> dict:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     q = f"""
         SELECT symbol, bucket AS ts, high, low, close
@@ -202,12 +214,18 @@ def run() -> None:
                 low = g["low"].to_numpy(float)
                 close = g["close"].to_numpy(float)
 
-                baseline_rets.append(_simulate_single(high, low, close, idx, entry, is_long, sl, tp_base, horizon))
-                ladder_rets.append(_simulate_ladder(high, low, close, idx, entry, is_long, sl, tp1, tp2, horizon))
+                baseline_rets.append(
+                    _simulate_single(high, low, close, idx, entry, is_long, sl, tp_base, horizon)
+                )
+                ladder_rets.append(
+                    _simulate_ladder(high, low, close, idx, entry, is_long, sl, tp1, tp2, horizon)
+                )
                 opened_ats.append(opened_at)
 
-        print(f"\n{'='*70}\nHA_Cross — {direction}  "
-              f"(n={len(baseline_rets)}, pivot-yok={skipped_no_pivot}, geometri-bozuk={skipped_bad_geometry})\n{'='*70}")
+        print(
+            f"\n{'='*70}\nHA_Cross — {direction}  "
+            f"(n={len(baseline_rets)}, pivot-yok={skipped_no_pivot}, geometri-bozuk={skipped_bad_geometry})\n{'='*70}"
+        )
 
         ts_arr = pd.Series(opened_ats)
         mid = ts_arr.min() + (ts_arr.max() - ts_arr.min()) / 2
@@ -215,11 +233,20 @@ def run() -> None:
         print(f"dönem: {ts_arr.min()} .. {ts_arr.max()} | orta nokta: {mid}\n")
 
         print(f"{'strateji':22} {'dönem':12} {'n':>6} {'WR%':>6} {'ort%':>8} {'PF':>7}")
-        for name, rets in (("ATR-tek-TP (mevcut)", baseline_rets), ("Pivot-ladder (TP1/TP2)", ladder_rets)):
+        for name, rets in (
+            ("ATR-tek-TP (mevcut)", baseline_rets),
+            ("Pivot-ladder (TP1/TP2)", ladder_rets),
+        ):
             arr = np.array(rets)
-            for label, mask in (("tum", np.ones(len(arr), dtype=bool)), ("ilk_yari", first_mask), ("ikinci_yari", ~first_mask)):
+            for label, mask in (
+                ("tum", np.ones(len(arr), dtype=bool)),
+                ("ilk_yari", first_mask),
+                ("ikinci_yari", ~first_mask),
+            ):
                 s = _stats(arr[mask])
-                print(f"{name:22} {label:12} {s.get('n',0):>6} {s.get('wr',0):>6} {s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+                print(
+                    f"{name:22} {label:12} {s.get('n',0):>6} {s.get('wr',0):>6} {s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+                )
 
 
 if __name__ == "__main__":

@@ -18,6 +18,7 @@ Metodoloji (body%/VPMV-jump derslerinden): BAŞTAN split-period + SADECE 3 Tem
 19:22:16 sonrası (commit e81aa34, temiz ters-sinyal/timeout rejimi) —
 rsi_cross_body_split_check.py'nin _fetch'i (cutoff + opened_at) yeniden kullanıldı.
 """
+
 import os
 import sys
 
@@ -26,8 +27,12 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+from research.pattern_lab.rsi_cross_body_split_check import (  # pylint: disable=wrong-import-position,unused-import
+    CUTOFF,
+    INTERVALS,
+    _fetch,
+)
 from research.pattern_lab.vol_exhaustion_bt import _stats  # pylint: disable=wrong-import-position
-from research.pattern_lab.rsi_cross_body_split_check import INTERVALS, CUTOFF, _fetch  # pylint: disable=wrong-import-position,unused-import
 
 
 def _print_tercile_table(df: pd.DataFrame, q1: float, q2: float) -> None:
@@ -40,8 +45,10 @@ def _print_tercile_table(df: pd.DataFrame, q1: float, q2: float) -> None:
     for name in ("düşük", "orta", "yüksek"):
         rets = df.loc[df["tercil"] == name, "realized_pnl"].to_numpy() / 100
         s = _stats(rets)
-        print(f"{name:10} {s.get('n',0):>7} {s.get('wr',0):>6} "
-              f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+        print(
+            f"{name:10} {s.get('n',0):>7} {s.get('wr',0):>6} "
+            f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+        )
 
 
 def run():
@@ -67,8 +74,10 @@ def run():
 
     s = _stats(df["realized_pnl"].to_numpy() / 100)
     print(f"{'grup':20} {'n':>7} {'WR%':>6} {'ort%':>8} {'PF':>7}")
-    print(f"{'baseline (tümü)':20} {s.get('n',0):>7} {s.get('wr',0):>6} "
-          f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+    print(
+        f"{'baseline (tümü)':20} {s.get('n',0):>7} {s.get('wr',0):>6} "
+        f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+    )
 
     q1, q2 = df["adverse_pct"].quantile([0.333, 0.667])
     print(f"\n── Aleyhe fitil (adverse_pct) terciline göre ── (q1={q1:.2f}, q2={q2:.2f})")

@@ -11,6 +11,7 @@ kullanarak, sinyal ANINDA BTC "bearish" ise Long'u (ve simetrik olarak
 "bullish" ise Short'u) elemenin ilk-yarı çöküşünü düzeltip düzeltmediğini
 test eder. Aynı VPMV+SL disiplini (v2-18) korunuyor.
 """
+
 import os
 import sys
 
@@ -22,11 +23,21 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from config import Config  # pylint: disable=wrong-import-position
 from indicators.core import calculate_rsi  # pylint: disable=wrong-import-position
-from utils.vpmv import compute_series  # pylint: disable=wrong-import-position
+from research.pattern_lab.do_open_streak_bt import (  # pylint: disable=wrong-import-position
+    DAYS,
+    HORIZON_BARS,
+    MIN_BARS,
+)
 from research.pattern_lab.features import _atr  # pylint: disable=wrong-import-position
-from research.pattern_lab.do_open_streak_bt import DAYS, HORIZON_BARS, MIN_BARS  # pylint: disable=wrong-import-position
-from research.pattern_lab.rsi_cross_sl_sweep_bt import _rsi_cross_events, _apply_signal_filter  # pylint: disable=wrong-import-position
-from research.pattern_lab.rsi_cross_combined_sl_bt import _fetch_with_volume, _report  # pylint: disable=wrong-import-position
+from research.pattern_lab.rsi_cross_combined_sl_bt import (  # pylint: disable=wrong-import-position
+    _fetch_with_volume,
+    _report,
+)
+from research.pattern_lab.rsi_cross_sl_sweep_bt import (  # pylint: disable=wrong-import-position
+    _apply_signal_filter,
+    _rsi_cross_events,
+)
+from utils.vpmv import compute_series  # pylint: disable=wrong-import-position
 
 BTC_EMA_SPAN = 200
 BTC_STD_WINDOW = 200
@@ -38,8 +49,11 @@ def _fetch_btc_regime() -> dict:
     """signals/signal_processor.py'deki AYNI formül — BTCUSDT'nin 15m
     serisinde. Döner: {timestamp: btc_trend ('bullish'|'bearish'|'neutral')}."""
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     q = f"""
         SELECT bucket AS ts, close FROM cagg_15m
@@ -98,8 +112,12 @@ def run():
         series_short = compute_series(g, "Short")
 
         for i, direction in filtered_events:
-            if i + HORIZON_BARS >= len(c) or i - 1 < 0 or i + 1 >= len(g) \
-                    or not (np.isfinite(atr[i]) and atr[i] > 0):
+            if (
+                i + HORIZON_BARS >= len(c)
+                or i - 1 < 0
+                or i + 1 >= len(g)
+                or not (np.isfinite(atr[i]) and atr[i] > 0)
+            ):
                 continue
             series = series_long if direction == "Long" else series_short
             pre_v, post_v = series.iloc[i - 1], series.iloc[i + 1]
@@ -107,9 +125,20 @@ def run():
                 continue
 
             btc_trend = btc_regime.get(ts.iloc[i])
-            clean_events.append((
-                direction, h, l, c, atr[i], i, c[i], ts.iloc[i], post_v - pre_v, btc_trend,
-            ))
+            clean_events.append(
+                (
+                    direction,
+                    h,
+                    l,
+                    c,
+                    atr[i],
+                    i,
+                    c[i],
+                    ts.iloc[i],
+                    post_v - pre_v,
+                    btc_trend,
+                )
+            )
 
     t_min = min(e[7] for e in clean_events)
     t_max = max(e[7] for e in clean_events)
@@ -133,7 +162,11 @@ def run():
     oos_mid = mid + (t_max - mid) / 2
     half_days = oos_days / 2
 
-    for dir_label, direction in (("LONG+SHORT (birlikte)", None), ("SADECE LONG", "Long"), ("SADECE SHORT", "Short")):
+    for dir_label, direction in (
+        ("LONG+SHORT (birlikte)", None),
+        ("SADECE LONG", "Long"),
+        ("SADECE SHORT", "Short"),
+    ):
         vo = vpmv_only if direction is None else _by_dir(vpmv_only, direction)
         vr = vpmv_regime if direction is None else _by_dir(vpmv_regime, direction)
 

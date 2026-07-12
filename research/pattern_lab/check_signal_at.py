@@ -5,6 +5,7 @@ sinyali ateşliyor mu? BTC rejim/ayrışma paper filtresi BİLEREK devre dışı
 
 Kullanım: python -m research.pattern_lab.check_signal_at SEMBOL "YYYY-MM-DD HH:MM:SS"
 """
+
 import sys
 import warnings
 
@@ -22,8 +23,11 @@ _BYPASS_BTC_CTX = {"day_ret": -999.0, "day_up": True}
 
 def check_signal_at(symbol: str, end_ts: str, n: int = 320) -> dict | None:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     q = """SELECT bucket, open, high, low, close, volume FROM cagg_5m
            WHERE symbol=%s AND bucket<=%s ORDER BY bucket DESC LIMIT %s"""

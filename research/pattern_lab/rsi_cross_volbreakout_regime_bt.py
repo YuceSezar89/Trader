@@ -16,6 +16,7 @@ Look-ahead: cagg_15m.bucket bar AÇILIŞ zamanı (bkz. mtf_helpers.py). Bir bar�
 GERÇEKTEN kapanmış sayılması için bucket+15dk <= opened_at şartı aranıyor —
 merge_asof'a opened_at yerine (opened_at - 15dk) veriliyor.
 """
+
 import os
 import sys
 
@@ -28,7 +29,9 @@ from config import Config  # pylint: disable=wrong-import-position
 from research.pattern_lab.devissotrader_agents_bt import (  # pylint: disable=wrong-import-position
     _is_consolidating_series,
 )
-from research.pattern_lab.threshold_optimizer import _run_single_var_on_df  # pylint: disable=wrong-import-position
+from research.pattern_lab.threshold_optimizer import (
+    _run_single_var_on_df,  # pylint: disable=wrong-import-position
+)
 
 INDICATOR = "RSI_Cross(9,24)"
 DAYS = 60
@@ -37,8 +40,11 @@ BAR_DURATION = pd.Timedelta(minutes=15)
 
 def _fetch_signals(indicator: str, direction: str) -> pd.DataFrame:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     q = """
         SELECT symbol, opened_at, realized_pnl
@@ -52,14 +58,19 @@ def _fetch_signals(indicator: str, direction: str) -> pd.DataFrame:
     return df
 
 
-def _fetch_regime(symbols: list, interval: str, state_fn, col_name: str, min_bars: int = 50) -> pd.DataFrame:
+def _fetch_regime(
+    symbols: list, interval: str, state_fn, col_name: str, min_bars: int = 50
+) -> pd.DataFrame:
     """Jenerik rejim durumu çekici — devissotrader_agents_bt.py'deki herhangi
     bir `_..._series(g) -> pd.Series` durum fonksiyonuyla çalışır (interval'e
     göre cagg_{interval} tablosundan). rsi_cross_trend_meanrev_regime_bt.py'de
     trend_follower (4h) ve mean_reversion (15m) durumları için de kullanılıyor."""
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     q = f"""
         SELECT symbol, bucket AS ts, open, high, low, close, volume
@@ -77,16 +88,25 @@ def _fetch_regime(symbols: list, interval: str, state_fn, col_name: str, min_bar
             continue
         state = state_fn(g)
         out.append(pd.DataFrame({"symbol": sym, "ts": g["ts"], col_name: state.astype(float)}))
-    return pd.concat(out, ignore_index=True) if out else pd.DataFrame(columns=["symbol", "ts", col_name])
+    return (
+        pd.concat(out, ignore_index=True)
+        if out
+        else pd.DataFrame(columns=["symbol", "ts", col_name])
+    )
 
 
-def _merge_regime(sig_df: pd.DataFrame, regime_df: pd.DataFrame, col_name: str, bar_duration: pd.Timedelta) -> pd.DataFrame:
+def _merge_regime(
+    sig_df: pd.DataFrame, regime_df: pd.DataFrame, col_name: str, bar_duration: pd.Timedelta
+) -> pd.DataFrame:
     sig_df = sig_df.copy()
     sig_df["cutoff"] = sig_df["opened_at"] - bar_duration
     merged = pd.merge_asof(
         sig_df.sort_values("cutoff"),
         regime_df.sort_values("ts"),
-        left_on="cutoff", right_on="ts", by="symbol", direction="backward",
+        left_on="cutoff",
+        right_on="ts",
+        by="symbol",
+        direction="backward",
     )
     return merged.dropna(subset=[col_name])
 
@@ -98,10 +118,14 @@ def run() -> None:
             print(f"{INDICATOR} — {direction}: yetersiz sinyal ({len(sig_df)}), atlanıyor")
             continue
 
-        regime_df = _fetch_regime(sig_df["symbol"].unique().tolist(), "15m", _is_consolidating_series, "is_consolidating")
+        regime_df = _fetch_regime(
+            sig_df["symbol"].unique().tolist(), "15m", _is_consolidating_series, "is_consolidating"
+        )
         merged = _merge_regime(sig_df, regime_df, "is_consolidating", BAR_DURATION)
-        print(f"{INDICATOR} — {direction}: {len(sig_df):,} sinyal, {len(merged):,} rejim durumuyla eşleşti "
-              f"(is_consolidating ort={merged['is_consolidating'].mean():.2f})")
+        print(
+            f"{INDICATOR} — {direction}: {len(sig_df):,} sinyal, {len(merged):,} rejim durumuyla eşleşti "
+            f"(is_consolidating ort={merged['is_consolidating'].mean():.2f})"
+        )
 
         label = f"{INDICATOR} — {direction} — is_consolidating (volatility_breakout rejimi)"
         _run_single_var_on_df(label, merged, "is_consolidating")

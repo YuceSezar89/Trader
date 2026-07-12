@@ -271,9 +271,7 @@ class SignalPerformanceAnalyzer:
 
             # N bar sonraki zamanı hesapla
             interval_minutes = self._interval_to_minutes(signal["interval"])
-            target_time = signal["opened_at"] + timedelta(
-                minutes=interval_minutes * n_bars
-            )
+            target_time = signal["opened_at"] + timedelta(minutes=interval_minutes * n_bars)
 
             # Hedef zamandaki fiyatı çek
             target_price = self._get_price_at_time(
@@ -289,11 +287,7 @@ class SignalPerformanceAnalyzer:
             atr = float(signal["atr_at_entry"])
 
             # Yön (LONG=+1, SHORT=-1)
-            side = (
-                1
-                if signal["signal_type"] and "LONG" in signal["signal_type"].upper()
-                else -1
-            )
+            side = 1 if signal["signal_type"] and "LONG" in signal["signal_type"].upper() else -1
 
             # Yüzde getiri
             return_pct = ((target_price - entry_price) / entry_price) * 100 * side
@@ -364,9 +358,7 @@ class SignalPerformanceAnalyzer:
 
             # Lookback zaman aralığı
             interval_minutes = self._interval_to_minutes(signal["interval"])
-            end_time = signal["opened_at"] + timedelta(
-                minutes=interval_minutes * lookback_bars
-            )
+            end_time = signal["opened_at"] + timedelta(minutes=interval_minutes * lookback_bars)
 
             # Fiyat aralığını çek
             price_range = self._get_price_range(
@@ -380,11 +372,7 @@ class SignalPerformanceAnalyzer:
             atr = float(signal["atr_at_entry"])
 
             # Yön
-            side = (
-                1
-                if signal["signal_type"] and "LONG" in signal["signal_type"].upper()
-                else -1
-            )
+            side = 1 if signal["signal_type"] and "LONG" in signal["signal_type"].upper() else -1
 
             # MFE/MAE hesapla
             mfe = 0.0

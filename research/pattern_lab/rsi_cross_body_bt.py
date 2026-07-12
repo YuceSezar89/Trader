@@ -7,6 +7,7 @@ orta kötü) genel bir piyasa fenomeni mi yoksa sadece o setup'a mı özgü oldu
 test ediyor. body_pct sinyal barının kendisinden (cagg_5m/15m ile symbol+opened_at
 join'i) hesaplanıyor — signals tablosunda OHLC yok, sadece open_price var.
 """
+
 import os
 import sys
 
@@ -24,8 +25,11 @@ INTERVALS = ["5m", "15m"]
 
 def _fetch(interval: str) -> pd.DataFrame:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     q = f"""
         SELECT s.symbol, s.signal_type, s.realized_pnl,
@@ -58,11 +62,15 @@ def run():
 
     s = _stats(df["realized_pnl"].to_numpy() / 100)
     print(f"{'grup':20} {'n':>7} {'WR%':>6} {'ort%':>8} {'PF':>7}")
-    print(f"{'baseline (tümü)':20} {s.get('n',0):>7} {s.get('wr',0):>6} "
-          f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+    print(
+        f"{'baseline (tümü)':20} {s.get('n',0):>7} {s.get('wr',0):>6} "
+        f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+    )
 
     q1, q2 = df["body_pct"].quantile([0.333, 0.667])
-    print(f"\n── RSI_Cross (5m+15m), sinyal barının body% terciline göre ── (q1={q1:.1f}, q2={q2:.1f})")
+    print(
+        f"\n── RSI_Cross (5m+15m), sinyal barının body% terciline göre ── (q1={q1:.1f}, q2={q2:.1f})"
+    )
 
     def bucket(bp):
         return "düşük" if bp < q1 else ("orta" if bp < q2 else "yüksek")
@@ -72,8 +80,10 @@ def run():
     for name in ("düşük", "orta", "yüksek"):
         rets = df.loc[df["tercil"] == name, "realized_pnl"].to_numpy() / 100
         s = _stats(rets)
-        print(f"{name:10} {s.get('n',0):>7} {s.get('wr',0):>6} "
-              f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+        print(
+            f"{name:10} {s.get('n',0):>7} {s.get('wr',0):>6} "
+            f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+        )
 
     print("\n── Long/Short ayrı ──")
     for sig_type in ("Long", "Short"):
@@ -83,8 +93,10 @@ def run():
         for name in ("düşük", "orta", "yüksek"):
             rets = sub.loc[sub["tercil"] == name, "realized_pnl"].to_numpy() / 100
             s = _stats(rets)
-            print(f"{name:10} {s.get('n',0):>7} {s.get('wr',0):>6} "
-                  f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+            print(
+                f"{name:10} {s.get('n',0):>7} {s.get('wr',0):>6} "
+                f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+            )
 
 
 if __name__ == "__main__":

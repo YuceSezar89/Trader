@@ -6,9 +6,11 @@ utils/vpmv.py ve signals/signal_processor._compute_vpmv_scores içinde;
 bu dosya yalnızca birleştirme katmanını test eder.
 """
 
-import pytest
-import sys
 import os
+import sys
+
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from signals.vpm_calculator import VPMCalculator, calculate_vpm
@@ -50,6 +52,7 @@ class TestVPMCalculator:
     def test_config_weights_match_default(self):
         """Config.VPM WEIGHTS ile sınıfın varsayılanı senkron kalmalı."""
         from config import Config
+
         assert VPMCalculator.DEFAULT_WEIGHTS == Config.VPM["WEIGHTS"]
 
     def test_convenience_function(self):

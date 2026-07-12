@@ -12,6 +12,7 @@ veriden yeniden üretimle mümkün). Hem Long hem Short yönü dahil.
 Aynı disiplin: cagg_15m, 45 gün, 24h/96-bar ufuk, ${POSITION_USD} pozisyon +
 gerçek fee, split-period sağlamlık.
 """
+
 import os
 import sys
 from typing import Optional
@@ -22,9 +23,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from config import Config  # pylint: disable=wrong-import-position
 from indicators.core import calculate_rsi  # pylint: disable=wrong-import-position
+from research.pattern_lab.do_break_gauss_economic_bt import (  # pylint: disable=wrong-import-position
+    POSITION_USD,
+    ROUND_TRIP_FEE,
+)
+from research.pattern_lab.do_open_streak_bt import (  # pylint: disable=wrong-import-position
+    DAYS,
+    HORIZON_BARS,
+    MIN_BARS,
+    _fetch,
+)
 from research.pattern_lab.features import _atr  # pylint: disable=wrong-import-position
-from research.pattern_lab.do_open_streak_bt import DAYS, HORIZON_BARS, MIN_BARS, _fetch  # pylint: disable=wrong-import-position
-from research.pattern_lab.do_break_gauss_economic_bt import POSITION_USD, ROUND_TRIP_FEE  # pylint: disable=wrong-import-position
 
 SL_MULTIPLES = [1.5, 2.0, 3.0, 4.0, 5.0, 6.0]
 WARMUP_BARS = 30  # RSI(24)/ATR(14) ısınma payı
@@ -34,8 +43,12 @@ def _rsi_cross_events(fast: np.ndarray, slow: np.ndarray) -> list[tuple[int, str
     events = []
     n = len(fast)
     for i in range(WARMUP_BARS, n):
-        if not (np.isfinite(fast[i - 1]) and np.isfinite(slow[i - 1])
-                and np.isfinite(fast[i]) and np.isfinite(slow[i])):
+        if not (
+            np.isfinite(fast[i - 1])
+            and np.isfinite(slow[i - 1])
+            and np.isfinite(fast[i])
+            and np.isfinite(slow[i])
+        ):
             continue
         if fast[i - 1] < slow[i - 1] and fast[i] > slow[i]:
             events.append((i, "Long"))
@@ -44,7 +57,9 @@ def _rsi_cross_events(fast: np.ndarray, slow: np.ndarray) -> list[tuple[int, str
     return events
 
 
-def _apply_signal_filter(events: list[tuple[int, str]], high: np.ndarray, low: np.ndarray) -> list[tuple[int, str]]:
+def _apply_signal_filter(
+    events: list[tuple[int, str]], high: np.ndarray, low: np.ndarray
+) -> list[tuple[int, str]]:
     """signals/signal_filter.py::SignalFilter.check ile BİREBİR mantık — DB'siz,
     deterministik replay (do_kirilimi.py'nin kendi gate'lerini ham veride
     yeniden ürettiği desenle aynı). Kural: Long geçerli → bu bar'ın high'ı, EN
@@ -68,9 +83,17 @@ def _apply_signal_filter(events: list[tuple[int, str]], high: np.ndarray, low: n
     return passed
 
 
-def _simulate_sl_exit(direction: str, high: np.ndarray, low: np.ndarray, close: np.ndarray,
-                       entry_idx: int, entry_price: float, atr_val: float,
-                       sl_mult: float, horizon: int) -> tuple[float, str]:
+def _simulate_sl_exit(
+    direction: str,
+    high: np.ndarray,
+    low: np.ndarray,
+    close: np.ndarray,
+    entry_idx: int,
+    entry_price: float,
+    atr_val: float,
+    sl_mult: float,
+    horizon: int,
+) -> tuple[float, str]:
     sl = entry_price - sl_mult * atr_val if direction == "Long" else entry_price + sl_mult * atr_val
     last_i = min(entry_idx + horizon, len(close) - 1)
     for j in range(entry_idx + 1, last_i + 1):
@@ -109,27 +132,39 @@ def _report(label: str, events: list, days_span: float) -> None:
 
     for direction, h, l, c, atr_val, i, entry_price in events:
         last_i = min(i + HORIZON_BARS, len(c) - 1)
-        blind_pnls.append(_signed_ret(direction, c[last_i], entry_price) * POSITION_USD - ROUND_TRIP_FEE)
+        blind_pnls.append(
+            _signed_ret(direction, c[last_i], entry_price) * POSITION_USD - ROUND_TRIP_FEE
+        )
 
         for sl in SL_MULTIPLES:
-            exit_price, reason = _simulate_sl_exit(direction, h, l, c, i, entry_price, atr_val, sl, HORIZON_BARS)
+            exit_price, reason = _simulate_sl_exit(
+                direction, h, l, c, i, entry_price, atr_val, sl, HORIZON_BARS
+            )
             sl_reasons[sl][reason] = sl_reasons[sl].get(reason, 0) + 1
-            sl_pnls[sl].append(_signed_ret(direction, exit_price, entry_price) * POSITION_USD - ROUND_TRIP_FEE)
+            sl_pnls[sl].append(
+                _signed_ret(direction, exit_price, entry_price) * POSITION_USD - ROUND_TRIP_FEE
+            )
 
     print(f"{'yöntem':24} {'n':>6} {'WR%':>6} {'ort $/işlem':>12} {'toplam $':>10} {'$/ay':>10}")
     s = _dollar_stats(np.array(blind_pnls), days_span)
-    print(f"{'kör 24h bekleme':24} {s['n']:>6} {s['wr']:>6} {s['avg_usd']:>12} "
-          f"{s['total_usd']:>10} {s['usd_per_month']:>10}")
+    print(
+        f"{'kör 24h bekleme':24} {s['n']:>6} {s['wr']:>6} {s['avg_usd']:>12} "
+        f"{s['total_usd']:>10} {s['usd_per_month']:>10}"
+    )
     for sl in SL_MULTIPLES:
         s = _dollar_stats(np.array(sl_pnls[sl]), days_span)
-        print(f"{'SL='+str(sl)+'×ATR (TP yok)':24} {s['n']:>6} {s['wr']:>6} {s['avg_usd']:>12} "
-              f"{s['total_usd']:>10} {s['usd_per_month']:>10}")
+        print(
+            f"{'SL='+str(sl)+'×ATR (TP yok)':24} {s['n']:>6} {s['wr']:>6} {s['avg_usd']:>12} "
+            f"{s['total_usd']:>10} {s['usd_per_month']:>10}"
+        )
 
     print("\n-- çıkış nedeni dağılımı --")
     for sl in SL_MULTIPLES:
         total = sum(sl_reasons[sl].values())
-        breakdown = ", ".join(f"{r}=%{c/total*100:.0f}" for r, c in
-                               sorted(sl_reasons[sl].items(), key=lambda x: -x[1]))
+        breakdown = ", ".join(
+            f"{r}=%{c/total*100:.0f}"
+            for r, c in sorted(sl_reasons[sl].items(), key=lambda x: -x[1])
+        )
         print(f"  SL={sl}×ATR: {breakdown}")
 
 
@@ -138,7 +173,7 @@ def run():
     print(f"{df['symbol'].nunique()} sembol, {len(df):,} 15m bar ({DAYS} gün)")
     print(f"RSI_Cross tanımı: fast={Config.RSI_FAST_WINDOW}, slow={Config.RSI_SLOW_WINDOW}\n")
 
-    all_events = []    # (direction, h, l, c, atr_val, i, entry_price, ts)
+    all_events = []  # (direction, h, l, c, atr_val, i, entry_price, ts)
     clean_events = []  # SignalFilter'dan geçenler (canlıya en yakın küme)
 
     for _sym, g in df.groupby("symbol"):
@@ -171,7 +206,11 @@ def run():
     print(f"dönem: {t_min} .. {t_max} ({days_span:.1f} gün)")
 
     _report("BASELINE (ham, SignalFilter'sız, Long+Short)", [e[:-1] for e in all_events], days_span)
-    _report("TEMİZ (SignalFilter geçen, canlıya en yakın küme)", [e[:-1] for e in clean_events], days_span)
+    _report(
+        "TEMİZ (SignalFilter geçen, canlıya en yakın küme)",
+        [e[:-1] for e in clean_events],
+        days_span,
+    )
 
     mid = t_min + (t_max - t_min) / 2
     half_days = days_span / 2

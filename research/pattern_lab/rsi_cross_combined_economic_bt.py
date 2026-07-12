@@ -8,6 +8,7 @@ filtre geçti. Aynı OOS disiplini: VPMV eşiği SADECE ilk yarıdan (in-sample)
 türetilip ikinci yarıya (out-of-sample) sabit uygulanıyor. Mum şekli kategorik
 bir kural olduğu için kalibrasyon gerektirmiyor.
 """
+
 import os
 import sys
 
@@ -16,14 +17,21 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from utils.vpmv import compute_series  # pylint: disable=wrong-import-position
-from research.pattern_lab.rsi_cross_vpmv_jump_bt import (  # pylint: disable=wrong-import-position
-    MIN_HISTORY, INTERVALS, _fetch_signals, _fetch_symbol_history,
-)
-from research.pattern_lab.rsi_cross_candle_shape_bt import _classify  # pylint: disable=wrong-import-position
 from research.pattern_lab.do_break_gauss_economic_bt import (  # pylint: disable=wrong-import-position
-    POSITION_USD, ROUND_TRIP_FEE, _dollar_stats,
+    POSITION_USD,
+    ROUND_TRIP_FEE,
+    _dollar_stats,
 )
+from research.pattern_lab.rsi_cross_candle_shape_bt import (
+    _classify,  # pylint: disable=wrong-import-position
+)
+from research.pattern_lab.rsi_cross_vpmv_jump_bt import (  # pylint: disable=wrong-import-position
+    INTERVALS,
+    MIN_HISTORY,
+    _fetch_signals,
+    _fetch_symbol_history,
+)
+from utils.vpmv import compute_series  # pylint: disable=wrong-import-position
 
 
 def run():
@@ -56,12 +64,14 @@ def run():
                 bar = hist.iloc[i]
                 kategori = _classify(bar)
 
-                rows.append({
-                    "jump": post_v - pre_v,
-                    "kategori": kategori,
-                    "realized_pnl": row["realized_pnl"],
-                    "opened_at": row["opened_at"],
-                })
+                rows.append(
+                    {
+                        "jump": post_v - pre_v,
+                        "kategori": kategori,
+                        "realized_pnl": row["realized_pnl"],
+                        "opened_at": row["opened_at"],
+                    }
+                )
 
     df = pd.DataFrame(rows)
     print(f"\ntoplam eşleşen sinyal: {len(df):,}\n")
@@ -89,8 +99,10 @@ def run():
     only_vpmv_mask = oos_df["jump"] >= oos_threshold
     only_shape_mask = oos_df["kategori"] != "üst-fitil-baskın"
 
-    print(f"── Out-of-sample ekonomik etki (${POSITION_USD:.0f} pozisyon, "
-          f"round-trip fee ${ROUND_TRIP_FEE:.2f}) ──")
+    print(
+        f"── Out-of-sample ekonomik etki (${POSITION_USD:.0f} pozisyon, "
+        f"round-trip fee ${ROUND_TRIP_FEE:.2f}) ──"
+    )
     print(f"{'grup':38} {'n':>6} {'WR%':>6} {'ort $/işlem':>12} {'toplam $':>10} {'$/ay':>10}")
     for name, mask in (
         ("baseline (OOS, tüm RSI_Cross)", pd.Series(True, index=oos_df.index)),
@@ -104,8 +116,10 @@ def run():
         if s.get("n", 0) == 0:
             print(f"{name:38} {'0':>6}")
             continue
-        print(f"{name:38} {s['n']:>6} {s['wr']:>6} {s['avg_usd']:>12} "
-              f"{s['total_usd']:>10} {s['usd_per_month']:>10}")
+        print(
+            f"{name:38} {s['n']:>6} {s['wr']:>6} {s['avg_usd']:>12} "
+            f"{s['total_usd']:>10} {s['usd_per_month']:>10}"
+        )
 
 
 if __name__ == "__main__":

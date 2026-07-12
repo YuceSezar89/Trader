@@ -60,15 +60,18 @@ async def fetch_production_symbols(limit: int) -> list[str]:
     (live_kline_data:{symbol}:1m key'leri) — uydurma bir liste değil, gerçek evren."""
     client = await RedisClient.get_client()
     keys = await client.keys("live_kline_data:*:1m")
-    symbols = sorted({
-        (k.decode() if isinstance(k, bytes) else k).split(":")[1]
-        for k in keys
-    })
-    logger.info("Production'da toplam %d sembol bulundu, %d tanesi test edilecek", len(symbols), min(limit, len(symbols)))
+    symbols = sorted({(k.decode() if isinstance(k, bytes) else k).split(":")[1] for k in keys})
+    logger.info(
+        "Production'da toplam %d sembol bulundu, %d tanesi test edilecek",
+        len(symbols),
+        min(limit, len(symbols)),
+    )
     return symbols[:limit]
 
 
-async def run_shadow_connection(streams: list[str], conn_id: int, stats: ShadowStats, log_sample: set[str]):
+async def run_shadow_connection(
+    streams: list[str], conn_id: int, stats: ShadowStats, log_sample: set[str]
+):
     """Bağımsız WS bağlantısı: production'ın kullandığı base URL'e, aynı
     SUBSCRIBE mesaj protokolüyle bağlanır (apples-to-apples karşılaştırma).
     streams: 'symbol@kline_tf' formatında, birden çok TF karışık olabilir
@@ -80,12 +83,18 @@ async def run_shadow_connection(streams: list[str], conn_id: int, stats: ShadowS
     while True:
         try:
             async with websockets.connect(url, ping_interval=20, ping_timeout=10) as ws:
-                await ws.send(json.dumps({
-                    "method": "SUBSCRIBE",
-                    "params": streams,
-                    "id": conn_id,
-                }))
-                logger.info("[conn#%d] Bağlandı, %d stream'e subscribe olundu.", conn_id, len(streams))
+                await ws.send(
+                    json.dumps(
+                        {
+                            "method": "SUBSCRIBE",
+                            "params": streams,
+                            "id": conn_id,
+                        }
+                    )
+                )
+                logger.info(
+                    "[conn#%d] Bağlandı, %d stream'e subscribe olundu.", conn_id, len(streams)
+                )
                 reconnect_delay = 1
 
                 async for raw_msg in ws:
@@ -102,12 +111,14 @@ async def run_shadow_connection(streams: list[str], conn_id: int, stats: ShadowS
                             continue  # sadece kapanan barları izliyoruz
 
                         symbol = k["s"]
-                        stats.closed_bars.setdefault((symbol, tf), []).append({
-                            "open_time": k["t"],
-                            "close": float(k["c"]),
-                            "volume": float(k["v"]),
-                            "received_at": time.time(),
-                        })
+                        stats.closed_bars.setdefault((symbol, tf), []).append(
+                            {
+                                "open_time": k["t"],
+                                "close": float(k["c"]),
+                                "volume": float(k["v"]),
+                                "received_at": time.time(),
+                            }
+                        )
                         if symbol in log_sample:
                             logger.info("[SHADOW] %s %s kapandı: %s", symbol, tf, k["c"])
                     except Exception as exc:  # pylint: disable=broad-exception-caught
@@ -116,7 +127,12 @@ async def run_shadow_connection(streams: list[str], conn_id: int, stats: ShadowS
 
         except Exception as exc:  # pylint: disable=broad-exception-caught
             stats.reconnects += 1
-            logger.warning("[conn#%d] Bağlantı koptu (%s), %ds sonra tekrar denenecek", conn_id, exc, reconnect_delay)
+            logger.warning(
+                "[conn#%d] Bağlantı koptu (%s), %ds sonra tekrar denenecek",
+                conn_id,
+                exc,
+                reconnect_delay,
+            )
             await asyncio.sleep(reconnect_delay)
             reconnect_delay = min(reconnect_delay * 2, 30)
 
@@ -159,20 +175,31 @@ async def compare_with_production(symbols: list[str], stats: ShadowStats, log_sa
                 round_ok += 1
                 stats.compare_ok += 1
                 if symbol in log_sample:
-                    logger.info("[KARŞILAŞTIRMA] %-10s %-4s OK (close=%s vol=%.4f)",
-                                symbol, tf, shadow_last["close"], shadow_last["volume"])
+                    logger.info(
+                        "[KARŞILAŞTIRMA] %-10s %-4s OK (close=%s vol=%.4f)",
+                        symbol,
+                        tf,
+                        shadow_last["close"],
+                        shadow_last["volume"],
+                    )
             else:
                 round_mismatch += 1
                 stats.compare_mismatch += 1
                 logger.warning(
                     "[KARŞILAŞTIRMA] %-10s %-4s FARK VAR ⚠️ shadow(close=%s vol=%.4f) prod(close=%s vol=%.4f)",
-                    symbol, tf, shadow_last["close"], shadow_last["volume"],
-                    prod_last["close"], prod_last["volume"],
+                    symbol,
+                    tf,
+                    shadow_last["close"],
+                    shadow_last["volume"],
+                    prod_last["close"],
+                    prod_last["volume"],
                 )
 
         logger.info(
             "[KARŞILAŞTIRMA-ÖZET] bu turda: OK=%d, FARK=%d, eksik=%d",
-            round_ok, round_mismatch, round_missing,
+            round_ok,
+            round_mismatch,
+            round_missing,
         )
 
 
@@ -184,7 +211,10 @@ async def report_resource_usage(num_symbols: int, num_connections: int):
         rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024 / 1024
         logger.info(
             "[KAYNAK] sembol=%d bağlantı(task)=%d thread=%d RSS_peak=%.1fMB",
-            num_symbols, num_connections, threading.active_count(), rss_mb,
+            num_symbols,
+            num_connections,
+            threading.active_count(),
+            rss_mb,
         )
 
 
@@ -196,12 +226,21 @@ async def main(duration_sec: int, num_symbols: int):
         return
 
     all_streams = [f"{s.lower()}@kline_{tf}" for s in symbols for tf in TIMEFRAMES]
-    chunks = [all_streams[i:i + MAX_STREAMS_PER_CONNECTION] for i in range(0, len(all_streams), MAX_STREAMS_PER_CONNECTION)]
+    chunks = [
+        all_streams[i : i + MAX_STREAMS_PER_CONNECTION]
+        for i in range(0, len(all_streams), MAX_STREAMS_PER_CONNECTION)
+    ]
     log_sample = set(symbols[:LOG_SAMPLE_SIZE])
 
     logger.info("=" * 70)
-    logger.info("TAM ÖLÇEK TESTİ: %d sembol × %d TF = %d stream, %d bağlantı(task), %ds sürecek",
-                len(symbols), len(TIMEFRAMES), len(all_streams), len(chunks), duration_sec)
+    logger.info(
+        "TAM ÖLÇEK TESTİ: %d sembol × %d TF = %d stream, %d bağlantı(task), %ds sürecek",
+        len(symbols),
+        len(TIMEFRAMES),
+        len(all_streams),
+        len(chunks),
+        duration_sec,
+    )
     logger.info("TF'ler: %s", TIMEFRAMES)
     logger.info("Örnek loglanacak semboller: %s", sorted(log_sample))
     logger.info("Başlangıç thread sayısı: %d", threading.active_count())
@@ -221,18 +260,28 @@ async def main(duration_sec: int, num_symbols: int):
     logger.info("=" * 70)
     logger.info(
         "TEST BİTTİ — sembol=%d stream=%d bağlantı=%d | mesaj=%d hata=%d reconnect=%d",
-        len(symbols), len(all_streams), len(chunks), stats.msg_count, stats.errors, stats.reconnects,
+        len(symbols),
+        len(all_streams),
+        len(chunks),
+        stats.msg_count,
+        stats.errors,
+        stats.reconnects,
     )
     logger.info("TF başına kapanan bar sayısı (toplam, tüm semboller):")
     per_tf_counts: dict[str, int] = {}
     for (_symbol, tf), bars in stats.closed_bars.items():
         per_tf_counts[tf] = per_tf_counts.get(tf, 0) + len(bars)
     for tf in TIMEFRAMES:
-        logger.info("  %-4s %d bar kapandı (kapanmadıysa bu pencerede hiç kapanmamış demektir, hata değil)",
-                    tf, per_tf_counts.get(tf, 0))
+        logger.info(
+            "  %-4s %d bar kapandı (kapanmadıysa bu pencerede hiç kapanmamış demektir, hata değil)",
+            tf,
+            per_tf_counts.get(tf, 0),
+        )
     logger.info(
         "KARŞILAŞTIRMA TOPLAM — OK=%d FARK=%d eksik=%d",
-        stats.compare_ok, stats.compare_mismatch, stats.compare_missing,
+        stats.compare_ok,
+        stats.compare_mismatch,
+        stats.compare_missing,
     )
     logger.info("Bitiş thread sayısı: %d", threading.active_count())
 

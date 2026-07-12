@@ -19,6 +19,7 @@ ikisini de aynı pencereden hesaplamak (DB round-trip'i yarıya indirmek için).
 
 Kullanım: python -m research.pattern_lab.evol_backtest
 """
+
 import warnings
 
 import pandas as pd
@@ -39,13 +40,16 @@ def _fetch_bars(cur, symbol: str, interval: str, opened_at) -> "pd.DataFrame | N
     cagg = _CAGG.get(interval)
     if not cagg:
         return None
-    cur.execute(f"""
+    cur.execute(
+        f"""
         SELECT bucket AS open_time, open, high, low, close, volume
         FROM {cagg}
         WHERE symbol = %s AND bucket <= %s
         ORDER BY bucket DESC
         LIMIT %s
-    """, (symbol, opened_at, _BARS_NEEDED))
+    """,
+        (symbol, opened_at, _BARS_NEEDED),
+    )
     rows = cur.fetchall()
     if not rows:
         return None
@@ -54,13 +58,15 @@ def _fetch_bars(cur, symbol: str, interval: str, opened_at) -> "pd.DataFrame | N
 
 
 def _fetch_signals(cur) -> list:
-    cur.execute("""
+    cur.execute(
+        """
         SELECT id, symbol, interval, opened_at, signal_type, realized_pnl
         FROM signals
         WHERE status='closed' AND realized_pnl IS NOT NULL
           AND interval IN ('5m', '15m')
         ORDER BY symbol, interval, opened_at
-    """)
+    """
+    )
     return cur.fetchall()
 
 
@@ -75,14 +81,19 @@ def _wr(pnls: pd.Series) -> float:
 
 
 def _summarize(sub: pd.DataFrame, label: str) -> None:
-    print(f"  {label}: n={len(sub)}, PF={_pf(sub['realized_pnl']):.3f}, "
-          f"WR={_wr(sub['realized_pnl'])*100:.1f}%, ort_pnl={sub['realized_pnl'].mean():+.3f}")
+    print(
+        f"  {label}: n={len(sub)}, PF={_pf(sub['realized_pnl']):.3f}, "
+        f"WR={_wr(sub['realized_pnl'])*100:.1f}%, ort_pnl={sub['realized_pnl'].mean():+.3f}"
+    )
 
 
 def main() -> None:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
@@ -99,11 +110,17 @@ def main() -> None:
         if evol is None or cls_out is None:
             continue
         cls, _vol_score, _momentum_aligned = cls_out
-        rows.append({
-            "symbol": sig["symbol"], "signal_type": sig["signal_type"],
-            "interval": sig["interval"], "opened_at": sig["opened_at"],
-            "evol": evol, "cls": cls, "realized_pnl": sig["realized_pnl"],
-        })
+        rows.append(
+            {
+                "symbol": sig["symbol"],
+                "signal_type": sig["signal_type"],
+                "interval": sig["interval"],
+                "opened_at": sig["opened_at"],
+                "evol": evol,
+                "cls": cls,
+                "realized_pnl": sig["realized_pnl"],
+            }
+        )
         if i % 5000 == 0:
             print(f"  [{i}/{len(signals)}] işlendi, {len(rows)} geçerli satır")
 

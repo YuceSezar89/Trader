@@ -9,6 +9,7 @@ disipliniyle (IS/OOS+split-period+placebo) doğrulanıyor.
 
 fvg_var: fvg_tfs != '-' (sinyal yönünde en az bir TF'de aktif FVG var) → 1, yoksa 0.
 """
+
 import os
 import sys
 
@@ -18,15 +19,20 @@ import psycopg2
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from config import Config  # pylint: disable=wrong-import-position
-from research.pattern_lab.threshold_optimizer import _run_single_var_on_df  # pylint: disable=wrong-import-position
+from research.pattern_lab.threshold_optimizer import (
+    _run_single_var_on_df,  # pylint: disable=wrong-import-position
+)
 
 INDICATOR = "RSI_Cross(9,24)"
 
 
 def _fetch_signals_with_fvg(indicator: str, direction: str) -> pd.DataFrame:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     q = """
         SELECT opened_at, realized_pnl, fvg_tfs
@@ -47,7 +53,9 @@ def run() -> None:
         if len(df) < 50:
             print(f"{INDICATOR} — {direction}: yetersiz sinyal ({len(df)}), atlanıyor")
             continue
-        print(f"{INDICATOR} — {direction}: {len(df):,} sinyal (fvg_var oranı={df['fvg_var'].mean():.2%})")
+        print(
+            f"{INDICATOR} — {direction}: {len(df):,} sinyal (fvg_var oranı={df['fvg_var'].mean():.2%})"
+        )
 
         label = f"{INDICATOR} — {direction} — fvg_var (sinyal anında aktif FVG)"
         _run_single_var_on_df(label, df, "fvg_var")

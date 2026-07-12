@@ -14,6 +14,7 @@ Look-ahead yok: likidite seviyesi SADECE mevcut barın ÖNCESİNDEKİ WINDOW bar
 kuruluyor (shift(1) + rolling), SFP/CVD kontrolü mevcut barda, ileri getiri
 ayrı ölçülüyor.
 """
+
 import os
 import sys
 
@@ -29,18 +30,21 @@ from research.pattern_lab.vol_exhaustion_bt import _stats  # pylint: disable=wro
 
 DAYS = 20  # 22 Haziran'dan itibaren tam sembol kapsamı (480-605) var; öncesi delikli
 MIN_BARS = 150
-WINDOW = 100            # likidite seviyesi arama penceresi (bar)
-TOUCH_TOL = 0.002        # %0.2 — find_support_resistance ile aynı tolerans
-MIN_TOUCHES = 3          # Tlosx BSLSSL: "3+ eşit tepe/dip kümesi = likidite havuzu"
-MIN_DEPTH_ATR = 0.4      # Tlosx SWEEP: "Min Süpürme Derinliği 0.4xATR ~%60 isabet"
+WINDOW = 100  # likidite seviyesi arama penceresi (bar)
+TOUCH_TOL = 0.002  # %0.2 — find_support_resistance ile aynı tolerans
+MIN_TOUCHES = 3  # Tlosx BSLSSL: "3+ eşit tepe/dip kümesi = likidite havuzu"
+MIN_DEPTH_ATR = 0.4  # Tlosx SWEEP: "Min Süpürme Derinliği 0.4xATR ~%60 isabet"
 ATR_PERIOD = 14
 HORIZONS = {"4s": 16, "12s": 48, "24s": 96}
 
 
 def _fetch() -> pd.DataFrame:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     q = f"""
         SELECT symbol, time_bucket('15 minutes', timestamp) AS ts,
@@ -75,7 +79,7 @@ def _sfp_cvd_signals(g: pd.DataFrame) -> tuple:
     if n <= WINDOW:
         return buy_sig, sell_sig
 
-    win_low = sliding_window_view(low, WINDOW)    # win_low[k] = low[k : k+WINDOW]
+    win_low = sliding_window_view(low, WINDOW)  # win_low[k] = low[k : k+WINDOW]
     win_high = sliding_window_view(high, WINDOW)
     win_min = win_low.min(axis=1)
     win_max = win_high.max(axis=1)
@@ -113,8 +117,10 @@ def run() -> None:
     df = _fetch()
     t_min, t_max = df["ts"].min(), df["ts"].max()
     mid = t_min + (t_max - t_min) / 2
-    print(f"{df['symbol'].nunique()} sembol, {len(df):,} 15m bar\n"
-          f"dönem: {t_min} .. {t_max} | orta nokta: {mid}\n")
+    print(
+        f"{df['symbol'].nunique()} sembol, {len(df):,} 15m bar\n"
+        f"dönem: {t_min} .. {t_max} | orta nokta: {mid}\n"
+    )
 
     labels = ["baseline", "buy", "sell"]
     halves = ["tum", "ilk_yari", "ikinci_yari"]
@@ -151,7 +157,9 @@ def run() -> None:
                 res[h_name][lbl]["ilk_yari"].append(rets[first_mask])
                 res[h_name][lbl]["ikinci_yari"].append(rets[~first_mask])
 
-    print(f"analiz edilen sembol: {n_syms} | SFP+CVD Long olay: {n_buy_events} | Short olay: {n_sell_events}\n")
+    print(
+        f"analiz edilen sembol: {n_syms} | SFP+CVD Long olay: {n_buy_events} | Short olay: {n_sell_events}\n"
+    )
     for h_name in HORIZONS:
         print(f"── ufuk: {h_name} ──")
         print(f"{'grup':10} {'dönem':12} {'n':>7} {'WR%':>6} {'ort%':>8} {'PF':>7}")
@@ -160,8 +168,10 @@ def run() -> None:
                 arrs = res[h_name][lbl][half]
                 rets = np.concatenate(arrs) if arrs else np.array([])
                 s = _stats(rets)
-                print(f"{lbl:10} {half:12} {s.get('n',0):>7} {s.get('wr',0):>6} "
-                      f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+                print(
+                    f"{lbl:10} {half:12} {s.get('n',0):>7} {s.get('wr',0):>6} "
+                    f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+                )
         print()
 
 

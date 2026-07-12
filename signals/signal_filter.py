@@ -59,13 +59,20 @@ class SignalFilter:
         async def _do_check() -> bool:
             async with get_session() as session:
                 result = await session.execute(
-                    text("""
+                    text(
+                        """
                         SELECT high, low FROM signal_filter_events
                         WHERE symbol = :symbol AND interval = :interval
                           AND indicator = :indicator AND signal_type = :opposite
                         ORDER BY bar_time DESC LIMIT 1
-                    """),
-                    {"symbol": symbol, "interval": interval, "indicator": indicator, "opposite": opposite},
+                    """
+                    ),
+                    {
+                        "symbol": symbol,
+                        "interval": interval,
+                        "indicator": indicator,
+                        "opposite": opposite,
+                    },
                 )
                 row = result.fetchone()
 
@@ -75,15 +82,23 @@ class SignalFilter:
                     passed = row is not None and high > row[0]
 
                 await session.execute(
-                    text("""
+                    text(
+                        """
                         INSERT INTO signal_filter_events
                         (symbol, interval, indicator, signal_type, high, low, passed, bar_time, created_at)
                         VALUES (:symbol, :interval, :indicator, :signal_type, :high, :low, :passed, :bar_time, :created_at)
-                    """),
+                    """
+                    ),
                     {
-                        "symbol": symbol, "interval": interval, "indicator": indicator,
-                        "signal_type": signal_type, "high": high, "low": low,
-                        "passed": passed, "bar_time": bar_time, "created_at": datetime.now(),
+                        "symbol": symbol,
+                        "interval": interval,
+                        "indicator": indicator,
+                        "signal_type": signal_type,
+                        "high": high,
+                        "low": low,
+                        "passed": passed,
+                        "bar_time": bar_time,
+                        "created_at": datetime.now(),
                     },
                 )
             return passed
@@ -93,7 +108,10 @@ class SignalFilter:
         except Exception as e:  # pylint: disable=broad-exception-caught
             logger.warning(
                 "SignalFilter DB hatası [%s:%s:%s]: %s — fail-closed (reddedildi)",
-                symbol, interval, indicator, e,
+                symbol,
+                interval,
+                indicator,
+                e,
             )
             return False
 
@@ -101,16 +119,24 @@ class SignalFilter:
         self, symbol: str, interval: str, indicator: str, signal_type: str
     ) -> Optional[tuple[float, float]]:
         """Diagnostik/görselleştirme amaçlı: bu key için en son (high, low) olayını döner."""
+
         async def _do_query():
             async with get_session() as session:
                 result = await session.execute(
-                    text("""
+                    text(
+                        """
                         SELECT high, low FROM signal_filter_events
                         WHERE symbol = :symbol AND interval = :interval
                           AND indicator = :indicator AND signal_type = :signal_type
                         ORDER BY bar_time DESC LIMIT 1
-                    """),
-                    {"symbol": symbol, "interval": interval, "indicator": indicator, "signal_type": signal_type},
+                    """
+                    ),
+                    {
+                        "symbol": symbol,
+                        "interval": interval,
+                        "indicator": indicator,
+                        "signal_type": signal_type,
+                    },
                 )
                 row = result.fetchone()
                 return (row[0], row[1]) if row else None
@@ -121,13 +147,16 @@ class SignalFilter:
         """Bir (symbol, interval, indicator) key'inin tüm olaylarını siler —
         analiz/backtest scriptlerinin (ör. scripts/compare_filter_output.py)
         kendi izole symbol'lerini temizlemesi için, canlı verilere dokunmaz."""
+
         async def _do_delete() -> None:
             async with get_session() as session:
                 await session.execute(
-                    text("""
+                    text(
+                        """
                         DELETE FROM signal_filter_events
                         WHERE symbol = :symbol AND interval = :interval AND indicator = :indicator
-                    """),
+                    """
+                    ),
                     {"symbol": symbol, "interval": interval, "indicator": indicator},
                 )
 

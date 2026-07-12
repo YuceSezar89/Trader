@@ -44,9 +44,7 @@ class MTFBackfillEngine:
     """MTF Backfill Ana Motoru"""
 
     def __init__(self):
-        self.db_url = os.getenv(
-            "DATABASE_URL", "postgresql://yusuf@localhost:6432/trader_panel"
-        )
+        self.db_url = os.getenv("DATABASE_URL", "postgresql://yusuf@localhost:6432/trader_panel")
         self.supported_timeframes = ["5m", "15m", "1h"]
         self.batch_size = 1000  # Toplu insert için
         self.stats = BackfillStats()
@@ -139,9 +137,7 @@ class MTFBackfillEngine:
             except Exception as e:
                 logger.error(f"❌ {symbol} {timeframe} hatası: {e}")
 
-    async def _get_symbol_1m_data(
-        self, conn, symbol: str, days_back: int
-    ) -> pd.DataFrame:
+    async def _get_symbol_1m_data(self, conn, symbol: str, days_back: int) -> pd.DataFrame:
         """Sembol için 1m verilerini al"""
 
         result = await conn.fetch(
@@ -209,18 +205,14 @@ class MTFBackfillEngine:
             prev_row = df_mtf.iloc[i - 1] if i > 0 else None
 
             # Sinyal koşullarını kontrol et
-            signal_data = self._check_signal_conditions(
-                row, symbol, timeframe, prev_row, df_mtf, i
-            )
+            signal_data = self._check_signal_conditions(row, symbol, timeframe, prev_row, df_mtf, i)
 
             if signal_data:
                 signals.append(signal_data)
 
         return signals
 
-    def _aggregate_to_timeframe(
-        self, df_1m: pd.DataFrame, timeframe: str
-    ) -> pd.DataFrame:
+    def _aggregate_to_timeframe(self, df_1m: pd.DataFrame, timeframe: str) -> pd.DataFrame:
         """1m verilerini belirtilen timeframe'e agregasyon yap (TradingView uyumlu)
 
         Pandas resample kullanarak timestamp'leri doğru align eder:
@@ -287,9 +279,7 @@ class MTFBackfillEngine:
             df["minus_di"] = minus_di
 
             # Volume SMA
-            df["volume_sma_20"] = indicators.calculate_sma(
-                df, period=20, price_col="volume"
-            )
+            df["volume_sma_20"] = indicators.calculate_sma(df, period=20, price_col="volume")
 
             # Momentum (basit fiyat değişimi)
             df["momentum"] = df["close"].pct_change(5)  # 5 periyot momentum
@@ -330,9 +320,7 @@ class MTFBackfillEngine:
 
             # Beta (market correlation - kendisiyle korelasyon = 1)
             df["beta"] = (
-                1.0
-                + (df["returns"].rolling(20).std() - df["returns"].std())
-                / df["returns"].std()
+                1.0 + (df["returns"].rolling(20).std() - df["returns"].std()) / df["returns"].std()
             )
 
             # Sharpe ratio (basit)
@@ -361,9 +349,7 @@ class MTFBackfillEngine:
             # Z-Score ratio percent
             returns_mean = df["returns"].rolling(50).mean()
             returns_std = df["returns"].rolling(50).std()
-            df["zscore_ratio_percent"] = (
-                (df["returns"] - returns_mean) / returns_std
-            ) * 100
+            df["zscore_ratio_percent"] = ((df["returns"] - returns_mean) / returns_std) * 100
 
             # Omega ratio (upside/downside ratio)
             upside_returns = df["returns"][df["returns"] > 0].rolling(20).sum()
@@ -373,17 +359,13 @@ class MTFBackfillEngine:
             )  # Avoid division by zero
 
             # Treynor ratio (excess return / beta)
-            df["treynor_ratio"] = excess_returns.rolling(20).mean() / (
-                df["beta"] + 0.001
-            )
+            df["treynor_ratio"] = excess_returns.rolling(20).mean() / (df["beta"] + 0.001)
 
             # Information ratio (active return / tracking error)
             benchmark_return = df["returns"].rolling(50).mean()  # Market benchmark
             active_return = df["returns"] - benchmark_return
             tracking_error = active_return.rolling(20).std()
-            df["information_ratio"] = active_return.rolling(20).mean() / (
-                tracking_error + 0.001
-            )
+            df["information_ratio"] = active_return.rolling(20).mean() / (tracking_error + 0.001)
 
             # Eksik kolonları ekle
             # MTF Score (composite score)
@@ -583,9 +565,7 @@ class MTFBackfillEngine:
         (df.iloc[:idx+1]) geçilir, tek satırdan basit bir yaklaşıklık yapılmaz."""
         try:
             row = df.iloc[idx]
-            signal_type = (
-                "Long" if row.get("close", 0) > row.get("ma200", 0) else "Short"
-            )
+            signal_type = "Long" if row.get("close", 0) > row.get("ma200", 0) else "Short"
             df_slice = df.iloc[: idx + 1]
             vol_score, momentum_score, vlt_score, price_score = compute_components(
                 df_slice, signal_type

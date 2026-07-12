@@ -10,8 +10,8 @@ import sys
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from typing import Dict, Optional
-from config import Config
 
+from config import Config
 
 _ENTRY_LOG_FILES = {
     "signal_service": "signal_service.log",
@@ -48,19 +48,19 @@ class TRaderLogger:
         """Merkezi logging yapılandırması"""
         if cls._configured:
             return
-            
+
         # Log dizinini oluştur
         if not os.path.exists(Config.LOG_DIR):
             os.makedirs(Config.LOG_DIR)
-        
+
         # Root logger yapılandırması
         root_logger = logging.getLogger()
         root_logger.setLevel(Config.LOG_LEVEL)
-        
+
         # Mevcut handler'ları temizle
         for handler in root_logger.handlers[:]:
             root_logger.removeHandler(handler)
-        
+
         # Console handler — sadece terminale bağlıyken (nohup/servis modunda
         # stdout services.log'a yönlendirilir, kopya akış dosyayı sınırsız büyütür)
         console_handler = None
@@ -68,8 +68,7 @@ class TRaderLogger:
             console_handler = logging.StreamHandler()
             console_handler.setLevel(Config.LOG_LEVEL)
             console_formatter = logging.Formatter(
-                '%(asctime)s [%(levelname)s] [%(name)s] %(message)s',
-                datefmt='%Y-%m-%d %H:%M:%S'
+                "%(asctime)s [%(levelname)s] [%(name)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
             )
             console_handler.setFormatter(console_formatter)
 
@@ -84,13 +83,10 @@ class TRaderLogger:
                 os.path.join(Config.LOG_DIR, _log_filename()),
                 maxBytes=Config.LOG_FILE_MAX_SIZE,
                 backupCount=Config.LOG_FILE_BACKUP_COUNT,
-                encoding='utf-8'
+                encoding="utf-8",
             )
             file_handler.setLevel(logging.DEBUG)
-            file_formatter = logging.Formatter(
-                Config.LOG_FORMAT,
-                datefmt=Config.LOG_DATE_FORMAT
-            )
+            file_formatter = logging.Formatter(Config.LOG_FORMAT, datefmt=Config.LOG_DATE_FORMAT)
             file_handler.setFormatter(file_formatter)
             root_logger.addHandler(file_handler)
         else:
@@ -99,30 +95,30 @@ class TRaderLogger:
         # Handler'ları ekle
         if console_handler is not None:
             root_logger.addHandler(console_handler)
-        
+
         # Also set python-binance websocket client logger to DEBUG to capture CLOSE frames and details
         try:
-            ws_logger = logging.getLogger('binance.websocket.websocket_client')
+            ws_logger = logging.getLogger("binance.websocket.websocket_client")
             # Force debug to get protocol-level messages about close frames
             ws_logger.setLevel(logging.DEBUG)
         except Exception:
             # Non-critical if this logger doesn't exist in older/newer lib versions
-            root_logger.debug('Could not set debug level for binance.websocket.websocket_client')
-        
+            root_logger.debug("Could not set debug level for binance.websocket.websocket_client")
+
         cls._configured = True
-    
+
     @classmethod
     def get_logger(cls, name: str) -> logging.Logger:
         """Modül için logger al"""
         if not cls._configured:
             cls.setup_logging()
-            
+
         if name not in cls._loggers:
             logger = logging.getLogger(name)
             cls._loggers[name] = logger
-            
+
         return cls._loggers[name]
-    
+
     @classmethod
     def get_module_logger(cls, module_file: str) -> logging.Logger:
         """Dosya yolundan modül logger'ı al"""
@@ -135,23 +131,24 @@ def get_logger(name: Optional[str] = None) -> logging.Logger:
     """Logger al - modül adı verilmezse çağıran modülün adını kullan"""
     if name is None:
         import inspect
+
         frame = inspect.currentframe()
         if frame and frame.f_back:
             caller_frame = frame.f_back
-            name = caller_frame.f_globals.get('__name__', 'unknown')
-            if name == '__main__':
-                filename = caller_frame.f_globals.get('__file__', 'main')
+            name = caller_frame.f_globals.get("__name__", "unknown")
+            if name == "__main__":
+                filename = caller_frame.f_globals.get("__file__", "main")
                 if filename:
                     name = os.path.splitext(os.path.basename(filename))[0]
                 else:
-                    name = 'main'
+                    name = "main"
         else:
-            name = 'unknown'
-    
+            name = "unknown"
+
     # Ensure name is never None
     if name is None:
-        name = 'unknown'
-    
+        name = "unknown"
+
     return TRaderLogger.get_logger(name)
 
 
@@ -181,6 +178,7 @@ def log_signal(logger: logging.Logger, symbol: str, signal_type: str, details: s
 def log_error_with_context(logger: logging.Logger, error: Exception, context: str = ""):
     """Hata logları için özel format"""
     import traceback
+
     if context:
         logger.error(f"[ERROR] {context}: {str(error)}")
     else:

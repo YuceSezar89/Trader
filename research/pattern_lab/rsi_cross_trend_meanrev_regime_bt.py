@@ -13,6 +13,7 @@ Look-ahead: cagg_{interval}.bucket bar AÇILIŞ zamanı (bkz. mtf_helpers.py).
 merge_asof'a opened_at yerine (opened_at - bar_süresi) veriliyor — bar
 GERÇEKTEN kapanmadan durumu kullanılmıyor.
 """
+
 import os
 import sys
 
@@ -21,12 +22,18 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from research.pattern_lab.devissotrader_agents_bt import (  # pylint: disable=wrong-import-position
-    _mean_reversion_state_series, _trend_state_series,
+    _mean_reversion_state_series,
+    _trend_state_series,
 )
 from research.pattern_lab.rsi_cross_volbreakout_regime_bt import (  # pylint: disable=wrong-import-position
-    INDICATOR, _fetch_regime, _fetch_signals, _merge_regime,
+    INDICATOR,
+    _fetch_regime,
+    _fetch_signals,
+    _merge_regime,
 )
-from research.pattern_lab.threshold_optimizer import _run_single_var_on_df  # pylint: disable=wrong-import-position
+from research.pattern_lab.threshold_optimizer import (
+    _run_single_var_on_df,  # pylint: disable=wrong-import-position
+)
 
 TESTS = [
     ("trend_state", "4h", _trend_state_series, pd.Timedelta(hours=4)),
@@ -42,10 +49,14 @@ def run() -> None:
                 print(f"{INDICATOR} — {direction}: yetersiz sinyal ({len(sig_df)}), atlanıyor")
                 continue
 
-            regime_df = _fetch_regime(sig_df["symbol"].unique().tolist(), interval, state_fn, col_name)
+            regime_df = _fetch_regime(
+                sig_df["symbol"].unique().tolist(), interval, state_fn, col_name
+            )
             merged = _merge_regime(sig_df, regime_df, col_name, bar_duration)
-            print(f"{INDICATOR} — {direction} — {col_name} ({interval}): {len(sig_df):,} sinyal, "
-                  f"{len(merged):,} rejim durumuyla eşleşti (ort={merged[col_name].mean():.2f})")
+            print(
+                f"{INDICATOR} — {direction} — {col_name} ({interval}): {len(sig_df):,} sinyal, "
+                f"{len(merged):,} rejim durumuyla eşleşti (ort={merged[col_name].mean():.2f})"
+            )
 
             label = f"{INDICATOR} — {direction} — {col_name} ({interval} rejimi)"
             _run_single_var_on_df(label, merged, col_name)

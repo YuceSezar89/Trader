@@ -31,6 +31,7 @@ class RiskManager:
 
     async def load_active_symbols(self) -> None:
         """Startup'ta aktif sinyallerin sembollerini bellekte önbelleğe al."""
+
         async def _do_load() -> set[str]:
             async with get_session() as session:
                 result = await session.execute(
@@ -87,7 +88,11 @@ class RiskManager:
                             closed_symbols.add(sig.symbol)
                             logger.info(
                                 "[%s] %s id=%d %s @ %.6f",
-                                sig.symbol, sig.signal_type, sig.id, reason, price,
+                                sig.symbol,
+                                sig.signal_type,
+                                sig.id,
+                                reason,
+                                price,
                             )
                             changed = True
                         elif sig.trailing_stop_price != old_trail:
@@ -150,9 +155,9 @@ class RiskManager:
         close_price: float,
         reason: str,
     ) -> None:
-        sig.status       = "closed"
-        sig.closed_at    = datetime.now()
-        sig.close_price  = close_price
+        sig.status = "closed"
+        sig.closed_at = datetime.now()
+        sig.close_price = close_price
         sig.close_reason = reason
         sig.realized_pnl = _calc_pnl(sig.signal_type, float(sig.open_price), close_price)
         session.add(sig)

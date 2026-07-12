@@ -3,18 +3,24 @@ PaperTradePanel — sanal portföy takip paneli.
 Üst: bakiye / PnL / win rate / drawdown özeti
 Alt: açık pozisyonlar tablosu + kapalı işlem geçmişi
 """
+
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Any
-
-import json
 
 import psycopg2
 import psycopg2.extras
 import pyarrow as _pa
 import redis as _redis_lib
-from PyQt6.QtCore import Qt, QPoint, QThread, QTimer, pyqtSignal  # pylint: disable=no-name-in-module
+from PyQt6.QtCore import (  # pylint: disable=no-name-in-module
+    QPoint,
+    Qt,
+    QThread,
+    QTimer,
+    pyqtSignal,
+)
 from PyQt6.QtGui import QColor  # pylint: disable=no-name-in-module
 from PyQt6.QtWidgets import (  # pylint: disable=no-name-in-module
     QAbstractItemView,
@@ -25,9 +31,9 @@ from PyQt6.QtWidgets import (  # pylint: disable=no-name-in-module
     QMenu,
     QPushButton,
     QSizePolicy,
-    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -46,7 +52,8 @@ class _FetchWorker(QThread):
         try:
             conn = psycopg2.connect(**self._db_config)
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT
                         COUNT(*) FILTER (WHERE status = 'closed') AS total_trades,
                         COUNT(*) FILTER (WHERE status = 'closed' AND pnl_pct > 0) AS winning_trades,
@@ -55,10 +62,12 @@ class _FetchWorker(QThread):
                         10000 AS initial_balance,
                         0 AS max_drawdown_pct
                     FROM paper_trades
-                """)
+                """
+                )
                 pf = dict(cur.fetchone()) if cur.rowcount else None
 
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT id, symbol, signal_type, interval, strategy, source,
                            entry_price, stop_loss_price, take_profit_price,
                            trailing_stop_price, opened_at, vpms_score, z_score_entry,
@@ -66,10 +75,12 @@ class _FetchWorker(QThread):
                     FROM paper_trades
                     WHERE status = 'open'
                     ORDER BY opened_at DESC
-                """)
+                """
+                )
                 open_rows = [dict(r) for r in cur.fetchall()]
 
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT symbol, signal_type, interval, strategy, source,
                            entry_price, exit_price, pnl_usd, pnl_pct,
                            close_reason, closed_at
@@ -77,17 +88,47 @@ class _FetchWorker(QThread):
                     WHERE status = 'closed'
                     ORDER BY closed_at DESC
                     LIMIT 200
-                """)
+                """
+                )
                 hist_rows = [dict(r) for r in cur.fetchall()]
 
             conn.close()
             self.fetched.emit(pf, open_rows, hist_rows)
         except Exception as exc:
             import logging
-            logging.getLogger(__name__).error("[PaperTradePanel] fetch hatası: %s", exc, exc_info=True)
 
-OPEN_COLS  = ["Sembol", "Yön", "TF", "Strateji", "Giriş$", "Fiyat$", "P&L$", "P&L%", "SL%", "TP%", "Trail$", "VPMV", "Süre"]
-HIST_COLS  = ["Sembol", "Yön", "TF", "Strateji", "Giriş$", "Çıkış$", "P&L$", "P&L%", "Neden", "Kapatma"]
+            logging.getLogger(__name__).error(
+                "[PaperTradePanel] fetch hatası: %s", exc, exc_info=True
+            )
+
+
+OPEN_COLS = [
+    "Sembol",
+    "Yön",
+    "TF",
+    "Strateji",
+    "Giriş$",
+    "Fiyat$",
+    "P&L$",
+    "P&L%",
+    "SL%",
+    "TP%",
+    "Trail$",
+    "VPMV",
+    "Süre",
+]
+HIST_COLS = [
+    "Sembol",
+    "Yön",
+    "TF",
+    "Strateji",
+    "Giriş$",
+    "Çıkış$",
+    "P&L$",
+    "P&L%",
+    "Neden",
+    "Kapatma",
+]
 
 
 def _age(dt: datetime | None) -> str:
@@ -118,6 +159,7 @@ def _item(text: str, align: Qt.AlignmentFlag = Qt.AlignmentFlag.AlignCenter) -> 
 
 class _NumItem(QTableWidgetItem):
     """Numerik değerleri doğru sıralayan QTableWidgetItem."""
+
     def __init__(self, text: str, sort_val: float):
         super().__init__(text)
         self._sort_val = sort_val
@@ -142,15 +184,22 @@ class PaperTradePanel(QWidget):
         self._open_ids: list[int] = []
         self._open_rows: list[dict] = []
         self._open_filter: dict[str, str] = {"side": "Tümü", "tf": "Tümü", "search": ""}
-        self._hist_filter: dict[str, str] = {"side": "Tümü", "tf": "Tümü", "reason": "Tümü", "search": ""}
+        self._hist_filter: dict[str, str] = {
+            "side": "Tümü",
+            "tf": "Tümü",
+            "reason": "Tümü",
+            "search": "",
+        }
 
         # Redis bağlantısı — paper trade sembolleri için direkt polling (binary, Arrow)
         self._redis: _redis_lib.Redis | None = None
         if redis_url:
             try:
                 self._redis = _redis_lib.Redis.from_url(
-                    redis_url, decode_responses=False,
-                    socket_connect_timeout=2, socket_timeout=2,
+                    redis_url,
+                    decode_responses=False,
+                    socket_connect_timeout=2,
+                    socket_timeout=2,
                 )
                 self._redis.ping()
             except Exception:  # pylint: disable=broad-exception-caught
@@ -187,13 +236,18 @@ class PaperTradePanel(QWidget):
 
         # ── Özet bar ──
         summary = QHBoxLayout()
-        self._lbl_balance   = self._stat_label("Bakiye", "$10,000.00")
-        self._lbl_pnl       = self._stat_label("Toplam P&L", "$0.00")
-        self._lbl_winrate   = self._stat_label("Win Rate", "—")
-        self._lbl_drawdown  = self._stat_label("Max DD", "0.00%")
-        self._lbl_open      = self._stat_label("Açık", "0")
-        for w in [self._lbl_balance, self._lbl_pnl, self._lbl_winrate,
-                  self._lbl_drawdown, self._lbl_open]:
+        self._lbl_balance = self._stat_label("Bakiye", "$10,000.00")
+        self._lbl_pnl = self._stat_label("Toplam P&L", "$0.00")
+        self._lbl_winrate = self._stat_label("Win Rate", "—")
+        self._lbl_drawdown = self._stat_label("Max DD", "0.00%")
+        self._lbl_open = self._stat_label("Açık", "0")
+        for w in [
+            self._lbl_balance,
+            self._lbl_pnl,
+            self._lbl_winrate,
+            self._lbl_drawdown,
+            self._lbl_open,
+        ]:
             summary.addWidget(w)
         summary.addStretch()
 
@@ -208,7 +262,8 @@ class PaperTradePanel(QWidget):
 
         # ── Tab widget ──
         self._tabs = QTabWidget()
-        self._tabs.setStyleSheet(f"""
+        self._tabs.setStyleSheet(
+            f"""
             QTabWidget::pane {{
                 border: 1px solid {COLORS['bg_tertiary']};
                 background: {COLORS['bg_secondary']};
@@ -228,7 +283,8 @@ class PaperTradePanel(QWidget):
             QTabBar::tab:hover {{
                 color: {COLORS['text_primary']};
             }}
-        """)
+        """
+        )
 
         # ── Açık pozisyonlar tab ──
         open_widget = QWidget()
@@ -246,16 +302,18 @@ class PaperTradePanel(QWidget):
             f"QPushButton:hover {{ background: #1a5c2a; }}"
         )
         self._btn_manual.clicked.connect(self._on_manual_trade)
-        self._open_cb_side   = self._make_combo(["Tümü", "Long", "Short"])
-        self._open_cb_tf     = self._make_combo(["Tümü", "5m", "15m", "1h", "4h"])
-        self._open_search    = self._make_search("Sembol ara...")
+        self._open_cb_side = self._make_combo(["Tümü", "Long", "Short"])
+        self._open_cb_tf = self._make_combo(["Tümü", "5m", "15m", "1h", "4h"])
+        self._open_search = self._make_search("Sembol ara...")
         self._open_cb_side.currentTextChanged.connect(lambda v: self._set_open_filter("side", v))
         self._open_cb_tf.currentTextChanged.connect(lambda v: self._set_open_filter("tf", v))
         self._open_search.textChanged.connect(lambda v: self._set_open_filter("search", v))
         open_bar.addWidget(self._btn_manual)
         open_bar.addSpacing(8)
-        open_bar.addWidget(QLabel("Yön:")); open_bar.addWidget(self._open_cb_side)
-        open_bar.addWidget(QLabel("TF:"));  open_bar.addWidget(self._open_cb_tf)
+        open_bar.addWidget(QLabel("Yön:"))
+        open_bar.addWidget(self._open_cb_side)
+        open_bar.addWidget(QLabel("TF:"))
+        open_bar.addWidget(self._open_cb_tf)
         open_bar.addWidget(self._open_search)
         open_bar.addStretch()
         open_layout.addLayout(open_bar)
@@ -271,17 +329,22 @@ class PaperTradePanel(QWidget):
 
         hist_bar = QHBoxLayout()
         hist_bar.setSpacing(6)
-        self._hist_cb_side   = self._make_combo(["Tümü", "Long", "Short"])
-        self._hist_cb_tf     = self._make_combo(["Tümü", "5m", "15m", "1h", "4h"])
+        self._hist_cb_side = self._make_combo(["Tümü", "Long", "Short"])
+        self._hist_cb_tf = self._make_combo(["Tümü", "5m", "15m", "1h", "4h"])
         self._hist_cb_reason = self._make_combo(["Tümü"])
-        self._hist_search    = self._make_search("Sembol ara...")
+        self._hist_search = self._make_search("Sembol ara...")
         self._hist_cb_side.currentTextChanged.connect(lambda v: self._set_hist_filter("side", v))
         self._hist_cb_tf.currentTextChanged.connect(lambda v: self._set_hist_filter("tf", v))
-        self._hist_cb_reason.currentTextChanged.connect(lambda v: self._set_hist_filter("reason", v))
+        self._hist_cb_reason.currentTextChanged.connect(
+            lambda v: self._set_hist_filter("reason", v)
+        )
         self._hist_search.textChanged.connect(lambda v: self._set_hist_filter("search", v))
-        hist_bar.addWidget(QLabel("Yön:"));   hist_bar.addWidget(self._hist_cb_side)
-        hist_bar.addWidget(QLabel("TF:"));    hist_bar.addWidget(self._hist_cb_tf)
-        hist_bar.addWidget(QLabel("Neden:")); hist_bar.addWidget(self._hist_cb_reason)
+        hist_bar.addWidget(QLabel("Yön:"))
+        hist_bar.addWidget(self._hist_cb_side)
+        hist_bar.addWidget(QLabel("TF:"))
+        hist_bar.addWidget(self._hist_cb_tf)
+        hist_bar.addWidget(QLabel("Neden:"))
+        hist_bar.addWidget(self._hist_cb_reason)
         hist_bar.addWidget(self._hist_search)
         hist_bar.addStretch()
         hist_layout.addLayout(hist_bar)
@@ -311,9 +374,7 @@ class PaperTradePanel(QWidget):
             )
         else:
             self._pt_toggle_btn.setText("▶ PT Başlat")
-            self._pt_toggle_btn.setStyleSheet(
-                f"color: {COLORS['green']}; font-weight: bold;"
-            )
+            self._pt_toggle_btn.setStyleSheet(f"color: {COLORS['green']}; font-weight: bold;")
 
     def _toggle_paper_trade(self) -> None:
         if self._redis is None:
@@ -353,7 +414,8 @@ class PaperTradePanel(QWidget):
         cb = QComboBox()
         cb.addItems(options)
         cb.setFixedHeight(24)
-        cb.setStyleSheet(f"""
+        cb.setStyleSheet(
+            f"""
             QComboBox {{
                 background: {COLORS['bg_tertiary']}; color: {COLORS['text_primary']};
                 border: 1px solid #444; border-radius: 3px;
@@ -364,7 +426,8 @@ class PaperTradePanel(QWidget):
                 background: {COLORS['bg_tertiary']}; color: {COLORS['text_primary']};
                 selection-background-color: {COLORS['accent']};
             }}
-        """)
+        """
+        )
         return cb
 
     @staticmethod
@@ -373,13 +436,15 @@ class PaperTradePanel(QWidget):
         le.setPlaceholderText(placeholder)
         le.setFixedHeight(24)
         le.setFixedWidth(130)
-        le.setStyleSheet(f"""
+        le.setStyleSheet(
+            f"""
             QLineEdit {{
                 background: {COLORS['bg_tertiary']}; color: {COLORS['text_primary']};
                 border: 1px solid #444; border-radius: 3px;
                 font-size: 11px; padding: 0 6px;
             }}
-        """)
+        """
+        )
         return le
 
     @staticmethod
@@ -392,7 +457,8 @@ class PaperTradePanel(QWidget):
         t.verticalHeader().setVisible(False)
         t.horizontalHeader().setStretchLastSection(True)
         t.setSortingEnabled(True)
-        t.setStyleSheet(f"""
+        t.setStyleSheet(
+            f"""
             QTableWidget {{
                 background-color: {COLORS['bg_secondary']};
                 gridline-color: {COLORS['bg_tertiary']};
@@ -412,7 +478,8 @@ class PaperTradePanel(QWidget):
             QTableWidget::item:alternate {{
                 background-color: {COLORS['bg_primary']};
             }}
-        """)
+        """
+        )
         return t
 
     # ── Fiyat güncellemesi (market worker'dan) ────────────────────────────
@@ -477,35 +544,45 @@ class PaperTradePanel(QWidget):
             if not row:
                 continue
 
-            side  = row["signal_type"]
+            side = row["signal_type"]
             entry = float(row["entry_price"])
-            sl    = row["stop_loss_price"]
-            tp    = row["take_profit_price"]
+            sl = row["stop_loss_price"]
+            tp = row["take_profit_price"]
 
             position_usd = float(row.get("position_usd") or 100.0)
-            pnl_pct = (live - entry) / entry * 100 if side == "Long" else (entry - live) / entry * 100
+            pnl_pct = (
+                (live - entry) / entry * 100 if side == "Long" else (entry - live) / entry * 100
+            )
             pnl_usd = pnl_pct / 100 * position_usd
 
             if sl and live:
-                sl_dist = (float(sl) - live) / live * 100 if side == "Long" else (live - float(sl)) / live * 100
-                sl_str  = f"{sl_dist:+.2f}%"
+                sl_dist = (
+                    (float(sl) - live) / live * 100
+                    if side == "Long"
+                    else (live - float(sl)) / live * 100
+                )
+                sl_str = f"{sl_dist:+.2f}%"
             else:
                 sl_dist, sl_str = None, "—"
 
             tp_str = (
                 f"{((float(tp) - live) / live * 100 if side == 'Long' else (live - float(tp)) / live * 100):+.2f}%"
-                if tp and live else "—"
+                if tp and live
+                else "—"
             )
 
             sl_danger = sl_dist is not None and abs(sl_dist) < 1.0
             danger_bg = QColor("#3d1515")
 
             updates: dict[int, tuple[str, float, QColor | None]] = {
-                5: (f"{live:.5g}",       live,    None),
+                5: (f"{live:.5g}", live, None),
                 6: (f"{pnl_usd:+.2f}$", pnl_usd, _pnl_color(pnl_usd)),
                 7: (f"{pnl_pct:+.2f}%", pnl_pct, _pnl_color(pnl_usd)),
-                8: (sl_str, sl_dist if sl_dist is not None else 0,
-                    QColor("#ff4444") if sl_danger else QColor(COLORS["red"])),
+                8: (
+                    sl_str,
+                    sl_dist if sl_dist is not None else 0,
+                    QColor("#ff4444") if sl_danger else QColor(COLORS["red"]),
+                ),
                 9: (tp_str, 0, QColor(COLORS["green"])),
             }
             for c_idx, (text, sort_val, fg) in updates.items():
@@ -534,25 +611,26 @@ class PaperTradePanel(QWidget):
         self._tabs.setTabText(1, f"Kapalı İşlemler ({len(hist_rows)})")
 
     def _update_summary(self, pf: dict, unrealized: float = 0.0) -> None:
-        balance    = float(pf["balance"])
-        realized   = float(pf["total_pnl_usd"])
-        total      = int(pf["total_trades"])
-        wins       = int(pf["winning_trades"])
-        dd         = float(pf["max_drawdown_pct"])
-        total_pnl  = realized + unrealized
+        balance = float(pf["balance"])
+        realized = float(pf["total_pnl_usd"])
+        total = int(pf["total_trades"])
+        wins = int(pf["winning_trades"])
+        dd = float(pf["max_drawdown_pct"])
+        total_pnl = realized + unrealized
 
         pnl_color = COLORS["green"] if total_pnl >= 0 else COLORS["red"]
-        wr_color  = COLORS["green"] if total > 0 and wins / total >= 0.5 else COLORS["red"]
-        wr_str    = f"{wins}/{total} ({wins/total*100:.0f}%)" if total > 0 else "—"
+        wr_color = COLORS["green"] if total > 0 and wins / total >= 0.5 else COLORS["red"]
+        wr_str = f"{wins}/{total} ({wins/total*100:.0f}%)" if total > 0 else "—"
 
-        unr_str   = f" ({unrealized:+.2f}$ açık)" if unrealized != 0 else ""
-        pnl_str   = f"${total_pnl:+,.2f}{unr_str}"
+        unr_str = f" ({unrealized:+.2f}$ açık)" if unrealized != 0 else ""
+        pnl_str = f"${total_pnl:+,.2f}{unr_str}"
 
-        self._stat_value(self._lbl_balance,  f"${balance + unrealized:,.2f}")
-        self._stat_value(self._lbl_pnl,      pnl_str, pnl_color)
-        self._stat_value(self._lbl_winrate,  wr_str, wr_color)
-        self._stat_value(self._lbl_drawdown, f"{dd:.2f}%",
-                         COLORS["red"] if dd > 5 else COLORS["text_primary"])
+        self._stat_value(self._lbl_balance, f"${balance + unrealized:,.2f}")
+        self._stat_value(self._lbl_pnl, pnl_str, pnl_color)
+        self._stat_value(self._lbl_winrate, wr_str, wr_color)
+        self._stat_value(
+            self._lbl_drawdown, f"{dd:.2f}%", COLORS["red"] if dd > 5 else COLORS["text_primary"]
+        )
 
     # OPEN_COLS = [Sembol0, Yön1, TF2, Strateji3, Giriş$4, Fiyat$5, P&L$6, P&L%7, SL%8, TP%9, Trail$10, VPMS11, Süre12]
     _OPEN_NUM_COLS = {4, 5, 6, 7, 8, 9, 10, 11}  # numerik sıralama gereken kolonlar
@@ -566,18 +644,20 @@ class PaperTradePanel(QWidget):
 
         total_unrealized = 0.0
         for r_idx, row in enumerate(rows):
-            sym    = row["symbol"]
-            side   = row["signal_type"]
-            tf     = row["interval"]
-            strat  = row.get("strategy", "")
-            src    = row.get("source", "signal")
-            entry  = float(row["entry_price"])
-            trail  = row["trailing_stop_price"]
-            vpms   = row.get("vpms_score")
+            sym = row["symbol"]
+            side = row["signal_type"]
+            tf = row["interval"]
+            strat = row.get("strategy", "")
+            src = row.get("source", "signal")
+            entry = float(row["entry_price"])
+            trail = row["trailing_stop_price"]
+            vpms = row.get("vpms_score")
 
-            live   = self._open_prices.get(sym, entry)
+            live = self._open_prices.get(sym, entry)
             position_usd = float(row.get("position_usd") or 100.0)
-            pnl_pct = (live - entry) / entry * 100 if side == "Long" else (entry - live) / entry * 100
+            pnl_pct = (
+                (live - entry) / entry * 100 if side == "Long" else (entry - live) / entry * 100
+            )
             pnl_usd = pnl_pct / 100 * position_usd
             total_unrealized += pnl_usd
 
@@ -585,37 +665,45 @@ class PaperTradePanel(QWidget):
             tp = row["take_profit_price"]
 
             if sl and live:
-                sl_dist = (float(sl) - live) / live * 100 if side == "Long" else (live - float(sl)) / live * 100
-                sl_str  = f"{sl_dist:+.2f}%"
+                sl_dist = (
+                    (float(sl) - live) / live * 100
+                    if side == "Long"
+                    else (live - float(sl)) / live * 100
+                )
+                sl_str = f"{sl_dist:+.2f}%"
             else:
                 sl_dist, sl_str = None, "—"
 
             if tp and live:
-                tp_dist = (float(tp) - live) / live * 100 if side == "Long" else (live - float(tp)) / live * 100
-                tp_str  = f"{tp_dist:+.2f}%"
+                tp_dist = (
+                    (float(tp) - live) / live * 100
+                    if side == "Long"
+                    else (live - float(tp)) / live * 100
+                )
+                tp_str = f"{tp_dist:+.2f}%"
             else:
                 tp_dist, tp_str = None, "—"
 
-            trail_str   = f"{float(trail):.5g}" if trail else "—"
-            vpms_val    = float(vpms) if vpms is not None else 0.0
-            vpms_str    = f"{vpms_val:.1f}" if vpms is not None else "—"
+            trail_str = f"{float(trail):.5g}" if trail else "—"
+            vpms_val = float(vpms) if vpms is not None else 0.0
+            vpms_str = f"{vpms_val:.1f}" if vpms is not None else "—"
             strat_label = "✋ " + strat if src == "manual" else strat
-            sl_danger   = sl_dist is not None and abs(sl_dist) < 1.0
+            sl_danger = sl_dist is not None and abs(sl_dist) < 1.0
 
             # (text, sort_value)
             cell_data = [
-                (sym,                  None),
-                (side,                 None),
-                (tf,                   None),
-                (strat_label,          None),
-                (f"{entry:.5g}",       entry),
-                (f"{live:.5g}",        live),
-                (f"{pnl_usd:+.2f}$",  pnl_usd),
-                (f"{pnl_pct:+.2f}%",  pnl_pct),
-                (sl_str,               sl_dist if sl_dist is not None else 0.0),
-                (tp_str,               tp_dist if tp_dist is not None else 0.0),
-                (trail_str,            float(trail) if trail else 0.0),
-                (vpms_str,             vpms_val),
+                (sym, None),
+                (side, None),
+                (tf, None),
+                (strat_label, None),
+                (f"{entry:.5g}", entry),
+                (f"{live:.5g}", live),
+                (f"{pnl_usd:+.2f}$", pnl_usd),
+                (f"{pnl_pct:+.2f}%", pnl_pct),
+                (sl_str, sl_dist if sl_dist is not None else 0.0),
+                (tp_str, tp_dist if tp_dist is not None else 0.0),
+                (trail_str, float(trail) if trail else 0.0),
+                (vpms_str, vpms_val),
                 (_age(row["opened_at"]), None),
             ]
 
@@ -626,7 +714,9 @@ class PaperTradePanel(QWidget):
                 if sl_danger:
                     it.setBackground(QColor("#3d1515"))
                 if c_idx == 1:
-                    it.setForeground(QColor(COLORS["green"]) if side == "Long" else QColor(COLORS["red"]))
+                    it.setForeground(
+                        QColor(COLORS["green"]) if side == "Long" else QColor(COLORS["red"])
+                    )
                 if c_idx in (6, 7):
                     it.setForeground(_pnl_color(pnl_usd))
                 if c_idx == 8:
@@ -651,33 +741,36 @@ class PaperTradePanel(QWidget):
         for r_idx, row in enumerate(rows):
             pnl_usd = float(row["pnl_usd"]) if row["pnl_usd"] else 0.0
             pnl_pct = float(row["pnl_pct"]) if row["pnl_pct"] else 0.0
-            closed  = row["closed_at"]
+            closed = row["closed_at"]
             if isinstance(closed, datetime) and closed.tzinfo is not None:
                 closed = closed.replace(tzinfo=None)
-            src         = row.get("source", "signal")
-            strat       = row.get("strategy", "")
+            src = row.get("source", "signal")
+            strat = row.get("strategy", "")
             strat_label = "✋ " + strat if src == "manual" else strat
-            reason      = row["close_reason"] or "—"
+            reason = row["close_reason"] or "—"
             reasons.add(reason)
 
             cell_data = [
-                (row["symbol"],                                              None),
-                (row["signal_type"],                                         None),
-                (row["interval"],                                            None),
-                (strat_label,                                                None),
-                (f"{float(row['entry_price']):.5g}",                        float(row["entry_price"])),
-                (f"{float(row['exit_price']):.5g}" if row["exit_price"] else "—",
-                 float(row["exit_price"]) if row["exit_price"] else 0.0),
-                (f"{pnl_usd:+.2f}$",  pnl_usd),
-                (f"{pnl_pct:+.2f}%",  pnl_pct),
-                (reason,               None),
+                (row["symbol"], None),
+                (row["signal_type"], None),
+                (row["interval"], None),
+                (strat_label, None),
+                (f"{float(row['entry_price']):.5g}", float(row["entry_price"])),
+                (
+                    f"{float(row['exit_price']):.5g}" if row["exit_price"] else "—",
+                    float(row["exit_price"]) if row["exit_price"] else 0.0,
+                ),
+                (f"{pnl_usd:+.2f}$", pnl_usd),
+                (f"{pnl_pct:+.2f}%", pnl_pct),
+                (reason, None),
                 (closed.strftime("%d/%m %H:%M") if closed else "—", None),
             ]
             for c_idx, (text, sort_val) in enumerate(cell_data):
                 it = _NumItem(text, sort_val) if sort_val is not None else _item(text)
                 if c_idx == 1:
                     it.setForeground(
-                        QColor(COLORS["green"]) if row["signal_type"] == "Long"
+                        QColor(COLORS["green"])
+                        if row["signal_type"] == "Long"
                         else QColor(COLORS["red"])
                     )
                 if c_idx in (6, 7):
@@ -707,18 +800,18 @@ class PaperTradePanel(QWidget):
         self._apply_hist_filter()
 
     def _apply_open_filter(self) -> None:
-        side   = self._open_filter["side"]
-        tf     = self._open_filter["tf"]
+        side = self._open_filter["side"]
+        tf = self._open_filter["tf"]
         search = self._open_filter["search"].upper()
         visible = 0
         for r in range(self._open_table.rowCount()):
-            sym_it  = self._open_table.item(r, 0)
+            sym_it = self._open_table.item(r, 0)
             side_it = self._open_table.item(r, 1)
-            tf_it   = self._open_table.item(r, 2)
+            tf_it = self._open_table.item(r, 2)
             hide = bool(
-                (side != "Tümü" and side_it and side_it.text() != side) or
-                (tf   != "Tümü" and tf_it   and tf_it.text()   != tf)   or
-                (search and sym_it and search not in sym_it.text().upper())
+                (side != "Tümü" and side_it and side_it.text() != side)
+                or (tf != "Tümü" and tf_it and tf_it.text() != tf)
+                or (search and sym_it and search not in sym_it.text().upper())
             )
             self._open_table.setRowHidden(r, hide)
             if not hide:
@@ -726,21 +819,21 @@ class PaperTradePanel(QWidget):
         self._tabs.setTabText(0, f"Açık Pozisyonlar ({visible})")
 
     def _apply_hist_filter(self) -> None:
-        side   = self._hist_filter["side"]
-        tf     = self._hist_filter["tf"]
+        side = self._hist_filter["side"]
+        tf = self._hist_filter["tf"]
         reason = self._hist_filter["reason"]
         search = self._hist_filter["search"].upper()
         visible = 0
         for r in range(self._hist_table.rowCount()):
-            sym_it    = self._hist_table.item(r, 0)
-            side_it   = self._hist_table.item(r, 1)
-            tf_it     = self._hist_table.item(r, 2)
+            sym_it = self._hist_table.item(r, 0)
+            side_it = self._hist_table.item(r, 1)
+            tf_it = self._hist_table.item(r, 2)
             reason_it = self._hist_table.item(r, 8)
             hide = bool(
-                (side   != "Tümü" and side_it   and side_it.text()   != side)   or
-                (tf     != "Tümü" and tf_it     and tf_it.text()     != tf)     or
-                (reason != "Tümü" and reason_it and reason_it.text() != reason) or
-                (search and sym_it and search not in sym_it.text().upper())
+                (side != "Tümü" and side_it and side_it.text() != side)
+                or (tf != "Tümü" and tf_it and tf_it.text() != tf)
+                or (reason != "Tümü" and reason_it and reason_it.text() != reason)
+                or (search and sym_it and search not in sym_it.text().upper())
             )
             self._hist_table.setRowHidden(r, hide)
             if not hide:
@@ -751,7 +844,7 @@ class PaperTradePanel(QWidget):
         table = self.sender()
         row = index.row()
         sym_item = table.item(row, 0)
-        tf_item  = table.item(row, 2)
+        tf_item = table.item(row, 2)
         if sym_item and tf_item:
             self.symbol_selected.emit(sym_item.text(), tf_item.text())
 
@@ -760,21 +853,24 @@ class PaperTradePanel(QWidget):
         if row < 0:
             return
         sym_item = self._open_table.item(row, 0)
-        tf_item  = self._open_table.item(row, 2)
+        tf_item = self._open_table.item(row, 2)
         if not sym_item or not tf_item:
             return
         sym_txt = sym_item.text()
-        tf_txt  = tf_item.text()
+        tf_txt = tf_item.text()
         trade_id = next(
-            (r["id"] for r in self._open_rows
-             if r["symbol"] == sym_txt and r["interval"] == tf_txt),
+            (
+                r["id"]
+                for r in self._open_rows
+                if r["symbol"] == sym_txt and r["interval"] == tf_txt
+            ),
             None,
         )
         if trade_id is None:
             return
-        sym_item  = self._open_table.item(row, 0)
+        sym_item = self._open_table.item(row, 0)
         side_item = self._open_table.item(row, 1)
-        sym  = sym_item.text() if sym_item else "?"
+        sym = sym_item.text() if sym_item else "?"
         side = side_item.text() if side_item else "?"
 
         menu = QMenu(self)
@@ -787,8 +883,13 @@ class PaperTradePanel(QWidget):
         price = self._open_prices.get(symbol, 0.0)
         if price == 0.0:
             try:
-                import redis as _redis, json
-                r = _redis.Redis.from_url(self._redis_url, socket_connect_timeout=2, decode_responses=True)
+                import json
+
+                import redis as _redis
+
+                r = _redis.Redis.from_url(
+                    self._redis_url, socket_connect_timeout=2, decode_responses=True
+                )
                 raw = r.get(f"ticker:{symbol}")
                 if raw:
                     d = json.loads(raw)
@@ -807,30 +908,39 @@ class PaperTradePanel(QWidget):
                 if not rec:
                     conn.close()
                     return
-                side  = rec["signal_type"]
+                side = rec["signal_type"]
                 entry = float(rec["entry_price"])
                 position_usd = float(rec["position_usd"] or 100.0)
                 if price == 0.0:
                     price = entry
-                pnl_pct = (price - entry) / entry * 100 if side == "Long" else (entry - price) / entry * 100
+                pnl_pct = (
+                    (price - entry) / entry * 100
+                    if side == "Long"
+                    else (entry - price) / entry * 100
+                )
                 fee_usd = position_usd * 0.0005 * 2
                 pnl_usd = pnl_pct / 100 * position_usd - fee_usd
-                cur.execute("""
+                cur.execute(
+                    """
                     UPDATE paper_trades SET
                         status = 'closed', closed_at = NOW(),
                         exit_price = %s, close_reason = 'manual',
                         pnl_pct = %s, fee_usd = %s, pnl_usd = %s
                     WHERE id = %s
-                """, (price, round(pnl_pct, 4), fee_usd, round(pnl_usd, 4), trade_id))
+                """,
+                    (price, round(pnl_pct, 4), fee_usd, round(pnl_usd, 4), trade_id),
+                )
             conn.commit()
             conn.close()
             self._trigger_fetch()
         except Exception as exc:
             import logging
+
             logging.getLogger(__name__).error("[PaperTrade] manuel kapat hatası: %s", exc)
 
     def _on_manual_trade(self) -> None:
         from desktop.dialogs.manual_trade_dialog import ManualTradeDialog
+
         dlg = ManualTradeDialog(self._db_config, self._redis_url, parent=self)
         if dlg.exec():
             self._trigger_fetch()

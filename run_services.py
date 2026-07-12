@@ -7,13 +7,14 @@ import socket
 import subprocess
 import time
 from datetime import datetime, timedelta
-from utils.logger import get_logger
 
 # Çalıştırılacak servislerin ana fonksiyonlarını import et
 from live_data_manager import main as live_data_main
-from signals.signal_performance_analyzer import SignalPerformanceAnalyzer
 from signals.signal_lifecycle_manager import signal_lifecycle_manager
-from utils.heartbeat import watchdog_loop as heartbeat_watchdog_loop, throughput_watchdog_loop
+from signals.signal_performance_analyzer import SignalPerformanceAnalyzer
+from utils.heartbeat import throughput_watchdog_loop
+from utils.heartbeat import watchdog_loop as heartbeat_watchdog_loop
+from utils.logger import get_logger
 
 logger = get_logger("ServiceRunner")
 
@@ -70,9 +71,7 @@ def start_pgbouncer():  # pylint: disable=too-many-branches,too-many-statements
                     logger.info("PgBouncer zaten çalışıyor (pidfile işaret ediyor).")
                     return True
             except OSError:
-                logger.warning(
-                    "pidfile okundu fakat süreç doğrulanamadı; pidfile taşınacak"
-                )
+                logger.warning("pidfile okundu fakat süreç doğrulanamadı; pidfile taşınacak")
                 try:
                     os.replace(pidfile, pidfile + ".bak")
                 except OSError:
@@ -81,9 +80,7 @@ def start_pgbouncer():  # pylint: disable=too-many-branches,too-many-statements
     logger.info("PgBouncer başlatılıyor...")
     try:
         # PgBouncer'ı başlat
-        subprocess.run(
-            ["pgbouncer", "-d", "pgbouncer.ini"], check=True, cwd=os.getcwd()
-        )
+        subprocess.run(["pgbouncer", "-d", "pgbouncer.ini"], check=True, cwd=os.getcwd())
 
         # PgBouncer'ın hazır olmasını bekle (basit port kontrolü)
         for _ in range(10):  # 10 saniye bekle
@@ -137,10 +134,15 @@ async def daily_performance_update_task():
     # Startup: hesaplanmamış kayıt varsa hemen çalıştır
     try:
         import psycopg2
+
         from config import Config
+
         _conn = psycopg2.connect(
-            host=Config.DB_HOST, port=Config.DB_PORT, database=Config.DB_NAME,
-            user=Config.DB_USER, password=Config.DB_PASSWORD,
+            host=Config.DB_HOST,
+            port=Config.DB_PORT,
+            database=Config.DB_NAME,
+            user=Config.DB_USER,
+            password=Config.DB_PASSWORD,
         )
         _cur = _conn.cursor()
         _cur.execute("SELECT COUNT(*) FROM signal_performance WHERE is_calculated = FALSE")
@@ -200,15 +202,18 @@ async def periodic_gap_scan_task():
         try:
             gap_logger.info("Gap taraması başlıyor (son %d gün)...", _LOOKBACK_DAYS)
 
-            from database.engine import get_session
             from sqlalchemy import text
+
             from binance_client import BinanceClientManager
             from database.crud import bulk_insert_price_data
+            from database.engine import get_session
 
             async with get_session() as session:
                 result = await session.execute(
-                    text("SELECT DISTINCT symbol FROM price_data WHERE interval = '1m' "
-                         "AND timestamp >= NOW() AT TIME ZONE 'Europe/Istanbul' - INTERVAL '1 day'")
+                    text(
+                        "SELECT DISTINCT symbol FROM price_data WHERE interval = '1m' "
+                        "AND timestamp >= NOW() AT TIME ZONE 'Europe/Istanbul' - INTERVAL '1 day'"
+                    )
                 )
                 symbols = [r[0] for r in result.fetchall()]
 
@@ -225,7 +230,8 @@ async def periodic_gap_scan_task():
                     try:
                         async with get_session() as session:
                             r = await session.execute(
-                                text("""
+                                text(
+                                    """
                                     SELECT symbol, prev_ts, curr_ts
                                     FROM (
                                         SELECT symbol, timestamp AS curr_ts,
@@ -237,8 +243,14 @@ async def periodic_gap_scan_task():
                                     WHERE prev_ts IS NOT NULL
                                       AND EXTRACT(EPOCH FROM (curr_ts - prev_ts)) * 1000 > :thresh
                                     ORDER BY prev_ts
-                                """),
-                                {"sym": symbol, "iv": interval, "days": _LOOKBACK_DAYS, "thresh": interval_ms * 2},
+                                """
+                                ),
+                                {
+                                    "sym": symbol,
+                                    "iv": interval,
+                                    "days": _LOOKBACK_DAYS,
+                                    "thresh": interval_ms * 2,
+                                },
                             )
                             gaps = [
                                 (int(row[1].timestamp() * 1000), int(row[2].timestamp() * 1000))
@@ -246,7 +258,9 @@ async def periodic_gap_scan_task():
                             ]
 
                             r2 = await session.execute(
-                                text("SELECT MAX(timestamp) FROM price_data WHERE symbol = :sym AND interval = :iv"),
+                                text(
+                                    "SELECT MAX(timestamp) FROM price_data WHERE symbol = :sym AND interval = :iv"
+                                ),
                                 {"sym": symbol, "iv": interval},
                             )
                             last_row = r2.fetchone()
@@ -271,7 +285,10 @@ async def periodic_gap_scan_task():
                             await asyncio.sleep(0.5)
                             try:
                                 df = await BinanceClientManager.fetch_klines(
-                                    symbol=symbol, interval=interval, limit=1000, startTime=fetch_start,
+                                    symbol=symbol,
+                                    interval=interval,
+                                    limit=1000,
+                                    startTime=fetch_start,
                                 )
                             except Exception:
                                 break
@@ -309,7 +326,9 @@ async def _supervised(coro, name: str):
     except asyncio.CancelledError:
         raise
     except Exception as e:  # pylint: disable=broad-exception-caught
-        logger.error(f"[{name}] görev beklenmedik şekilde sonlandı, izole edildi: {e}", exc_info=True)
+        logger.error(
+            f"[{name}] görev beklenmedik şekilde sonlandı, izole edildi: {e}", exc_info=True
+        )
 
 
 async def run_all_services():
@@ -325,11 +344,14 @@ async def run_all_services():
     loop = asyncio.get_running_loop()
     shutdown_event = asyncio.Event()
 
-    live_task = asyncio.create_task(_supervised(live_data_main(), "live_data_manager"), name="live_data_manager")
+    live_task = asyncio.create_task(
+        _supervised(live_data_main(), "live_data_manager"), name="live_data_manager"
+    )
 
     # 4. Daily Performance Update Task
     perf_task = asyncio.create_task(
-        _supervised(daily_performance_update_task(), "performance_updater"), name="performance_updater"
+        _supervised(daily_performance_update_task(), "performance_updater"),
+        name="performance_updater",
     )
 
     # 5. Periyodik Gap Scanner (her 6 saatte bir)
@@ -349,14 +371,14 @@ async def run_all_services():
             except Exception as exc:
                 sweep_logger.error(f"Sweep hatası: {exc}", exc_info=True)
 
-    sweep_task = asyncio.create_task(_supervised(_sweep_loop(), "signal_sweeper"), name="signal_sweeper")
+    sweep_task = asyncio.create_task(
+        _supervised(_sweep_loop(), "signal_sweeper"), name="signal_sweeper"
+    )
 
     # 7. Heartbeat watchdog: bileşenler bayatlarsa Telegram'a bildirir
     heartbeat_task = asyncio.create_task(
         _supervised(
-            heartbeat_watchdog_loop(
-                max_age_seconds={"redis_batch_flush": 60, "ws_ingestion": 120}
-            ),
+            heartbeat_watchdog_loop(max_age_seconds={"redis_batch_flush": 60, "ws_ingestion": 120}),
             "heartbeat_watchdog",
         ),
         name="heartbeat_watchdog",
@@ -377,9 +399,7 @@ async def run_all_services():
 
     # Sinyal yakalayıcı: görevleri iptal et ve shutdown akışını başlat
     def _signal_handler(sig_name: str):
-        logger.info(
-            f"Sinyal alındı: {sig_name}. Servisler düzgün şekilde kapatılıyor..."
-        )
+        logger.info(f"Sinyal alındı: {sig_name}. Servisler düzgün şekilde kapatılıyor...")
         for t in list(tasks):
             if not t.done():
                 t.cancel()
@@ -388,9 +408,7 @@ async def run_all_services():
     try:
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
-                loop.add_signal_handler(
-                    sig, _signal_handler, sig.name  # pylint: disable=no-member
-                )
+                loop.add_signal_handler(sig, _signal_handler, sig.name)  # pylint: disable=no-member
             except NotImplementedError:
                 # Windows vb. ortamlarda add_signal_handler desteklenmeyebilir.
                 pass
@@ -403,9 +421,7 @@ async def run_all_services():
     except asyncio.CancelledError:
         logger.info("Servisler iptal edildi (CancelledError).")
     except Exception as e:  # pylint: disable=broad-exception-caught
-        logger.error(
-            f"Servis yöneticisinde beklenmedik bir hata oluştu: {e}", exc_info=True
-        )
+        logger.error(f"Servis yöneticisinde beklenmedik bir hata oluştu: {e}", exc_info=True)
     finally:
         for t in list(tasks):
             if not t.done():

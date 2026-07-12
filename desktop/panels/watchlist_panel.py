@@ -8,9 +8,9 @@ sinyali yayınlanır.
 """
 
 from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot
-from PyQt6.QtWidgets import QHeaderView
 from PyQt6.QtWidgets import (
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QPushButton,
@@ -107,7 +107,9 @@ class WatchlistPanel(QWidget):
 
         # Alt istatistik satırı
         self._stats_label = QLabel("")
-        self._stats_label.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 10px; padding: 2px;")
+        self._stats_label.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 10px; padding: 2px;"
+        )
         root.addWidget(self._stats_label)
 
     # ── Worker Sinyalleri ─────────────────────────────────────────────────
@@ -125,7 +127,14 @@ class WatchlistPanel(QWidget):
         hdr.setStretchLastSection(True)
 
     @pyqtSlot(str, float, float, float, float)
-    def on_price_updated(self, symbol: str, price: float, change_pct: float, volume: float = 0.0, funding_rate: float = 0.0) -> None:
+    def on_price_updated(
+        self,
+        symbol: str,
+        price: float,
+        change_pct: float,
+        volume: float = 0.0,
+        funding_rate: float = 0.0,
+    ) -> None:
         self._model.on_price_updated(symbol, price, change_pct, volume, funding_rate)
 
     # ── Seçim ─────────────────────────────────────────────────────────────
@@ -149,7 +158,7 @@ class WatchlistPanel(QWidget):
 
     def _update_stats(self) -> None:
         rows = self._model._rows  # noqa: SLF001
-        up   = sum(1 for r in rows if r.change_pct > 0)
+        up = sum(1 for r in rows if r.change_pct > 0)
         down = sum(1 for r in rows if r.change_pct < 0)
         self._stats_label.setText(f"↑ {up}  ↓ {down}")
 

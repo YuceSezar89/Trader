@@ -23,35 +23,63 @@ from PyQt6.QtWidgets import (  # pylint: disable=no-name-in-module
 from desktop.theme import COLORS
 from desktop.workers.ranking_worker import RankingWorker
 
-_COL_RANK      = 0
-_COL_SYMBOL    = 1
-_COL_5M        = 2
-_COL_15M       = 3
-_COL_1H        = 4
-_COL_4H        = 5
-_COL_COMBINED  = 6
-_COL_ZCONF     = 7
-_COL_RSCORE    = 8
-_COL_ALIGN     = 9
-_COL_VSBTC     = 10
-_HEADERS = ["#", "Sembol", "5m", "15m", "1h", "4h", "Birleşik", "Z-Conf", "R-Score", "TF Uyum", "VS BTC"]
+_COL_RANK = 0
+_COL_SYMBOL = 1
+_COL_5M = 2
+_COL_15M = 3
+_COL_1H = 4
+_COL_4H = 5
+_COL_COMBINED = 6
+_COL_ZCONF = 7
+_COL_RSCORE = 8
+_COL_ALIGN = 9
+_COL_VSBTC = 10
+_HEADERS = [
+    "#",
+    "Sembol",
+    "5m",
+    "15m",
+    "1h",
+    "4h",
+    "Birleşik",
+    "Z-Conf",
+    "R-Score",
+    "TF Uyum",
+    "VS BTC",
+]
 
-_C_GREEN  = QColor(COLORS["green"])
-_C_RED    = QColor(COLORS["red"])
+_C_GREEN = QColor(COLORS["green"])
+_C_RED = QColor(COLORS["red"])
 _C_YELLOW = QColor(COLORS["yellow"])
-_C_MUTED  = QColor(COLORS["text_muted"])
-_C_WHITE  = QColor(COLORS["text_primary"])
+_C_MUTED = QColor(COLORS["text_muted"])
+_C_WHITE = QColor(COLORS["text_primary"])
 
 _BG_STRONG_BULL = QColor(0, 120, 40, 120)
-_BG_SOFT_BULL   = QColor(0, 80, 20, 60)
+_BG_SOFT_BULL = QColor(0, 80, 20, 60)
 _BG_STRONG_BEAR = QColor(180, 20, 20, 120)
-_BG_SOFT_BEAR   = QColor(120, 10, 10, 60)
+_BG_SOFT_BEAR = QColor(120, 10, 10, 60)
 
 _PINE_20 = {
-    "BTCUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT", "XRPUSDT",
-    "LTCUSDT", "DOTUSDT", "SOLUSDT", "AVAXUSDT", "TRXUSDT",
-    "UNIUSDT", "LINKUSDT", "VETUSDT", "XLMUSDT", "NEARUSDT",
-    "WIFUSDT", "ZRXUSDT", "ATOMUSDT", "CAKEUSDT", "KSMUSDT",
+    "BTCUSDT",
+    "ETHUSDT",
+    "BNBUSDT",
+    "ADAUSDT",
+    "XRPUSDT",
+    "LTCUSDT",
+    "DOTUSDT",
+    "SOLUSDT",
+    "AVAXUSDT",
+    "TRXUSDT",
+    "UNIUSDT",
+    "LINKUSDT",
+    "VETUSDT",
+    "XLMUSDT",
+    "NEARUSDT",
+    "WIFUSDT",
+    "ZRXUSDT",
+    "ATOMUSDT",
+    "CAKEUSDT",
+    "KSMUSDT",
 }
 
 
@@ -168,11 +196,15 @@ class RankingPanel(QWidget):
     @staticmethod
     def _filter_btn_style(active: bool) -> str:
         if active:
-            return (f"QPushButton {{ background: {COLORS['accent']}; color: #fff; "
-                    f"border: none; border-radius: 3px; font-size: 10px; }}")
-        return (f"QPushButton {{ background: {COLORS['bg_tertiary']}; "
-                f"color: {COLORS['text_muted']}; border: 1px solid {COLORS['border']}; "
-                f"border-radius: 3px; font-size: 10px; }}")
+            return (
+                f"QPushButton {{ background: {COLORS['accent']}; color: #fff; "
+                f"border: none; border-radius: 3px; font-size: 10px; }}"
+            )
+        return (
+            f"QPushButton {{ background: {COLORS['bg_tertiary']}; "
+            f"color: {COLORS['text_muted']}; border: 1px solid {COLORS['border']}; "
+            f"border-radius: 3px; font-size: 10px; }}"
+        )
 
     def _on_pine_toggled(self, checked: bool) -> None:
         self._pine_filter = checked
@@ -222,8 +254,8 @@ class RankingPanel(QWidget):
             self._table.insertRow(row)
 
             rank_score = row_data.get("rank_score", 50)
-            direction  = row_data.get("direction", "long")
-            combined   = row_data.get("combined", 50)
+            direction = row_data.get("direction", "long")
+            combined = row_data.get("combined", 50)
 
             # Satır arka plan rengi
             if rank_score >= 80:
@@ -256,10 +288,10 @@ class RankingPanel(QWidget):
 
             # TF skorları
             for col, key in (
-                (_COL_5M,  "score_5m"),
+                (_COL_5M, "score_5m"),
                 (_COL_15M, "score_15m"),
-                (_COL_1H,  "score_1h"),
-                (_COL_4H,  "score_4h"),
+                (_COL_1H, "score_1h"),
+                (_COL_4H, "score_4h"),
             ):
                 val = row_data.get(key)
                 self._set_score(row, col, val, bg)
@@ -275,10 +307,10 @@ class RankingPanel(QWidget):
 
             # TF Uyum
             align_count = row_data.get("alignment_count", 0)
-            tf_count    = row_data.get("tf_count", 0)
-            aligned     = row_data.get("aligned", False)
-            align_text  = f"{'✓' if aligned else '~'} {align_count}/{tf_count}"
-            align_item  = QTableWidgetItem(align_text)
+            tf_count = row_data.get("tf_count", 0)
+            aligned = row_data.get("aligned", False)
+            align_text = f"{'✓' if aligned else '~'} {align_count}/{tf_count}"
+            align_item = QTableWidgetItem(align_text)
             align_item.setForeground(_C_GREEN if aligned else _C_YELLOW)
             if bg:
                 align_item.setBackground(bg)
@@ -306,9 +338,7 @@ class RankingPanel(QWidget):
             item.setBackground(bg)
         self._table.setItem(row, col, item)
 
-    def _set_score(
-        self, row: int, col: int, val: Optional[float], bg, bold: bool = False
-    ) -> None:
+    def _set_score(self, row: int, col: int, val: Optional[float], bg, bold: bool = False) -> None:
         text = f"{val:.0f}" if val is not None else "—"
         item = _NumericItem(text)
         item.setData(Qt.ItemDataRole.UserRole, val if val is not None else 0)

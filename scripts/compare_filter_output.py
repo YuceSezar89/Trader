@@ -25,8 +25,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import Config
 from signals.signal_filter import SignalFilter
 
-
 # ── Supertrend (PineScript ta.supertrend ile birebir) ────────────────────────
+
 
 def _rma(series: pd.Series, length: int) -> pd.Series:
     """Wilder Moving Average — PineScript ta.rma ile aynı."""
@@ -50,11 +50,14 @@ def supertrend(df: pd.DataFrame, atr_length: int = 10, factor: float = 3.0) -> p
     low = df["low"].astype(float)
     close = df["close"].astype(float)
 
-    tr = pd.concat([
-        high - low,
-        (high - close.shift(1)).abs(),
-        (low - close.shift(1)).abs(),
-    ], axis=1).max(axis=1)
+    tr = pd.concat(
+        [
+            high - low,
+            (high - close.shift(1)).abs(),
+            (low - close.shift(1)).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
 
     atr = _rma(tr, atr_length)
     hl2 = (high + low) / 2.0
@@ -102,14 +105,21 @@ def supertrend(df: pd.DataFrame, atr_length: int = 10, factor: float = 3.0) -> p
 # ── Veri çekme ────────────────────────────────────────────────────────────────
 
 _RESAMPLE_MAP = {
-    "5m": "5min", "15m": "15min", "30m": "30min",
-    "1h": "1h", "4h": "4h", "1d": "1D",
+    "5m": "5min",
+    "15m": "15min",
+    "30m": "30min",
+    "1h": "1h",
+    "4h": "4h",
+    "1d": "1D",
 }
 
 
 def fetch_ohlcv(
-    symbol: str, interval: str, limit: int,
-    from_date: str | None = None, to_date: str | None = None,
+    symbol: str,
+    interval: str,
+    limit: int,
+    from_date: str | None = None,
+    to_date: str | None = None,
 ) -> pd.DataFrame:
     import psycopg2
 
@@ -117,11 +127,16 @@ def fetch_ohlcv(
     multipliers = {"5min": 5, "15min": 15, "30min": 30, "1h": 60, "4h": 240, "1D": 1440}
 
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT,
-        dbname=Config.DB_NAME, user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     cur = conn.cursor()
-    cur.execute("SELECT 1 FROM price_data WHERE symbol=%s AND interval=%s LIMIT 1", (symbol, interval))
+    cur.execute(
+        "SELECT 1 FROM price_data WHERE symbol=%s AND interval=%s LIMIT 1", (symbol, interval)
+    )
     native = cur.fetchone()
 
     db_interval = interval if native else "1m"
@@ -155,7 +170,9 @@ def fetch_ohlcv(
     conn.close()
 
     if not rows:
-        raise SystemExit(f"Veri bulunamadı: {symbol} {db_interval} {from_date or ''}–{to_date or ''}")
+        raise SystemExit(
+            f"Veri bulunamadı: {symbol} {db_interval} {from_date or ''}–{to_date or ''}"
+        )
 
     df = pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
     df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
@@ -163,10 +180,20 @@ def fetch_ohlcv(
 
     if do_resample:
         df = df.set_index("timestamp")
-        df = df.resample(resample_rule).agg({
-            "open": "first", "high": "max", "low": "min",
-            "close": "last", "volume": "sum",
-        }).dropna().reset_index()
+        df = (
+            df.resample(resample_rule)
+            .agg(
+                {
+                    "open": "first",
+                    "high": "max",
+                    "low": "min",
+                    "close": "last",
+                    "volume": "sum",
+                }
+            )
+            .dropna()
+            .reset_index()
+        )
         if not from_date:
             df = df.tail(limit).reset_index(drop=True)
         print(f"  Resample sonrası: {len(df)} mum ({interval})")
@@ -174,12 +201,18 @@ def fetch_ohlcv(
     return df
 
 
-
 # ── Ana akış ─────────────────────────────────────────────────────────────────
 
+
 async def run(
-    symbol: str, interval: str, limit: int, atr_length: int, factor: float,
-    out_csv: str | None, from_date: str | None, to_date: str | None,
+    symbol: str,
+    interval: str,
+    limit: int,
+    atr_length: int,
+    factor: float,
+    out_csv: str | None,
+    from_date: str | None,
+    to_date: str | None,
 ) -> None:
     date_info = f"{from_date}–{to_date}" if from_date else f"limit={limit}"
     print(f"Veri çekiliyor: {symbol} {interval} {date_info}")
@@ -212,7 +245,9 @@ async def run(
         ref_label = "prevShortHigh" if sig == "Long" else "prevLongLow"
         ref_val = (ref_pair[0] if sig == "Long" else ref_pair[1]) if ref_pair else None
 
-        bar_time = row["timestamp"].tz_localize(None) if row["timestamp"].tzinfo else row["timestamp"]
+        bar_time = (
+            row["timestamp"].tz_localize(None) if row["timestamp"].tzinfo else row["timestamp"]
+        )
         valid = await filt.check(
             sig,
             high=float(row["high"]),
@@ -224,15 +259,17 @@ async def run(
         )
 
         ts_str = row["timestamp"].tz_convert("Europe/Istanbul").strftime("%Y-%m-%d %H:%M")
-        rows.append({
-            "timestamp": ts_str,
-            "signal": sig,
-            "high": round(float(row["high"]), 4),
-            "low": round(float(row["low"]), 4),
-            "filter_ref_name": ref_label,
-            "filter_ref_val": round(ref_val, 4) if ref_val is not None else "—",
-            "valid": "✓" if valid else "✗",
-        })
+        rows.append(
+            {
+                "timestamp": ts_str,
+                "signal": sig,
+                "high": round(float(row["high"]), 4),
+                "low": round(float(row["low"]), 4),
+                "filter_ref_name": ref_label,
+                "filter_ref_val": round(ref_val, 4) if ref_val is not None else "—",
+                "valid": "✓" if valid else "✗",
+            }
+        )
 
     await filt.cleanup(filter_symbol, interval, indicator_key)
 
@@ -246,9 +283,11 @@ async def run(
     pd.set_option("display.width", 120)
     print(f"\n=== {symbol} {interval} — Supertrend({atr_length},{factor}) ===")
     print(result.to_string(index=False))
-    print(f"\nToplam: {len(result)} sinyal  |  "
-          f"Geçerli: {(result['valid']=='✓').sum()}  |  "
-          f"Geçersiz: {(result['valid']=='✗').sum()}")
+    print(
+        f"\nToplam: {len(result)} sinyal  |  "
+        f"Geçerli: {(result['valid']=='✓').sum()}  |  "
+        f"Geçersiz: {(result['valid']=='✗').sum()}"
+    )
 
     if out_csv:
         result.to_csv(out_csv, index=False)
@@ -257,15 +296,27 @@ async def run(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Supertrend + SignalFilter karşılaştırma")
-    parser.add_argument("--symbol",     default="BTCUSDT")
-    parser.add_argument("--interval",   default="1h")
-    parser.add_argument("--limit",      type=int, default=500)
+    parser.add_argument("--symbol", default="BTCUSDT")
+    parser.add_argument("--interval", default="1h")
+    parser.add_argument("--limit", type=int, default=500)
     parser.add_argument("--atr-length", type=int, default=10)
-    parser.add_argument("--factor",     type=float, default=3.0)
-    parser.add_argument("--csv",   default=None, help="CSV çıktı dosyası")
-    parser.add_argument("--from",  default=None, dest="from_date", help="Başlangıç tarihi (2025-09-26)")
-    parser.add_argument("--to",    default=None, dest="to_date",   help="Bitiş tarihi   (2025-10-02)")
+    parser.add_argument("--factor", type=float, default=3.0)
+    parser.add_argument("--csv", default=None, help="CSV çıktı dosyası")
+    parser.add_argument(
+        "--from", default=None, dest="from_date", help="Başlangıç tarihi (2025-09-26)"
+    )
+    parser.add_argument("--to", default=None, dest="to_date", help="Bitiş tarihi   (2025-10-02)")
     args = parser.parse_args()
 
-    asyncio.run(run(args.symbol, args.interval, args.limit, args.atr_length, args.factor,
-        args.csv, args.from_date, args.to_date))
+    asyncio.run(
+        run(
+            args.symbol,
+            args.interval,
+            args.limit,
+            args.atr_length,
+            args.factor,
+            args.csv,
+            args.from_date,
+            args.to_date,
+        )
+    )

@@ -13,35 +13,36 @@ import logging
 from datetime import datetime
 from typing import Callable, Optional
 
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import Config
 from database.engine import get_session, run_with_db_timeout
-from database.models import PaperTrade, PaperPortfolio, Signal
+from database.models import PaperPortfolio, PaperTrade, Signal
 from indicators.core import calculate_evol
 from signals.risk_policy import default_policy
 from signals.signal_lifecycle_manager import _calc_pnl
 from signals.trailing import update_trailing
-from utils.redis_client import RedisClient, SAFE_EXTERNAL_TIMEOUT
+from utils.redis_client import SAFE_EXTERNAL_TIMEOUT, RedisClient
 
 logger = logging.getLogger(__name__)
 
 POSITION_USD = 100.0
-FEE_RATE     = 0.0005
-MAX_OPEN     = 10
+FEE_RATE = 0.0005
+MAX_OPEN = 10
 
 # EVOL-disiplinli erken çıkış (HA_Cross Long'a özel — [[project_devisso_ersi]],
 # ha_cross_evol_exit_sweep_bt.py'de eşik=25/min_hold=8 "güvenilir bölge" olarak
 # doğrulandı: PF 1.585→1.821, split-period'ın iki yarısında da tutarlı).
-EVOL_EXIT_THRESHOLD  = 25.0
-EVOL_MIN_HOLD_BARS   = 8
+EVOL_EXIT_THRESHOLD = 25.0
+EVOL_MIN_HOLD_BARS = 8
 _INTERVAL_MINUTES: dict[str, int] = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440}
 
 _STRATEGY_TRIGGERS: dict[str, Callable[[dict], bool]] = {
     "conf_100": lambda sd: True,
     "ha_cross": lambda sd: sd.get("indicators") == "HA_Cross",
-    "rsi_15m":  lambda sd: "RSI_Cross" in (sd.get("indicators") or "") and sd.get("interval") == "15m",
+    "rsi_15m": lambda sd: "RSI_Cross" in (sd.get("indicators") or "")
+    and sd.get("interval") == "15m",
 }
 
 
@@ -73,7 +74,9 @@ class PaperTradeManager:
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.error("[PaperTrade][%s] açık sembol yükleme zaman aşımı: %s", self.strategy, exc)
             self._open_symbols = set()
-        logger.info("[PaperTrade][%s] %d açık sembol yüklendi", self.strategy, len(self._open_symbols))
+        logger.info(
+            "[PaperTrade][%s] %d açık sembol yüklendi", self.strategy, len(self._open_symbols)
+        )
 
     async def on_new_signal(
         self,
@@ -107,7 +110,8 @@ class PaperTradeManager:
                     if existing.scalars().first() is not None:
                         logger.info(
                             "[PaperTrade][%s] %s için zaten açık pozisyon var, atlandı",
-                            self.strategy, symbol,
+                            self.strategy,
+                            symbol,
                         )
                         return
 
@@ -120,13 +124,13 @@ class PaperTradeManager:
                     if open_count_result.scalar() >= MAX_OPEN:
                         logger.debug(
                             "[PaperTrade][%s] MAX_OPEN=%d dolu, atlandı (%s)",
-                            self.strategy, MAX_OPEN, symbol,
+                            self.strategy,
+                            MAX_OPEN,
+                            symbol,
                         )
                         return
 
-                    sig_result = await session.execute(
-                        select(Signal).where(Signal.id == signal_id)
-                    )
+                    sig_result = await session.execute(select(Signal).where(Signal.id == signal_id))
                     sig = sig_result.scalars().first()
                     atr_val = float(sig.atr) if sig and sig.atr else 0.0
                     if atr_val > 0:
@@ -136,8 +140,8 @@ class PaperTradeManager:
                             atr_val,
                             {
                                 "vpms_score": signal_data.get("vpms_score"),
-                                "mtf_score":  signal_data.get("mtf_score"),
-                                "interval":   signal_data.get("interval", ""),
+                                "mtf_score": signal_data.get("mtf_score"),
+                                "interval": signal_data.get("interval", ""),
                             },
                         )
                         sl_price = levels.sl_price
@@ -149,7 +153,8 @@ class PaperTradeManager:
                     rank_at_entry: Optional[int] = None
                     try:
                         raw = await asyncio.wait_for(
-                            RedisClient.get_client().get("ranking:snapshot"), timeout=SAFE_EXTERNAL_TIMEOUT
+                            RedisClient.get_client().get("ranking:snapshot"),
+                            timeout=SAFE_EXTERNAL_TIMEOUT,
                         )
                         if raw:
                             snap = _json.loads(raw)
@@ -158,9 +163,7 @@ class PaperTradeManager:
                     except Exception as exc:
                         logger.debug("[PaperTrade] ranking snapshot okunamadı: %s", exc)
 
-                    recent_win_rate = await self._recent_win_rate(
-                        session, symbol, self.strategy
-                    )
+                    recent_win_rate = await self._recent_win_rate(session, symbol, self.strategy)
 
                     opened_at = signal_data.get("opened_at") or datetime.now()
                     if isinstance(opened_at, str):
@@ -203,14 +206,20 @@ class PaperTradeManager:
 
                     logger.info(
                         "[PaperTrade][%s] ★ AÇILDI %s %s %s @ %.6f | VPMV=%.1f Z=%+.2f",
-                        self.strategy, trade.symbol, trade.signal_type, trade.interval,
+                        self.strategy,
+                        trade.symbol,
+                        trade.signal_type,
+                        trade.interval,
                         current_price,
-                        trade.vpms_score or 0, trade.z_score_entry or 0,
+                        trade.vpms_score or 0,
+                        trade.z_score_entry or 0,
                     )
 
                 except Exception as exc:
                     await session.rollback()
-                    logger.error("[PaperTrade][%s] Açma hatası: %s", self.strategy, exc, exc_info=True)
+                    logger.error(
+                        "[PaperTrade][%s] Açma hatası: %s", self.strategy, exc, exc_info=True
+                    )
 
         try:
             await run_with_db_timeout(_do_open())
@@ -253,7 +262,9 @@ class PaperTradeManager:
                         )
                     )
                     if open_count.scalar() >= MAX_OPEN:
-                        logger.debug("[PaperTrade][%s] MAX_OPEN dolu, %s atlandı", self.strategy, symbol)
+                        logger.debug(
+                            "[PaperTrade][%s] MAX_OPEN dolu, %s atlandı", self.strategy, symbol
+                        )
                         return False
 
                     trade = PaperTrade(
@@ -277,13 +288,22 @@ class PaperTradeManager:
                     tp_str = f"{tp_price:.6f}" if tp_price is not None else "yok"
                     logger.info(
                         "[PaperTrade][%s] ★ AÇILDI %s %s %s @ %.6f | pozisyon=$%.2f SL=%.6f TP=%s %s",
-                        self.strategy, symbol, signal_type, interval, price,
-                        trade.position_usd, sl_price, tp_str, note,
+                        self.strategy,
+                        symbol,
+                        signal_type,
+                        interval,
+                        price,
+                        trade.position_usd,
+                        sl_price,
+                        tp_str,
+                        note,
                     )
                     return True
                 except Exception as exc:
                     await session.rollback()
-                    logger.error("[PaperTrade][%s] open_direct hatası: %s", self.strategy, exc, exc_info=True)
+                    logger.error(
+                        "[PaperTrade][%s] open_direct hatası: %s", self.strategy, exc, exc_info=True
+                    )
                     return False
 
         # Kayıp-kritik nokta: bu, do_kirilimi/do_open_streak gibi nadir ateşlenen
@@ -301,13 +321,17 @@ class PaperTradeManager:
                 if attempt == 0:
                     logger.warning(
                         "[PaperTrade][%s] open_direct zaman aşımı (%s), tekrar deneniyor: %s",
-                        self.strategy, symbol, exc,
+                        self.strategy,
+                        symbol,
+                        exc,
                     )
                     await asyncio.sleep(0.5)
                 else:
                     logger.error(
                         "[PaperTrade][%s] open_direct zaman aşımı (%s), retry de başarısız: %s",
-                        self.strategy, symbol, exc,
+                        self.strategy,
+                        symbol,
+                        exc,
                     )
                     return False
         return False
@@ -375,7 +399,9 @@ class PaperTradeManager:
 
                 except Exception as exc:
                     await session.rollback()
-                    logger.error("[PaperTrade][%s] batch check hatası: %s", self.strategy, exc, exc_info=True)
+                    logger.error(
+                        "[PaperTrade][%s] batch check hatası: %s", self.strategy, exc, exc_info=True
+                    )
 
         try:
             # 10s: periyodik/kritik-olmayan bir kontrol — havuzun kendi pool_timeout'una
@@ -429,7 +455,9 @@ class PaperTradeManager:
                         if age_minutes < min_hold_bars * interval_min:
                             continue
 
-                        df = await RedisClient.get_mtf_klines(trade.symbol, trade.interval, limit=150)
+                        df = await RedisClient.get_mtf_klines(
+                            trade.symbol, trade.interval, limit=150
+                        )
                         if df is None or len(df) < 30:
                             continue
 
@@ -454,7 +482,12 @@ class PaperTradeManager:
 
                 except Exception as exc:
                     await session.rollback()
-                    logger.error("[PaperTrade][%s] EVOL-exit check hatası: %s", self.strategy, exc, exc_info=True)
+                    logger.error(
+                        "[PaperTrade][%s] EVOL-exit check hatası: %s",
+                        self.strategy,
+                        exc,
+                        exc_info=True,
+                    )
 
         try:
             await run_with_db_timeout(_do_check(), timeout=10.0)
@@ -485,18 +518,18 @@ class PaperTradeManager:
         fee_usd = position_usd * FEE_RATE * 2
         pnl_usd = (pnl_pct / 100) * position_usd - fee_usd
 
-        trade.status       = "closed"
-        trade.closed_at    = datetime.now()
-        trade.exit_price   = exit_price
+        trade.status = "closed"
+        trade.closed_at = datetime.now()
+        trade.exit_price = exit_price
         trade.close_reason = reason
-        trade.pnl_pct      = pnl_pct
-        trade.fee_usd      = fee_usd
-        trade.pnl_usd      = pnl_usd
+        trade.pnl_pct = pnl_pct
+        trade.fee_usd = fee_usd
+        trade.pnl_usd = pnl_usd
 
         if portfolio:
-            portfolio.balance       += pnl_usd
+            portfolio.balance += pnl_usd
             portfolio.total_pnl_usd += pnl_usd
-            portfolio.total_trades  += 1
+            portfolio.total_trades += 1
             if pnl_usd > 0:
                 portfolio.winning_trades += 1
             if portfolio.balance > portfolio.peak_balance:
@@ -505,16 +538,23 @@ class PaperTradeManager:
             if drawdown > portfolio.max_drawdown_pct:
                 portfolio.max_drawdown_pct = drawdown
             portfolio.updated_at = datetime.now()
-            trade.balance_after  = portfolio.balance
+            trade.balance_after = portfolio.balance
 
         logger.info(
             "[PaperTrade] KAPANDI %s %s @ %.6f | %s | PnL: %+.2f$ (%.2f%%) | Bakiye: %.2f$",
-            trade.symbol, trade.signal_type, exit_price, reason,
-            pnl_usd, pnl_pct, trade.balance_after or 0,
+            trade.symbol,
+            trade.signal_type,
+            exit_price,
+            reason,
+            pnl_usd,
+            pnl_pct,
+            trade.balance_after or 0,
         )
 
     @staticmethod
-    async def _recent_win_rate(session: AsyncSession, symbol: str, strategy: str) -> Optional[float]:
+    async def _recent_win_rate(
+        session: AsyncSession, symbol: str, strategy: str
+    ) -> Optional[float]:
         try:
             result = await session.execute(
                 select(PaperTrade.pnl_usd)
@@ -535,9 +575,9 @@ class PaperTradeManager:
             return None
 
 
-paper_trade_manager     = PaperTradeManager("conf_100")
-ha_cross_manager        = PaperTradeManager("ha_cross")
-rsi_15m_manager         = PaperTradeManager("rsi_15m")
-manual_manager          = PaperTradeManager("manual")
-do_kirilimi_manager     = PaperTradeManager("do_kirilimi")
-do_open_streak_manager  = PaperTradeManager("do_open_streak", max_hold_hours=24.0)
+paper_trade_manager = PaperTradeManager("conf_100")
+ha_cross_manager = PaperTradeManager("ha_cross")
+rsi_15m_manager = PaperTradeManager("rsi_15m")
+manual_manager = PaperTradeManager("manual")
+do_kirilimi_manager = PaperTradeManager("do_kirilimi")
+do_open_streak_manager = PaperTradeManager("do_open_streak", max_hold_hours=24.0)

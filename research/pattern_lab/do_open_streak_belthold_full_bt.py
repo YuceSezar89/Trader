@@ -7,6 +7,7 @@ karşılaştırılabilir olması için.
 belt_confirm: +BELTHOLD (boğa, do_open_streak SADECE LONG olduğu için teyit
 eden tek yön) o giriş barında var mı (0/1).
 """
+
 import os
 import sys
 
@@ -18,9 +19,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from indicators.core import calculate_atr  # pylint: disable=wrong-import-position
 from research.pattern_lab.do_open_streak_evol_exit_bt import (  # pylint: disable=wrong-import-position
-    HORIZON_BARS, MIN_BARS, WARMUP, _fetch, _signal_series,
+    HORIZON_BARS,
+    MIN_BARS,
+    WARMUP,
+    _fetch,
+    _signal_series,
 )
-from research.pattern_lab.threshold_optimizer import _run_single_var_on_df  # pylint: disable=wrong-import-position
+from research.pattern_lab.threshold_optimizer import (
+    _run_single_var_on_df,  # pylint: disable=wrong-import-position
+)
 from signals.do_open_streak import SL_ATR_MULT  # pylint: disable=wrong-import-position
 
 
@@ -72,15 +79,19 @@ def run() -> None:
             entry = close[i]
             sl = entry - SL_ATR_MULT * atr
             ret = _simulate(low, close, i, entry, sl, HORIZON_BARS)
-            rows.append({
-                "opened_at": pd.Timestamp(ts_np[i]),
-                "realized_pnl": ret * 100.0,  # threshold_optimizer yüzde-puan bekliyor
-                "belt_confirm": 1.0 if belt_confirm[i] else 0.0,
-            })
+            rows.append(
+                {
+                    "opened_at": pd.Timestamp(ts_np[i]),
+                    "realized_pnl": ret * 100.0,  # threshold_optimizer yüzde-puan bekliyor
+                    "belt_confirm": 1.0 if belt_confirm[i] else 0.0,
+                }
+            )
 
     merged = pd.DataFrame(rows)
-    print(f"analiz edilen sembol: {n_syms} | toplam olay: {len(merged)} | "
-          f"+BELTHOLD teyitli oranı={merged['belt_confirm'].mean():.2%}\n")
+    print(
+        f"analiz edilen sembol: {n_syms} | toplam olay: {len(merged)} | "
+        f"+BELTHOLD teyitli oranı={merged['belt_confirm'].mean():.2%}\n"
+    )
 
     if len(merged) < 200:
         print("Örneklem çok küçük.")

@@ -9,6 +9,7 @@ monoton PF artışı, hem Long hem Short'ta simetrik) — İKİ ek şartla test 
 2. Dönem ikiye bölünüp (opened_at zaman damgasına göre) HER İKİ yarıda
    BAĞIMSIZ tekrarlanıyor mu diye bakılıyor.
 """
+
 import os
 import sys
 
@@ -27,8 +28,11 @@ CUTOFF = "2026-07-03 19:22:16"  # commit e81aa34 — signals SL/TP fiyat-bazlı 
 
 def _fetch(interval: str) -> pd.DataFrame:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     q = f"""
         SELECT s.symbol, s.signal_type, s.realized_pnl, s.opened_at, s.closed_at,
@@ -57,8 +61,10 @@ def _print_tercile_table(df: pd.DataFrame, q1: float, q2: float) -> None:
     for name in ("düşük", "orta", "yüksek"):
         rets = df.loc[df["tercil"] == name, "realized_pnl"].to_numpy() / 100
         s = _stats(rets)
-        print(f"{name:10} {s.get('n',0):>7} {s.get('wr',0):>6} "
-              f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+        print(
+            f"{name:10} {s.get('n',0):>7} {s.get('wr',0):>6} "
+            f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+        )
 
 
 def run():
@@ -67,7 +73,9 @@ def run():
         d = _fetch(interval)
         d["interval"] = interval
         frames.append(d)
-        print(f"{interval}: {len(d):,} kapanmış RSI_Cross sinyali (3 Tem 19:22 sonrası, OHLC join'li)")
+        print(
+            f"{interval}: {len(d):,} kapanmış RSI_Cross sinyali (3 Tem 19:22 sonrası, OHLC join'li)"
+        )
     df = pd.concat(frames, ignore_index=True)
     print(f"\ntoplam: {len(df):,}\n")
 
@@ -80,8 +88,10 @@ def run():
 
     s = _stats(df["realized_pnl"].to_numpy() / 100)
     print(f"{'grup':20} {'n':>7} {'WR%':>6} {'ort%':>8} {'PF':>7}")
-    print(f"{'baseline (tümü)':20} {s.get('n',0):>7} {s.get('wr',0):>6} "
-          f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+    print(
+        f"{'baseline (tümü)':20} {s.get('n',0):>7} {s.get('wr',0):>6} "
+        f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+    )
 
     q1, q2 = df["body_pct"].quantile([0.333, 0.667])
     print(f"\n── SADECE 3 Tem sonrası, body% terciline göre ── (q1={q1:.1f}, q2={q2:.1f})")

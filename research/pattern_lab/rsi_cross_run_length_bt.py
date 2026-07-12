@@ -13,6 +13,7 @@ aynı yönde tekrarlayan sinyaller — muhtemelen sallanan piyasa).
 
 Metodoloji: SADECE 3 Tem 19:22:16 sonrası (temiz rejim), split-period.
 """
+
 import os
 import sys
 
@@ -21,8 +22,11 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+from research.pattern_lab.rsi_cross_vpmv_jump_bt import (  # pylint: disable=wrong-import-position
+    INTERVALS,
+    _fetch_signals,
+)
 from research.pattern_lab.vol_exhaustion_bt import _stats  # pylint: disable=wrong-import-position
-from research.pattern_lab.rsi_cross_vpmv_jump_bt import INTERVALS, _fetch_signals  # pylint: disable=wrong-import-position
 
 
 def _print_table(df: pd.DataFrame, groups: list) -> None:
@@ -30,8 +34,10 @@ def _print_table(df: pd.DataFrame, groups: list) -> None:
     for name in groups:
         rets = df.loc[df["run_group"] == name, "realized_pnl"].to_numpy() / 100
         s = _stats(rets)
-        print(f"{name:14} {s.get('n',0):>7} {s.get('wr',0):>6} "
-              f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+        print(
+            f"{name:14} {s.get('n',0):>7} {s.get('wr',0):>6} "
+            f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+        )
 
 
 def run():
@@ -50,18 +56,22 @@ def run():
                 else:
                     run_pos += 1
                 prev_type = row["signal_type"]
-                rows.append({
-                    "run_position": run_pos,
-                    "realized_pnl": row["realized_pnl"],
-                    "opened_at": row["opened_at"],
-                })
+                rows.append(
+                    {
+                        "run_position": run_pos,
+                        "realized_pnl": row["realized_pnl"],
+                        "opened_at": row["opened_at"],
+                    }
+                )
 
     df = pd.DataFrame(rows)
     print(f"\ntoplam sinyal: {len(df):,}\n")
 
-    df["run_group"] = np.where(df["run_position"] == 1, "1 (temiz dönüş)",
-                        np.where(df["run_position"] == 2, "2",
-                        np.where(df["run_position"] == 3, "3", "4+")))
+    df["run_group"] = np.where(
+        df["run_position"] == 1,
+        "1 (temiz dönüş)",
+        np.where(df["run_position"] == 2, "2", np.where(df["run_position"] == 3, "3", "4+")),
+    )
     groups = ["1 (temiz dönüş)", "2", "3", "4+"]
 
     print("dağılım:")
@@ -69,8 +79,10 @@ def run():
 
     s = _stats(df["realized_pnl"].to_numpy() / 100)
     print(f"\n{'grup':20} {'n':>7} {'WR%':>6} {'ort%':>8} {'PF':>7}")
-    print(f"{'baseline (tümü)':20} {s.get('n',0):>7} {s.get('wr',0):>6} "
-          f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+    print(
+        f"{'baseline (tümü)':20} {s.get('n',0):>7} {s.get('wr',0):>6} "
+        f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+    )
 
     print("\n── run_position'a göre (1=ters dönüşten sonraki ilk sinyal) ──")
     _print_table(df, groups)

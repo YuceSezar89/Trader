@@ -6,6 +6,7 @@ Kanıt: t0 sonrasına kasıtlı uçuk barlar (100× fiyat, 1000× hacim) eklenmi
 veriyle sonuç, eklenmemişle bit-bit aynı olmalı. Ayrıca RankProvider'ın
 rank_pct(t)'si de t sonrası ızgara satırlarından etkilenmemeli.
 """
+
 import numpy as np
 import pandas as pd
 
@@ -21,10 +22,18 @@ def _synth(n=3000, seed=7):
     low = close * (1 - np.abs(rng.normal(0, 0.001, n)))
     vol = rng.uniform(50, 150, n)
     buy = vol * rng.uniform(0.3, 0.7, n)
-    return pd.DataFrame({
-        "ts": ts, "open": close, "high": high, "low": low, "close": close,
-        "volume": vol, "buy_volume": buy, "sell_volume": vol - buy,
-    })
+    return pd.DataFrame(
+        {
+            "ts": ts,
+            "open": close,
+            "high": high,
+            "low": low,
+            "close": close,
+            "volume": vol,
+            "buy_volume": buy,
+            "sell_volume": vol - buy,
+        }
+    )
 
 
 def test_features_no_lookahead():
@@ -60,10 +69,15 @@ def test_rank_no_lookahead():
     ts = pd.date_range("2026-06-25 03:00", periods=600, freq="5min")
     frames = []
     for i in range(200):
-        frames.append(pd.DataFrame({
-            "ts": ts, "symbol": f"S{i}",
-            "close": 1 + np.abs(np.cumsum(rng.normal(0, 0.002, 600))),
-        }))
+        frames.append(
+            pd.DataFrame(
+                {
+                    "ts": ts,
+                    "symbol": f"S{i}",
+                    "close": 1 + np.abs(np.cumsum(rng.normal(0, 0.002, 600))),
+                }
+            )
+        )
     layer_b = pd.concat(frames, ignore_index=True)
     t = ts[400]
 

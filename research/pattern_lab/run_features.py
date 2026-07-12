@@ -6,6 +6,7 @@ piyasa fazı karıştırıcısı düşer). Sıralama özellikleri RankProvider'd
 evren < 150 ise None (UB kuralı). Sinyal yoğunluğu signals tablosundan
 tek sorguyla önceden çekilir (uptime kirliliği bayrağıyla raporlanacak).
 """
+
 import json
 import os
 import sys
@@ -25,8 +26,11 @@ from research.pattern_lab.rank import RankProvider
 
 def _signal_counts(symbols: list[str], t_start: datetime) -> pd.DataFrame:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     q = "SELECT symbol, opened_at FROM signals WHERE symbol = ANY(%s) AND opened_at >= %s"
     df = pd.read_sql(q, conn, params=(symbols, t_start))
@@ -46,7 +50,9 @@ def run() -> pd.DataFrame:
 
     rp = RankProvider(layer_b)
     all_syms = [s for pair in meta["pairs"] for s in pair]
-    sig = _signal_counts(all_syms, datetime.fromisoformat(meta["anchor"]) - pd.Timedelta(days=C.CORPUS_DAYS))
+    sig = _signal_counts(
+        all_syms, datetime.fromisoformat(meta["anchor"]) - pd.Timedelta(days=C.CORPUS_DAYS)
+    )
 
     rows = []
     for _, r in t0_tbl.iterrows():
@@ -62,10 +68,15 @@ def run() -> pd.DataFrame:
             # sıra yörüngesi: 24h penceresi sırası, t0-48h..t0 (tırmanış ölçüsü)
             traj = rp.rank_series(sym, t0, hours_back=48, window_bars=288)
             valid = traj.dropna()
-            feats["rank24_tirmanis"] = float(valid.iloc[-1] - valid.iloc[0]) if len(valid) >= 2 else None
+            feats["rank24_tirmanis"] = (
+                float(valid.iloc[-1] - valid.iloc[0]) if len(valid) >= 2 else None
+            )
             feats["top10pct_saat"] = float((valid > 90).mean() * 48) if len(valid) >= 2 else None
-            n_sig = ((sig["symbol"] == sym) & (sig["opened_at"] >= t0 - pd.Timedelta(hours=48))
-                     & (sig["opened_at"] < t0)).sum()
+            n_sig = (
+                (sig["symbol"] == sym)
+                & (sig["opened_at"] >= t0 - pd.Timedelta(hours=48))
+                & (sig["opened_at"] < t0)
+            ).sum()
             feats["sinyal_yogunlugu_48h"] = int(n_sig)
             rows.append({"sembol": sym, "rol": role, "t0": t0, **feats})
         print(f"  çift işlendi: {r['vaka']} / {r['kontrol']} @ {t0}")

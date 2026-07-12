@@ -32,6 +32,7 @@ placebo (rank kohort içinde rastgele karıştırılır), split-period.
 
 Kullanım: python -m research.pattern_lab.rolling_cohort_bt
 """
+
 import warnings
 
 import numpy as np
@@ -48,7 +49,9 @@ from indicators.core import calculate_rsi
 _INDICATOR = "Supertrend(10,3.0)"
 _INTERVAL = "5m"
 _CAGG = "cagg_5m"
-_BARS_NEEDED = 220  # z-score EMA200/std200 gerektiriyor (>=210), devisso/cvd için zaten fazlasıyla yeterli
+_BARS_NEEDED = (
+    220  # z-score EMA200/std200 gerektiriyor (>=210), devisso/cvd için zaten fazlasıyla yeterli
+)
 _HORIZON_HOURS = 4
 _HORIZON_BARS = _HORIZON_HOURS * 60 // 5  # 5m bar başına
 _MIN_COHORT_SIZE = 2
@@ -56,8 +59,11 @@ _MIN_COHORT_SIZE = 2
 
 def _connect():
     return psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
 
 
@@ -65,12 +71,15 @@ def _fetch_all_signals(cur) -> pd.DataFrame:
     """Bu indikatör+interval'daki TÜM sinyaller (açık + kapalı) — hem anchor
     hem peer havuzu olarak kullanılıyor. Açık sinyaller closed_at=NULL, yani
     "hâlâ açık" testinde sonsuza kadar peer olabilirler (doğru davranış)."""
-    cur.execute("""
+    cur.execute(
+        """
         SELECT id, symbol, signal_type, opened_at, closed_at, realized_pnl, status
         FROM signals
         WHERE indicators = %s AND interval = %s
         ORDER BY opened_at
-    """, (_INDICATOR, _INTERVAL))
+    """,
+        (_INDICATOR, _INTERVAL),
+    )
     return pd.DataFrame(cur.fetchall())
 
 
@@ -134,13 +143,16 @@ def _fetch_bars_at(cur, symbol: str, at) -> "pd.DataFrame | None":
     """T_S anına kadarki (dahil) son _BARS_NEEDED bar — evol_bt.py::_fetch_bars
     ile aynı desen, ama sembol/an keyfi (anchor'ın kendi sembolü olmak zorunda
     değil, herhangi bir peer olabilir)."""
-    cur.execute(f"""
+    cur.execute(
+        f"""
         SELECT bucket AS open_time, open, high, low, close, volume
         FROM {_CAGG}
         WHERE symbol = %s AND bucket <= %s
         ORDER BY bucket DESC
         LIMIT %s
-    """, (symbol, at, _BARS_NEEDED))
+    """,
+        (symbol, at, _BARS_NEEDED),
+    )
     rows = cur.fetchall()
     if not rows:
         return None
@@ -150,12 +162,15 @@ def _fetch_bars_at(cur, symbol: str, at) -> "pd.DataFrame | None":
 
 def _fetch_forward_close(cur, symbol: str, at) -> "float | None":
     """T_S + ufuk anında/hemen sonrasında ilk bar'ın close'u."""
-    cur.execute(f"""
+    cur.execute(
+        f"""
         SELECT close FROM {_CAGG}
         WHERE symbol = %s AND bucket >= %s
         ORDER BY bucket ASC
         LIMIT 1
-    """, (symbol, at))
+    """,
+        (symbol, at),
+    )
     row = cur.fetchone()
     return float(row["close"]) if row else None
 
@@ -174,7 +189,9 @@ def _build_rows(cur, all_sig: pd.DataFrame) -> list:
     ].reset_index(drop=True)
 
     rows = []
-    bars_cache: dict = {}  # (symbol, at) -> devisso_score/cvd_slope, aynı (sembol,an) birden fazla kohortta tekrar edebilir
+    bars_cache: dict = (
+        {}
+    )  # (symbol, at) -> devisso_score/cvd_slope, aynı (sembol,an) birden fazla kohortta tekrar edebilir
 
     def _features_at(symbol: str, at) -> "tuple[float, float, float] | None":
         key = (symbol, at)
@@ -221,18 +238,27 @@ def _build_rows(cur, all_sig: pd.DataFrame) -> list:
             if entry_price is None or exit_price is None:
                 continue
             fwd_ret = _fwd_return(entry_price, exit_price, sig_type)
-            cohort_rows.append({
-                "cohort_id": cohort_id, "symbol": symbol, "is_anchor": is_anchor,
-                "signal_type": sig_type, "opened_at": t_s,
-                "devisso_score": devisso, "cvd_slope": cvd, "zscore_abs": abs(zscore),
-                "fwd_return": fwd_ret,
-            })
+            cohort_rows.append(
+                {
+                    "cohort_id": cohort_id,
+                    "symbol": symbol,
+                    "is_anchor": is_anchor,
+                    "signal_type": sig_type,
+                    "opened_at": t_s,
+                    "devisso_score": devisso,
+                    "cvd_slope": cvd,
+                    "zscore_abs": abs(zscore),
+                    "fwd_return": fwd_ret,
+                }
+            )
 
         if len(cohort_rows) >= _MIN_COHORT_SIZE:
             rows.extend(cohort_rows)
 
         if i % 200 == 0:
-            print(f"  [{i}/{n_total}] anchor işlendi, {len(rows)} satır, {len(bars_cache)} önbellek")
+            print(
+                f"  [{i}/{n_total}] anchor işlendi, {len(rows)} satır, {len(bars_cache)} önbellek"
+            )
 
     return rows
 
@@ -252,8 +278,8 @@ def _add_ranks(df: pd.DataFrame) -> pd.DataFrame:
 def _placebo(df: pd.DataFrame, rank_col: str, seed: int = 42) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     out = df.copy()
-    out[rank_col] = (
-        out.groupby("cohort_id")[rank_col].transform(lambda s: rng.permutation(s.values))
+    out[rank_col] = out.groupby("cohort_id")[rank_col].transform(
+        lambda s: rng.permutation(s.values)
     )
     return out
 
@@ -289,8 +315,10 @@ def _report_buckets(df: pd.DataFrame, rank_col: str, label: str) -> None:
         print(g.to_string().replace("\n", "\n    "))
 
 
-def _report_elimination(df: pd.DataFrame, rank_col: str, label: str, elim_frac: float = 1 / 3) -> None:
-    """"Kim hareket etmeyecek onu bulup eleriz" testi: rank_col'a göre en alt
+def _report_elimination(
+    df: pd.DataFrame, rank_col: str, label: str, elim_frac: float = 1 / 3
+) -> None:
+    """ "Kim hareket etmeyecek onu bulup eleriz" testi: rank_col'a göre en alt
     dilimi (en düşük skor = en durgun aday) ELE, kalan havuzun (orta+üst)
     hareketsiz oranı/ortalaması/medyanı TAM HAVUZDAN daha mı iyi bak.
     Gerçek bir eleme filtresiyse: elenen grupta hareketsiz oranı yüksek OLMALI,
@@ -307,20 +335,29 @@ def _report_elimination(df: pd.DataFrame, rank_col: str, label: str, elim_frac: 
 
         def _stats(s: pd.Series) -> dict:
             return {
-                "n": len(s), "ort_getiri": s.mean(), "medyan_getiri": s.median(),
-                "oran_pozitif": (s > 0).mean(), "hareketsiz_oran": (s.abs() < 1.0).mean(),
+                "n": len(s),
+                "ort_getiri": s.mean(),
+                "medyan_getiri": s.median(),
+                "oran_pozitif": (s > 0).mean(),
+                "hareketsiz_oran": (s.abs() < 1.0).mean(),
             }
 
         tum = _stats(sub["fwd_return"])
         el = _stats(elenen["fwd_return"])
         kal = _stats(kalan["fwd_return"])
         print(f"  [{label}] {sig_type} (alt %{elim_frac*100:.0f} elendi):")
-        print(f"    TÜM HAVUZ : n={tum['n']:5d}  ort={tum['ort_getiri']:+.3f}  medyan={tum['medyan_getiri']:+.3f}  "
-              f"pozitif={tum['oran_pozitif']:.3f}  hareketsiz={tum['hareketsiz_oran']:.3f}")
-        print(f"    ELENEN    : n={el['n']:5d}  ort={el['ort_getiri']:+.3f}  medyan={el['medyan_getiri']:+.3f}  "
-              f"pozitif={el['oran_pozitif']:.3f}  hareketsiz={el['hareketsiz_oran']:.3f}")
-        print(f"    KALAN     : n={kal['n']:5d}  ort={kal['ort_getiri']:+.3f}  medyan={kal['medyan_getiri']:+.3f}  "
-              f"pozitif={kal['oran_pozitif']:.3f}  hareketsiz={kal['hareketsiz_oran']:.3f}")
+        print(
+            f"    TÜM HAVUZ : n={tum['n']:5d}  ort={tum['ort_getiri']:+.3f}  medyan={tum['medyan_getiri']:+.3f}  "
+            f"pozitif={tum['oran_pozitif']:.3f}  hareketsiz={tum['hareketsiz_oran']:.3f}"
+        )
+        print(
+            f"    ELENEN    : n={el['n']:5d}  ort={el['ort_getiri']:+.3f}  medyan={el['medyan_getiri']:+.3f}  "
+            f"pozitif={el['oran_pozitif']:.3f}  hareketsiz={el['hareketsiz_oran']:.3f}"
+        )
+        print(
+            f"    KALAN     : n={kal['n']:5d}  ort={kal['ort_getiri']:+.3f}  medyan={kal['medyan_getiri']:+.3f}  "
+            f"pozitif={kal['oran_pozitif']:.3f}  hareketsiz={kal['hareketsiz_oran']:.3f}"
+        )
 
 
 def main() -> None:
@@ -345,8 +382,10 @@ def main() -> None:
     n_cohorts = df["cohort_id"].nunique()
     print(f"\nToplam satır: {len(df)}, kohort (boyut>={_MIN_COHORT_SIZE}) sayısı: {n_cohorts}")
     cohort_sizes = df.groupby("cohort_id").size()
-    print(f"Kohort boyutu (peer+anchor): medyan={cohort_sizes.median():.0f}, "
-          f"min={cohort_sizes.min()}, maks={cohort_sizes.max()}")
+    print(
+        f"Kohort boyutu (peer+anchor): medyan={cohort_sizes.median():.0f}, "
+        f"min={cohort_sizes.min()}, maks={cohort_sizes.max()}"
+    )
 
     ranked = _add_ranks(df)
     mid = ranked["opened_at"].min() + (ranked["opened_at"].max() - ranked["opened_at"].min()) / 2

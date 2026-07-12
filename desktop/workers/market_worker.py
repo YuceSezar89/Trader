@@ -21,19 +21,23 @@ logger = logging.getLogger(__name__)
 _ARROW_MAGIC = b"ARDF"
 _FALLBACK_MS = 1_000  # prices:live + aktif grafik pollingi — backend 1sn'de bir yazıyor
 _TICKER_POLL_INTERVAL = 20  # saniye — backend ticker:* verisini 60sn'de bir güncelliyor
-_SYMBOL_DISCOVERY_INTERVAL = 60  # saniye — sembol evreni (yeni listing/delisting) bu kadar seyrek değişir
+_SYMBOL_DISCOVERY_INTERVAL = (
+    60  # saniye — sembol evreni (yeni listing/delisting) bu kadar seyrek değişir
+)
 _FALLBACK_SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"]
 
 
 class MarketWorker(QThread):  # pylint: disable=too-many-instance-attributes
     """Redis pub/sub ile anlık fiyat ve kline güncellemelerini yayınlar."""
 
-    price_updated = pyqtSignal(str, float, float, float, float)  # symbol, price, change_pct, volume, funding_rate
-    prices_updated = pyqtSignal(dict)                       # {symbol: canlı fiyat} — tek toplu güncelleme
-    klines_updated = pyqtSignal(str, str, object)           # symbol, timeframe, DataFrame
-    connection_changed = pyqtSignal(bool, str)              # connected, message
-    symbols_discovered = pyqtSignal(list)                   # sembol evreni (yeniden) keşfedildiğinde
-    vpmv_breakdown_ready = pyqtSignal(str, str, dict)       # symbol, interval, {vol, mom, vlt, prc}
+    price_updated = pyqtSignal(
+        str, float, float, float, float
+    )  # symbol, price, change_pct, volume, funding_rate
+    prices_updated = pyqtSignal(dict)  # {symbol: canlı fiyat} — tek toplu güncelleme
+    klines_updated = pyqtSignal(str, str, object)  # symbol, timeframe, DataFrame
+    connection_changed = pyqtSignal(bool, str)  # connected, message
+    symbols_discovered = pyqtSignal(list)  # sembol evreni (yeniden) keşfedildiğinde
+    vpmv_breakdown_ready = pyqtSignal(str, str, dict)  # symbol, interval, {vol, mom, vlt, prc}
 
     def __init__(self, redis_url: str, interval_ms: int = _FALLBACK_MS, parent=None):
         super().__init__(parent)
@@ -166,7 +170,10 @@ class MarketWorker(QThread):  # pylint: disable=too-many-instance-attributes
 
         if not symbols:
             try:
-                keys = [k.decode() for k in self._redis.scan_iter(match="live_kline_data:*:1m", count=500)]
+                keys = [
+                    k.decode()
+                    for k in self._redis.scan_iter(match="live_kline_data:*:1m", count=500)
+                ]
                 symbols = sorted(k.split(":")[1] for k in keys if k.count(":") == 2)
             except Exception:  # pylint: disable=broad-exception-caught
                 pass
@@ -254,13 +261,16 @@ class MarketWorker(QThread):  # pylint: disable=too-many-instance-attributes
                 try:
                     vol, mom, vlt, prc = compute_components(df, vpmv_signal_type)
                     self.vpmv_breakdown_ready.emit(
-                        vpmv_symbol, vpmv_interval,
+                        vpmv_symbol,
+                        vpmv_interval,
                         {"volume": vol, "momentum": mom, "volatility": vlt, "price": prc},
                     )
                 except Exception:  # pylint: disable=broad-exception-caught
                     logger.warning(
                         "VPMV bileşenleri hesaplanamadı: %s %s",
-                        vpmv_symbol, vpmv_interval, exc_info=True,
+                        vpmv_symbol,
+                        vpmv_interval,
+                        exc_info=True,
                     )
 
     def _fetch_klines(self, symbol: str, timeframe: str) -> Optional[pd.DataFrame]:
@@ -271,6 +281,7 @@ class MarketWorker(QThread):  # pylint: disable=too-many-instance-attributes
                 return None
             if raw[:4] == _ARROW_MAGIC:
                 import pyarrow as pa  # pylint: disable=import-outside-toplevel
+
                 reader = pa.ipc.open_stream(raw[4:])
                 df = reader.read_pandas()
             else:

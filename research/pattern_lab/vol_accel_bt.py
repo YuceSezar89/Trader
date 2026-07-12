@@ -12,6 +12,7 @@ vol_accel = ortalama(son 5 bar hacmi) / ortalama(önceki 15 bar hacmi)
 
 Kullanım: python -m research.pattern_lab.vol_accel_bt
 """
+
 import warnings
 
 import numpy as np
@@ -60,8 +61,11 @@ def _report_correlation(df: pd.DataFrame, label: str) -> None:
 
 def main() -> None:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
@@ -76,11 +80,15 @@ def main() -> None:
         accel = _compute_vol_accel(bars)
         if accel is None:
             continue
-        rows.append({
-            "symbol": sig["symbol"], "signal_type": sig["signal_type"],
-            "opened_at": sig["opened_at"], "vol_accel": accel,
-            "realized_pnl": sig["realized_pnl"],
-        })
+        rows.append(
+            {
+                "symbol": sig["symbol"],
+                "signal_type": sig["signal_type"],
+                "opened_at": sig["opened_at"],
+                "vol_accel": accel,
+                "realized_pnl": sig["realized_pnl"],
+            }
+        )
         if i % 5000 == 0:
             print(f"  [{i}/{len(signals)}] işlendi, {len(rows)} geçerli satır")
 
@@ -97,10 +105,14 @@ def main() -> None:
         fast = sub[sub["vol_accel"] > 1]
         slow = sub[sub["vol_accel"] <= 1]
         print(f"  {sig_type}:")
-        print(f"    ivme>1 (hızlanan) : n={len(fast)}, PF={_pf(fast['realized_pnl']):.3f}, "
-              f"WR={(fast['realized_pnl'] > 0).mean() * 100:.1f}%")
-        print(f"    ivme<=1 (yavaşlayan): n={len(slow)}, PF={_pf(slow['realized_pnl']):.3f}, "
-              f"WR={(slow['realized_pnl'] > 0).mean() * 100:.1f}%")
+        print(
+            f"    ivme>1 (hızlanan) : n={len(fast)}, PF={_pf(fast['realized_pnl']):.3f}, "
+            f"WR={(fast['realized_pnl'] > 0).mean() * 100:.1f}%"
+        )
+        print(
+            f"    ivme<=1 (yavaşlayan): n={len(slow)}, PF={_pf(slow['realized_pnl']):.3f}, "
+            f"WR={(slow['realized_pnl'] > 0).mean() * 100:.1f}%"
+        )
 
     print("\n=== PLACEBO (ivme rastgele karıştırıldı) ===")
     rng = np.random.default_rng(42)

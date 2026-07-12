@@ -14,6 +14,7 @@ olduğu gözlemine dayanarak, saat-mertebesi ölçütlerden kaçınılıyor:
 İkisi ayrı ayrı 0-100 percentile rank'e çevrilip ortalanıyor — 50=nötr,
 düşük=ayı rejimi, yüksek=boğa rejimi.
 """
+
 import os
 import sys
 
@@ -22,8 +23,12 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from research.pattern_lab.rsi_cross_vpmv_jump_bt import _fetch_symbol_history  # pylint: disable=wrong-import-position
-from research.pattern_lab.rsi_cross_market_breadth_bt import _build_breadth_series  # pylint: disable=wrong-import-position
+from research.pattern_lab.rsi_cross_market_breadth_bt import (
+    _build_breadth_series,  # pylint: disable=wrong-import-position
+)
+from research.pattern_lab.rsi_cross_vpmv_jump_bt import (
+    _fetch_symbol_history,  # pylint: disable=wrong-import-position
+)
 
 BREADTH_EMA_SPAN = 288  # 3 gün @ 15m
 BTC_DAILY_SMA_DAYS = 20
@@ -32,6 +37,7 @@ BTC_DAILY_SMA_DAYS = 20
 def _rolling_rank_0_100(series: pd.Series, window: int = 200) -> pd.Series:
     def _rank(x):
         return (x <= x[-1]).mean() * 100.0
+
     return series.rolling(window, min_periods=30).apply(_rank, raw=True)
 
 

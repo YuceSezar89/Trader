@@ -9,6 +9,7 @@ baseline'ın ALTINDA kaldığını göstermişti — yani Short tarafı Long kad
 sağlam değil, bu ekonomik test o zayıflığı miras alıyor (tüm 45 gün
 birleştirilmiş, iki rejim karışık).
 """
+
 import os
 import sys
 from typing import Optional
@@ -17,27 +18,43 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from signals.do_kirilimi import _daily_open  # pylint: disable=wrong-import-position
-from research.pattern_lab.features import _atr  # pylint: disable=wrong-import-position
-from research.pattern_lab.do_open_streak_bt import (  # pylint: disable=wrong-import-position
-    DAYS, HORIZON_BARS, MIN_BARS, _fetch,
-)
-from research.pattern_lab.do_open_touch_gauss_bt import (  # pylint: disable=wrong-import-position
-    GAUSS_STREAK_THRESHOLD, _threshold_events,
-)
 from research.pattern_lab.do_break_gauss_economic_bt import (  # pylint: disable=wrong-import-position
-    POSITION_USD, ROUND_TRIP_FEE,
+    POSITION_USD,
+    ROUND_TRIP_FEE,
 )
 from research.pattern_lab.do_break_gauss_short_bt import (  # pylint: disable=wrong-import-position
-    _do_break_gate_down, _streak_state_down,
+    _do_break_gate_down,
+    _streak_state_down,
 )
-from research.pattern_lab.do_break_gauss_sltp_bt import DAR_ONCEKI, GENIS_CONFIGS  # pylint: disable=wrong-import-position
+from research.pattern_lab.do_break_gauss_sltp_bt import (  # pylint: disable=wrong-import-position
+    DAR_ONCEKI,
+    GENIS_CONFIGS,
+)
+from research.pattern_lab.do_open_streak_bt import (  # pylint: disable=wrong-import-position
+    DAYS,
+    HORIZON_BARS,
+    MIN_BARS,
+    _fetch,
+)
+from research.pattern_lab.do_open_touch_gauss_bt import (  # pylint: disable=wrong-import-position
+    GAUSS_STREAK_THRESHOLD,
+    _threshold_events,
+)
+from research.pattern_lab.features import _atr  # pylint: disable=wrong-import-position
+from signals.do_kirilimi import _daily_open  # pylint: disable=wrong-import-position
 
 
-def _simulate_exit_short(high: np.ndarray, low: np.ndarray, close: np.ndarray,
-                          entry_idx: int, entry_price: float, atr_val: float,
-                          sl_mult: float, tp_mult: Optional[float],
-                          breakeven_mult: Optional[float]) -> tuple[float, str]:
+def _simulate_exit_short(
+    high: np.ndarray,
+    low: np.ndarray,
+    close: np.ndarray,
+    entry_idx: int,
+    entry_price: float,
+    atr_val: float,
+    sl_mult: float,
+    tp_mult: Optional[float],
+    breakeven_mult: Optional[float],
+) -> tuple[float, str]:
     """Short pozisyon için bar-bar SL/TP/breakeven simülasyonu (_simulate_exit'in aynası).
     SL girişin ÜSTÜNDE, TP ALTINDA, breakeven fiyat lehte (aşağı) gidince tetiklenir."""
     sl = entry_price + sl_mult * atr_val
@@ -126,24 +143,31 @@ def run():
 
     blind24h_pnls = np.array(blind24h_pnls)
 
-    print(f"── Ekonomik karşılaştırma (Short, ${POSITION_USD:.0f} pozisyon, "
-          f"round-trip fee ${ROUND_TRIP_FEE:.2f}) ──")
+    print(
+        f"── Ekonomik karşılaştırma (Short, ${POSITION_USD:.0f} pozisyon, "
+        f"round-trip fee ${ROUND_TRIP_FEE:.2f}) ──"
+    )
     print(f"{'yöntem':28} {'n':>6} {'WR%':>6} {'ort $/işlem':>12} {'toplam $':>10} {'$/ay':>10}")
     s = _dollar_stats(blind24h_pnls, days_span)
-    print(f"{'kör 24h bekleme':28} {s['n']:>6} {s['wr']:>6} {s['avg_usd']:>12} "
-          f"{s['total_usd']:>10} {s['usd_per_month']:>10}")
+    print(
+        f"{'kör 24h bekleme':28} {s['n']:>6} {s['wr']:>6} {s['avg_usd']:>12} "
+        f"{s['total_usd']:>10} {s['usd_per_month']:>10}"
+    )
     for name, pnls in config_pnls.items():
         s = _dollar_stats(np.array(pnls), days_span)
         if s.get("n", 0) == 0:
             continue
-        print(f"{name:28} {s['n']:>6} {s['wr']:>6} {s['avg_usd']:>12} "
-              f"{s['total_usd']:>10} {s['usd_per_month']:>10}")
+        print(
+            f"{name:28} {s['n']:>6} {s['wr']:>6} {s['avg_usd']:>12} "
+            f"{s['total_usd']:>10} {s['usd_per_month']:>10}"
+        )
 
     print("\n── Çıkış nedeni dağılımı ──")
     for name, reasons in config_reasons.items():
         total = sum(reasons.values())
-        breakdown = ", ".join(f"{r}=%{c/total*100:.0f}" for r, c in
-                               sorted(reasons.items(), key=lambda x: -x[1]))
+        breakdown = ", ".join(
+            f"{r}=%{c/total*100:.0f}" for r, c in sorted(reasons.items(), key=lambda x: -x[1])
+        )
         print(f"  {name:28} {breakdown}")
 
 

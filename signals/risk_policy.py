@@ -15,8 +15,8 @@ from typing import NamedTuple, Optional
 
 
 class RiskLevels(NamedTuple):
-    sl_price:    float
-    tp_price:    float
+    sl_price: float
+    tp_price: float
     sl_multiplier: float
     tp_multiplier: float
 
@@ -100,12 +100,12 @@ class DynamicATRPolicy(RiskPolicy):
         bonus_intervals: tuple[str, ...],
         bonus_per_factor: float = 0.5,
     ):
-        self.sl_mult          = sl_mult
-        self.tp_base          = tp_base
-        self.tp_max           = tp_max
-        self.vpmv_threshold   = vpmv_threshold
-        self.mtf_full         = mtf_full
-        self.bonus_intervals  = bonus_intervals
+        self.sl_mult = sl_mult
+        self.tp_base = tp_base
+        self.tp_max = tp_max
+        self.vpmv_threshold = vpmv_threshold
+        self.mtf_full = mtf_full
+        self.bonus_intervals = bonus_intervals
         self.bonus_per_factor = bonus_per_factor
 
     def calculate_levels(
@@ -118,8 +118,8 @@ class DynamicATRPolicy(RiskPolicy):
         f = features or {}
 
         bonus = 0.0
-        vpmv     = f.get("vpms_score")
-        mtf      = f.get("mtf_score")
+        vpmv = f.get("vpms_score")
+        mtf = f.get("mtf_score")
         interval = f.get("interval", "")
 
         if vpmv is not None and float(vpmv) >= self.vpmv_threshold:
@@ -129,9 +129,9 @@ class DynamicATRPolicy(RiskPolicy):
         if interval in self.bonus_intervals:
             bonus += self.bonus_per_factor
 
-        tp_mult  = min(self.tp_base + bonus, self.tp_max)
-        sl_dist  = atr * self.sl_mult
-        tp_dist  = atr * tp_mult
+        tp_mult = min(self.tp_base + bonus, self.tp_max)
+        sl_dist = atr * self.sl_mult
+        tp_dist = atr * tp_mult
 
         if signal_type == "Long":
             sl_price = open_price - sl_dist
@@ -149,6 +149,7 @@ class DynamicATRPolicy(RiskPolicy):
 
 
 from config import Config  # pylint: disable=wrong-import-position
+
 default_policy = DynamicATRPolicy(
     sl_mult=Config.RISK_SL_MULTIPLIER,
     tp_base=Config.RISK_TP_MULTIPLIER,

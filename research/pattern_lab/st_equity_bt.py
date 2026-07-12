@@ -13,6 +13,7 @@ Test: ST(10,3) long-only flip stratejisi, 1h barlar, tüm semboller.
 Look-ahead koruması: filtre kararı yalnızca GİRİŞ anından önce kapanmış
 işlemlerin equity'sini görür. Ücret/kayma yok (göreli kıyas), not düşülür.
 """
+
 import os
 import sys
 
@@ -34,8 +35,11 @@ MIN_TRADES = 8
 
 def _fetch() -> pd.DataFrame:
     conn = psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
     q = f"""
         SELECT symbol, bucket AS ts, high, low, close
@@ -129,14 +133,18 @@ def run():
 
     print(f"analize giren sembol: {n_syms}")
     print(f"\n{'kol':30} {'n':>6} {'WR%':>6} {'ort%':>8} {'PF':>7} {'toplam%':>9}")
-    labels = {"A_tum": "A — tüm işlemler",
-              "B_ma10": "B1 — equity > MA10",
-              "B_hwm": "B2 — equity yeni zirvede",
-              "B_son5": "B3 — son 5 işlem ort. > 0"}
+    labels = {
+        "A_tum": "A — tüm işlemler",
+        "B_ma10": "B1 — equity > MA10",
+        "B_hwm": "B2 — equity yeni zirvede",
+        "B_son5": "B3 — son 5 işlem ort. > 0",
+    }
     for key, arm in arms.items():
         s = _stats(arm)
-        print(f"{labels[key]:30} {s['n']:>6} {s.get('wr',0):>6} {s.get('ort_%',0):>8} "
-              f"{s.get('pf',0):>7} {s.get('toplam_%',0):>9}")
+        print(
+            f"{labels[key]:30} {s['n']:>6} {s.get('wr',0):>6} {s.get('ort_%',0):>8} "
+            f"{s.get('pf',0):>7} {s.get('toplam_%',0):>9}"
+        )
 
 
 if __name__ == "__main__":

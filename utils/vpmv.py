@@ -3,6 +3,7 @@ VPMV (Volume-Price-Momentum-Volatility) hesap yardımcıları.
 
 Ağırlıklar: V=%35, M=%35, Vlt=%20, P=%10
 """
+
 from __future__ import annotations
 
 from typing import Optional, Tuple
@@ -18,7 +19,7 @@ from utils.preprocessing import (
     normalize_volume_0_100,
 )
 
-PRE_BARS  = 5
+PRE_BARS = 5
 POST_BARS = 4
 
 
@@ -98,9 +99,9 @@ def compute_pre(
 
     scores = compute_series(df, signal_type, volume_mode)
     vpmv_signal = float(scores.iloc[-1])
-    pre_slice   = scores.iloc[-(pre_bars + 1):-1]
-    pre_avg     = float(pre_slice.mean())
-    slope       = float(pre_slice.iloc[-1] - pre_slice.iloc[0])
+    pre_slice = scores.iloc[-(pre_bars + 1) : -1]
+    pre_avg = float(pre_slice.mean())
+    slope = float(pre_slice.iloc[-1] - pre_slice.iloc[0])
     return pre_avg, slope, vpmv_signal
 
 
@@ -119,9 +120,9 @@ def compute_post(
     if available < post_bars:
         return None, None
 
-    scores      = compute_series(df, signal_type)
+    scores = compute_series(df, signal_type)
     vpmv_signal = float(scores.iloc[signal_bar_idx])
-    post_slice  = scores.iloc[signal_bar_idx + 1: signal_bar_idx + 1 + post_bars]
-    post_avg    = float(post_slice.mean())
-    post_delta  = post_avg - vpmv_signal
+    post_slice = scores.iloc[signal_bar_idx + 1 : signal_bar_idx + 1 + post_bars]
+    post_avg = float(post_slice.mean())
+    post_delta = post_avg - vpmv_signal
     return post_avg, post_delta

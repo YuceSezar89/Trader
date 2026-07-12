@@ -1,17 +1,18 @@
+from datetime import datetime
+
 from sqlalchemy import (
+    Boolean,
     Column,
+    DateTime,
+    Float,
+    ForeignKey,
     Integer,
+    PrimaryKeyConstraint,
     SmallInteger,
     String,
-    Float,
-    Boolean,
-    DateTime,
-    PrimaryKeyConstraint,
     UniqueConstraint,
-    ForeignKey,
 )
 from sqlalchemy.orm import DeclarativeBase, relationship
-from datetime import datetime
 
 
 # SQLAlchemy 2.0 stili, mypy ve linter uyumluluğu için
@@ -40,8 +41,8 @@ class PriceData(Base):
     high = Column(Float)
     low = Column(Float)
     close = Column(Float)
-    volume     = Column(Float)
-    buy_volume  = Column(Float, nullable=True)
+    volume = Column(Float)
+    buy_volume = Column(Float, nullable=True)
     sell_volume = Column(Float, nullable=True)
 
     __table_args__ = (
@@ -53,68 +54,68 @@ class PriceData(Base):
 class Signal(Base):
     __tablename__ = "signals"
 
-    id           = Column(Integer, primary_key=True, autoincrement=True)
-    symbol       = Column(String, nullable=False)
-    interval     = Column(String, nullable=False)
-    indicators   = Column(String, nullable=False)
-    signal_type  = Column(String, nullable=False)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String, nullable=False)
+    interval = Column(String, nullable=False)
+    indicators = Column(String, nullable=False)
+    signal_type = Column(String, nullable=False)
 
-    opened_at    = Column(DateTime, nullable=False, default=datetime.now)
-    open_price   = Column(Float, nullable=False)
+    opened_at = Column(DateTime, nullable=False, default=datetime.now)
+    open_price = Column(Float, nullable=False)
 
-    vpms_score   = Column(Float, nullable=True)
-    mtf_score    = Column(Float, nullable=True)
+    vpms_score = Column(Float, nullable=True)
+    mtf_score = Column(Float, nullable=True)
     st_confirmed = Column(Boolean, nullable=True)
-    rsi          = Column(Float, nullable=True)
-    strength     = Column(Integer, nullable=True)
-    atr          = Column(Float, nullable=True)
-    alpha        = Column(Float, nullable=True)
-    beta         = Column(Float, nullable=True)
+    rsi = Column(Float, nullable=True)
+    strength = Column(Integer, nullable=True)
+    atr = Column(Float, nullable=True)
+    alpha = Column(Float, nullable=True)
+    beta = Column(Float, nullable=True)
     sharpe_ratio = Column(Float, nullable=True)
 
-    status       = Column(String(20), nullable=False, default='active')
-    closed_at    = Column(DateTime, nullable=True)
-    close_price  = Column(Float, nullable=True)
+    status = Column(String(20), nullable=False, default="active")
+    closed_at = Column(DateTime, nullable=True)
+    close_price = Column(Float, nullable=True)
     close_reason = Column(String(20), nullable=True)
-    closed_by    = Column(Integer, nullable=True)
+    closed_by = Column(Integer, nullable=True)
 
-    realized_pnl     = Column(Float, nullable=True)
+    realized_pnl = Column(Float, nullable=True)
     duration_minutes = Column(Integer, nullable=True)
-    oi_data          = Column(String, nullable=True)
+    oi_data = Column(String, nullable=True)
 
-    stop_loss_price   = Column(Float, nullable=True)
+    stop_loss_price = Column(Float, nullable=True)
     take_profit_price = Column(Float, nullable=True)
-    sl_multiplier     = Column(Float, nullable=True)
-    tp_multiplier     = Column(Float, nullable=True)
+    sl_multiplier = Column(Float, nullable=True)
+    tp_multiplier = Column(Float, nullable=True)
 
-    z_score_entry      = Column(Float, nullable=True)
-    is_confluence      = Column(Boolean, nullable=True, default=False)
+    z_score_entry = Column(Float, nullable=True)
+    is_confluence = Column(Boolean, nullable=True, default=False)
     trailing_stop_price = Column(Float, nullable=True)
 
-    sortino_ratio      = Column(Float, nullable=True)
-    calmar_ratio       = Column(Float, nullable=True)
-    information_ratio  = Column(Float, nullable=True)
-    vpmv_pre_avg    = Column(Float, nullable=True)
-    vpmv_pre_proxy  = Column(Float, nullable=True)
-    vpmv_pre_total  = Column(Float, nullable=True)
-    vpmv_ratio      = Column(Float, nullable=True)
-    vpmv_slope      = Column(Float, nullable=True)
-    vpmv_post_avg   = Column(Float, nullable=True)
+    sortino_ratio = Column(Float, nullable=True)
+    calmar_ratio = Column(Float, nullable=True)
+    information_ratio = Column(Float, nullable=True)
+    vpmv_pre_avg = Column(Float, nullable=True)
+    vpmv_pre_proxy = Column(Float, nullable=True)
+    vpmv_pre_total = Column(Float, nullable=True)
+    vpmv_ratio = Column(Float, nullable=True)
+    vpmv_slope = Column(Float, nullable=True)
+    vpmv_post_avg = Column(Float, nullable=True)
     vpmv_post_delta = Column(Float, nullable=True)
-    cvd_slope       = Column(Float, nullable=True)
-    vp_buy_avg      = Column(Float, nullable=True)
-    vp_sell_avg     = Column(Float, nullable=True)
-    vp_score        = Column(Float, nullable=True)
-    vp_score_real   = Column(Float, nullable=True)
-    devisso_score    = Column(Float, nullable=True)
-    devisso_delta    = Column(Float, nullable=True)
-    devisso_ratio    = Column(Float, nullable=True)
-    pd_zone          = Column(Float, nullable=True)
+    cvd_slope = Column(Float, nullable=True)
+    vp_buy_avg = Column(Float, nullable=True)
+    vp_sell_avg = Column(Float, nullable=True)
+    vp_score = Column(Float, nullable=True)
+    vp_score_real = Column(Float, nullable=True)
+    devisso_score = Column(Float, nullable=True)
+    devisso_delta = Column(Float, nullable=True)
+    devisso_ratio = Column(Float, nullable=True)
+    pd_zone = Column(Float, nullable=True)
     market_structure = Column(String(10), nullable=True)
-    fvg_tfs          = Column(String(40), nullable=True)
-    candle_pattern   = Column(String(100), nullable=True)
-    rank_score       = Column(Float, nullable=True)
-    vs_btc           = Column(Float, nullable=True)
+    fvg_tfs = Column(String(40), nullable=True)
+    candle_pattern = Column(String(100), nullable=True)
+    rank_score = Column(Float, nullable=True)
+    vs_btc = Column(Float, nullable=True)
     ha_ultra_confirm = Column(SmallInteger, nullable=True)
     cross_indicator_close = Column(Boolean, nullable=True)
 
@@ -124,57 +125,57 @@ class Signal(Base):
 class PaperTrade(Base):
     __tablename__ = "paper_trades"
 
-    id              = Column(Integer, primary_key=True, autoincrement=True)
-    signal_id       = Column(Integer, ForeignKey("signals.id", ondelete="SET NULL"), nullable=True)
-    strategy        = Column(String(50), nullable=False, default="conf_100")
-    source          = Column(String(20), nullable=False, default="signal")
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    signal_id = Column(Integer, ForeignKey("signals.id", ondelete="SET NULL"), nullable=True)
+    strategy = Column(String(50), nullable=False, default="conf_100")
+    source = Column(String(20), nullable=False, default="signal")
 
-    symbol          = Column(String(30), nullable=False)
-    signal_type     = Column(String(10), nullable=False)
-    interval        = Column(String(10), nullable=False)
-    position_usd    = Column(Float, nullable=False, default=100.0)
-    entry_price     = Column(Float, nullable=False)
-    exit_price      = Column(Float, nullable=True)
+    symbol = Column(String(30), nullable=False)
+    signal_type = Column(String(10), nullable=False)
+    interval = Column(String(10), nullable=False)
+    position_usd = Column(Float, nullable=False, default=100.0)
+    entry_price = Column(Float, nullable=False)
+    exit_price = Column(Float, nullable=True)
     stop_loss_price = Column(Float, nullable=True)
     take_profit_price = Column(Float, nullable=True)
     trailing_stop_price = Column(Float, nullable=True)
 
-    fee_usd         = Column(Float, nullable=True)
-    pnl_usd         = Column(Float, nullable=True)
-    pnl_pct         = Column(Float, nullable=True)
-    balance_after   = Column(Float, nullable=True)
+    fee_usd = Column(Float, nullable=True)
+    pnl_usd = Column(Float, nullable=True)
+    pnl_pct = Column(Float, nullable=True)
+    balance_after = Column(Float, nullable=True)
 
-    status          = Column(String(20), nullable=False, default="open")
-    close_reason    = Column(String(50), nullable=True)
-    opened_at       = Column(DateTime, nullable=False, default=datetime.now)
-    closed_at       = Column(DateTime, nullable=True)
+    status = Column(String(20), nullable=False, default="open")
+    close_reason = Column(String(50), nullable=True)
+    opened_at = Column(DateTime, nullable=False, default=datetime.now)
+    closed_at = Column(DateTime, nullable=True)
 
     # ML snapshot
-    btc_z_score     = Column(Float, nullable=True)
-    btc_trend       = Column(String(20), nullable=True)
-    hour_utc        = Column(SmallInteger, nullable=True)
-    day_of_week     = Column(SmallInteger, nullable=True)
-    funding_rate    = Column(Float, nullable=True)
+    btc_z_score = Column(Float, nullable=True)
+    btc_trend = Column(String(20), nullable=True)
+    hour_utc = Column(SmallInteger, nullable=True)
+    day_of_week = Column(SmallInteger, nullable=True)
+    funding_rate = Column(Float, nullable=True)
     recent_win_rate = Column(Float, nullable=True)
 
     # Denormalized signal features
-    vpms_score      = Column(Float, nullable=True)
-    z_score_entry   = Column(Float, nullable=True)
-    mtf_score       = Column(Float, nullable=True)
-    atr             = Column(Float, nullable=True)
-    rank_at_entry     = Column(Integer, nullable=True)
-    regime_trend      = Column(String(20), nullable=True)
+    vpms_score = Column(Float, nullable=True)
+    z_score_entry = Column(Float, nullable=True)
+    mtf_score = Column(Float, nullable=True)
+    atr = Column(Float, nullable=True)
+    rank_at_entry = Column(Integer, nullable=True)
+    regime_trend = Column(String(20), nullable=True)
     volatility_regime = Column(String(20), nullable=True)
 
-    vpmv_pre_avg    = Column(Float, nullable=True)
-    vpmv_ratio      = Column(Float, nullable=True)
-    vpmv_slope      = Column(Float, nullable=True)
-    vpmv_post_avg   = Column(Float, nullable=True)
+    vpmv_pre_avg = Column(Float, nullable=True)
+    vpmv_ratio = Column(Float, nullable=True)
+    vpmv_slope = Column(Float, nullable=True)
+    vpmv_post_avg = Column(Float, nullable=True)
     vpmv_post_delta = Column(Float, nullable=True)
-    cvd_slope       = Column(Float, nullable=True)
-    vp_buy_avg      = Column(Float, nullable=True)
-    vp_sell_avg     = Column(Float, nullable=True)
-    vp_score        = Column(Float, nullable=True)
+    cvd_slope = Column(Float, nullable=True)
+    vp_buy_avg = Column(Float, nullable=True)
+    vp_sell_avg = Column(Float, nullable=True)
+    vp_score = Column(Float, nullable=True)
 
     signal = relationship("Signal", back_populates="paper_trades", lazy="noload")
 
@@ -182,13 +183,13 @@ class PaperTrade(Base):
 class PaperPortfolio(Base):
     __tablename__ = "paper_portfolio"
 
-    id               = Column(Integer, primary_key=True, autoincrement=True)
-    strategy         = Column(String(50), nullable=False, unique=True, default="conf_100")
-    balance          = Column(Float, nullable=False, default=10000.0)
-    initial_balance  = Column(Float, nullable=False, default=10000.0)
-    peak_balance     = Column(Float, nullable=False, default=10000.0)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    strategy = Column(String(50), nullable=False, unique=True, default="conf_100")
+    balance = Column(Float, nullable=False, default=10000.0)
+    initial_balance = Column(Float, nullable=False, default=10000.0)
+    peak_balance = Column(Float, nullable=False, default=10000.0)
     max_drawdown_pct = Column(Float, nullable=False, default=0.0)
-    total_trades     = Column(Integer, nullable=False, default=0)
-    winning_trades   = Column(Integer, nullable=False, default=0)
-    total_pnl_usd    = Column(Float, nullable=False, default=0.0)
-    updated_at       = Column(DateTime, nullable=False, default=datetime.now)
+    total_trades = Column(Integer, nullable=False, default=0)
+    winning_trades = Column(Integer, nullable=False, default=0)
+    total_pnl_usd = Column(Float, nullable=False, default=0.0)
+    updated_at = Column(DateTime, nullable=False, default=datetime.now)

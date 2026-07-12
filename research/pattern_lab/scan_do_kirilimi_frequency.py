@@ -9,6 +9,7 @@ ateşlemiyor mu, yoksa ateşliyor da BTC rejim/ayrışma filtresinde mi eleniyor
 
 Kullanım: python -m research.pattern_lab.scan_do_kirilimi_frequency [gun] [sembol_limit]
 """
+
 import sys
 import warnings
 
@@ -18,11 +19,10 @@ import psycopg2
 
 warnings.filterwarnings("ignore")
 
+import pandas_ta_classic as pta  # pylint: disable=wrong-import-position
+
 from config import Config
 from signals.do_kirilimi import (
-    _crossover,
-    _daily_open,
-    _htf_forming_bull,
     ADX_LEN,
     ADX_MIN,
     DO_HOUR,
@@ -31,20 +31,24 @@ from signals.do_kirilimi import (
     MARKOV_KEEP,
     MARU_BODY,
     MARU_WICK,
-    MIN_ONAY,
     MIN_BARS,
+    MIN_ONAY,
     SESSION_HOURS,
     ST_LEN,
     ST_MULT,
+    _crossover,
+    _daily_open,
+    _htf_forming_bull,
 )
-
-import pandas_ta_classic as pta  # pylint: disable=wrong-import-position
 
 
 def _db_conn():
     return psycopg2.connect(
-        host=Config.DB_HOST, port=Config.DB_PORT, dbname=Config.DB_NAME,
-        user=Config.DB_USER, password=Config.DB_PASSWORD,
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
 
 
@@ -55,8 +59,10 @@ def _scan_symbol(symbol: str, df: pd.DataFrame, btc_day_ret_by_ts: dict) -> list
         d[col] = d[col].astype(float)
     ts = pd.Series(pd.to_datetime(d["bucket"]))
 
-    o = d["open"].to_numpy(); h = d["high"].to_numpy()
-    l = d["low"].to_numpy();  c = d["close"].to_numpy()
+    o = d["open"].to_numpy()
+    h = d["high"].to_numpy()
+    l = d["low"].to_numpy()
+    c = d["close"].to_numpy()
     n = len(d)
     if n < MIN_BARS:
         return []
@@ -79,7 +85,8 @@ def _scan_symbol(symbol: str, df: pd.DataFrame, btc_day_ret_by_ts: dict) -> list
     session_ok = mins_from_do < SESSION_HOURS * 60
 
     do_touch = (l <= dailyOpen) & (h >= dailyOpen)
-    prev_c = np.roll(c, 1); prev_c[0] = np.nan
+    prev_c = np.roll(c, 1)
+    prev_c[0] = np.nan
     do_break = (c > dailyOpen) & (prev_c <= dailyOpen)
     do_lift = (l <= dailyOpen) & (c > dailyOpen)
     c10c20_do = (c10 | c20) & (do_touch | do_break | do_lift) & np.isfinite(dailyOpen)
@@ -87,16 +94,26 @@ def _scan_symbol(symbol: str, df: pd.DataFrame, btc_day_ret_by_ts: dict) -> list
     rng = h - l
     body = np.abs(c - o)
     with np.errstate(divide="ignore", invalid="ignore"):
-        marubozu = (c > o) & (rng > 0) & (body / rng >= MARU_BODY) & \
-                   ((h - c) / rng <= MARU_WICK) & ((o - l) / rng <= MARU_WICK)
-    prev_o = np.roll(o, 1); prev_o[0] = np.nan
-    prev_h = np.roll(h, 1); prev_l = np.roll(l, 1)
+        marubozu = (
+            (c > o)
+            & (rng > 0)
+            & (body / rng >= MARU_BODY)
+            & ((h - c) / rng <= MARU_WICK)
+            & ((o - l) / rng <= MARU_WICK)
+        )
+    prev_o = np.roll(o, 1)
+    prev_o[0] = np.nan
+    prev_h = np.roll(h, 1)
+    prev_l = np.roll(l, 1)
     engulf = (c > o) & (prev_c < prev_o) & (l < prev_l) & (h > prev_h)
 
     bull = c > o
-    bull1 = np.roll(bull, 2); bull2 = np.roll(bull, 1)
-    bull1[:2] = False; bull2[:1] = False
-    h2 = np.roll(h, 2); h2[:2] = np.nan
+    bull1 = np.roll(bull, 2)
+    bull2 = np.roll(bull, 1)
+    bull1[:2] = False
+    bull2[:1] = False
+    h2 = np.roll(h, 2)
+    h2[:2] = np.nan
     fvg3 = bull1 & bull2 & bull & (l > h2)
     fvg_above_do = (h2 > dailyOpen) & (l > dailyOpen)
     setup_above_do = (o > dailyOpen) & (c > dailyOpen)
@@ -156,8 +173,14 @@ def _scan_symbol(symbol: str, df: pd.DataFrame, btc_day_ret_by_ts: dict) -> list
             fvg_lower = np.nan
             fvg_bar = -1
 
-        setup_candle = (fvg_mem and sess and sdf_long and t_ok[i]
-                         and setup_above_do[i] and (marubozu[i] or engulf[i]))
+        setup_candle = (
+            fvg_mem
+            and sess
+            and sdf_long
+            and t_ok[i]
+            and setup_above_do[i]
+            and (marubozu[i] or engulf[i])
+        )
         if setup_candle:
             do_setup = False
             fvg_mem = False
@@ -169,15 +192,29 @@ def _scan_symbol(symbol: str, df: pd.DataFrame, btc_day_ret_by_ts: dict) -> list
                 coin_day_ret = (c[i] / do_i - 1) * 100 if np.isfinite(do_i) and do_i > 0 else np.nan
                 btc_ret = btc_day_ret_by_ts.get(bar_ts)
                 btc_up = (btc_ret is not None) and (btc_ret > 0)
-                ayrisma = (coin_day_ret - btc_ret) if (btc_ret is not None and np.isfinite(coin_day_ret)) else np.nan
+                ayrisma = (
+                    (coin_day_ret - btc_ret)
+                    if (btc_ret is not None and np.isfinite(coin_day_ret))
+                    else np.nan
+                )
                 passes = bool(btc_up and ayrisma is not None and ayrisma > 0)
-                events.append({
-                    "symbol": symbol, "ts": bar_ts,
-                    "coin_day_ret": round(coin_day_ret, 2) if np.isfinite(coin_day_ret) else None,
-                    "btc_day_ret": round(btc_ret, 2) if btc_ret is not None else None,
-                    "ayrisma": round(ayrisma, 2) if ayrisma is not None and np.isfinite(ayrisma) else None,
-                    "btc_up": btc_up, "passes_filter": passes,
-                })
+                events.append(
+                    {
+                        "symbol": symbol,
+                        "ts": bar_ts,
+                        "coin_day_ret": (
+                            round(coin_day_ret, 2) if np.isfinite(coin_day_ret) else None
+                        ),
+                        "btc_day_ret": round(btc_ret, 2) if btc_ret is not None else None,
+                        "ayrisma": (
+                            round(ayrisma, 2)
+                            if ayrisma is not None and np.isfinite(ayrisma)
+                            else None
+                        ),
+                        "btc_up": btc_up,
+                        "passes_filter": passes,
+                    }
+                )
     return events
 
 
@@ -197,7 +234,8 @@ def main(days: int = 14, symbol_limit: int = 100):
 
     btc_df = pd.read_sql(
         "SELECT bucket, open, high, low, close, volume FROM cagg_5m WHERE symbol=%s AND bucket>=%s ORDER BY bucket",
-        conn, params=("BTCUSDT", start),
+        conn,
+        params=("BTCUSDT", start),
     )
     btc_ts = pd.Series(pd.to_datetime(btc_df["bucket"]))
     btc_o = btc_df["open"].astype(float).to_numpy()
@@ -211,7 +249,8 @@ def main(days: int = 14, symbol_limit: int = 100):
     for idx, symbol in enumerate(top_symbols, 1):
         df = pd.read_sql(
             "SELECT bucket, open, high, low, close, volume FROM cagg_5m WHERE symbol=%s AND bucket>=%s ORDER BY bucket",
-            conn, params=(symbol, start),
+            conn,
+            params=(symbol, start),
         )
         if df.empty:
             continue
@@ -223,7 +262,9 @@ def main(days: int = 14, symbol_limit: int = 100):
         raw_count += len(events)
         all_events.extend(events)
         if idx % 20 == 0:
-            print(f"  ... {idx}/{len(top_symbols)} sembol tarandı, şu ana kadar {raw_count} ham entry")
+            print(
+                f"  ... {idx}/{len(top_symbols)} sembol tarandı, şu ana kadar {raw_count} ham entry"
+            )
 
     conn.close()
 
@@ -245,11 +286,20 @@ def main(days: int = 14, symbol_limit: int = 100):
         else:
             print("(yok)")
         print()
-        print("--- BTC günü negatifken elenenler: %d ---" % sum(1 for e in all_events if not e["btc_up"]))
-        print("--- Ayrışma <= 0 nedeniyle elenenler: %d ---" %
-              sum(1 for e in all_events if e["btc_up"] and (e["ayrisma"] is None or e["ayrisma"] <= 0)))
+        print(
+            "--- BTC günü negatifken elenenler: %d ---"
+            % sum(1 for e in all_events if not e["btc_up"])
+        )
+        print(
+            "--- Ayrışma <= 0 nedeniyle elenenler: %d ---"
+            % sum(
+                1 for e in all_events if e["btc_up"] and (e["ayrisma"] is None or e["ayrisma"] <= 0)
+            )
+        )
     else:
-        print("Hiç ham entry bulunamadı — sorun BTC filtresinde değil, 6 kapı+ADX+ST setup'ının kendisinde.")
+        print(
+            "Hiç ham entry bulunamadı — sorun BTC filtresinde değil, 6 kapı+ADX+ST setup'ının kendisinde."
+        )
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ GİRİŞ barının (3. yeşil mum) body_pct = |close-open|/(high-low)*100 değer
 göre tercillere ayrılıp 24h forward getiri karşılaştırılıyor — Gauss tercilini
 test ettiğimiz yöntemin birebir aynısı, farklı özellik.
 """
+
 import os
 import sys
 
@@ -15,14 +16,23 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from signals.do_kirilimi import _daily_open  # pylint: disable=wrong-import-position
-from research.pattern_lab.vol_exhaustion_bt import _fwd_returns, _stats  # pylint: disable=wrong-import-position
 from research.pattern_lab.do_open_streak_bt import (  # pylint: disable=wrong-import-position
-    DAYS, HORIZON_BARS, MIN_BARS, _fetch, _do_break_gate,
+    DAYS,
+    HORIZON_BARS,
+    MIN_BARS,
+    _do_break_gate,
+    _fetch,
 )
 from research.pattern_lab.do_open_touch_gauss_bt import (  # pylint: disable=wrong-import-position
-    GAUSS_STREAK_THRESHOLD, _streak_state, _threshold_events,
+    GAUSS_STREAK_THRESHOLD,
+    _streak_state,
+    _threshold_events,
 )
+from research.pattern_lab.vol_exhaustion_bt import (  # pylint: disable=wrong-import-position
+    _fwd_returns,
+    _stats,
+)
+from signals.do_kirilimi import _daily_open  # pylint: disable=wrong-import-position
 
 
 def _body_pct(o: np.ndarray, h: np.ndarray, l: np.ndarray, c: np.ndarray, i: int) -> float:
@@ -70,8 +80,10 @@ def run():
 
     s = _stats(np.concatenate(baseline_fwd) if baseline_fwd else np.array([]))
     print(f"{'grup':20} {'n':>7} {'WR%':>6} {'ort%':>8} {'PF':>7}")
-    print(f"{'baseline (tüm barlar)':20} {s.get('n',0):>7} {s.get('wr',0):>6} "
-          f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+    print(
+        f"{'baseline (tüm barlar)':20} {s.get('n',0):>7} {s.get('wr',0):>6} "
+        f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+    )
 
     if not all_body_vals:
         print("\nBody analizi için yeterli olay yok.")
@@ -89,8 +101,10 @@ def run():
     for name in ("düşük", "orta", "yüksek"):
         rets = np.array(body_tercile_fwd[name])
         s = _stats(rets)
-        print(f"{name:10} {s.get('n',0):>7} {s.get('wr',0):>6} "
-              f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+        print(
+            f"{name:10} {s.get('n',0):>7} {s.get('wr',0):>6} "
+            f"{s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+        )
 
 
 if __name__ == "__main__":

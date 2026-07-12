@@ -12,6 +12,7 @@ aranıyor — RSI_Cross testindeki "yön-eşleşen BELTHOLD" mantığının ayn�
 Look-ahead yok: cdl_pattern her bar için SADECE o ana kadarki OHLC ile
 hesaplanıyor (mum formasyonları zaten geriye-dönük tanımlar, ileri bakmıyor).
 """
+
 import os
 import sys
 
@@ -23,7 +24,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from indicators.core import calculate_atr  # pylint: disable=wrong-import-position
 from research.pattern_lab.do_open_streak_evol_exit_bt import (  # pylint: disable=wrong-import-position
-    HORIZON_BARS, MIN_BARS, WARMUP, _fetch, _signal_series,
+    HORIZON_BARS,
+    MIN_BARS,
+    WARMUP,
+    _fetch,
+    _signal_series,
 )
 from research.pattern_lab.vol_exhaustion_bt import _stats  # pylint: disable=wrong-import-position
 from signals.do_open_streak import SL_ATR_MULT  # pylint: disable=wrong-import-position
@@ -86,7 +91,9 @@ def run() -> None:
                 no_belt_rets.append(ret)
                 opened_ats_no.append(pd.Timestamp(ts_np[i]))
 
-    print(f"analiz edilen sembol: {n_syms} | toplam olay: {n_events} | +BELTHOLD teyitli: {n_belt}\n")
+    print(
+        f"analiz edilen sembol: {n_syms} | toplam olay: {n_events} | +BELTHOLD teyitli: {n_belt}\n"
+    )
     if n_belt < 30:
         print("BELTHOLD'lu olay sayısı çok az, güvenilir yorum yapılamaz.")
         return
@@ -98,9 +105,15 @@ def run() -> None:
         arr = np.array(rets)
         ts_arr = pd.Series(opened_ats)
         first_mask = (ts_arr < mid).to_numpy()
-        for label, mask in (("tum", np.ones(len(arr), dtype=bool)), ("ilk_yari", first_mask), ("ikinci_yari", ~first_mask)):
+        for label, mask in (
+            ("tum", np.ones(len(arr), dtype=bool)),
+            ("ilk_yari", first_mask),
+            ("ikinci_yari", ~first_mask),
+        ):
             s = _stats(arr[mask])
-            print(f"{name:20} {label:12} {s.get('n',0):>6} {s.get('wr',0):>6} {s.get('ort_%',0):>8} {s.get('pf',0):>7}")
+            print(
+                f"{name:20} {label:12} {s.get('n',0):>6} {s.get('wr',0):>6} {s.get('ort_%',0):>8} {s.get('pf',0):>7}"
+            )
 
     print(f"{'grup':20} {'dönem':12} {'n':>6} {'WR%':>6} {'ort%':>8} {'PF':>7}")
     _report("BELTHOLD yok", no_belt_rets, opened_ats_no)

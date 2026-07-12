@@ -19,10 +19,10 @@ logger = logging.getLogger(__name__)
 
 class VPMCalculator:
     DEFAULT_WEIGHTS = {
-        "V":   0.35,
-        "M":   0.35,
+        "V": 0.35,
+        "M": 0.35,
         "Vlt": 0.20,
-        "P":   0.10,
+        "P": 0.10,
     }
 
     @classmethod
@@ -53,10 +53,10 @@ class VPMCalculator:
             return 0.0
         try:
             score = (
-                w["V"]   * vol_score +
-                w["M"]   * momentum_score +
-                w["Vlt"] * vlt_score +
-                w["P"]   * price_score
+                w["V"] * vol_score
+                + w["M"] * momentum_score
+                + w["Vlt"] * vlt_score
+                + w["P"] * price_score
             ) / total_w
             return max(0.0, min(100.0, score))
         except Exception as e:

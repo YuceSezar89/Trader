@@ -34,6 +34,7 @@ pg.setConfigOption("antialias", True)
 
 # ── Candlestick Item ──────────────────────────────────────────────────────────
 
+
 class CandlestickItem(pg.GraphicsObject):
     """OHLCV mum grafiği çizen GraphicsObject."""
 
@@ -94,6 +95,7 @@ class CandlestickItem(pg.GraphicsObject):
 
 # ── Volume Item ───────────────────────────────────────────────────────────────
 
+
 class VolumeItem(pg.GraphicsObject):
     """Hacim barlarını çizen GraphicsObject."""
 
@@ -137,6 +139,7 @@ class VolumeItem(pg.GraphicsObject):
 
 
 # ── CandleChart ───────────────────────────────────────────────────────────────
+
 
 class CandleChart(pg.GraphicsLayoutWidget):
     """
@@ -183,7 +186,8 @@ class CandleChart(pg.GraphicsLayoutWidget):
 
         # Satır 0: Mumluk
         self._p_candle = self.addPlot(
-            row=0, col=0,
+            row=0,
+            col=0,
             axisItems={"left": _left_axis(), "bottom": _date_axis()},
         )
         self._p_candle.showGrid(x=True, y=True, alpha=0.15)
@@ -195,26 +199,21 @@ class CandleChart(pg.GraphicsLayoutWidget):
         self._p_candle.addItem(self._candle_item)
 
         # EMA çizgisi
-        self._ema_line = self._p_candle.plot(
-            pen=pg.mkPen(_EMA_COLOR, width=1.5), name="EMA-21"
-        )
+        self._ema_line = self._p_candle.plot(pen=pg.mkPen(_EMA_COLOR, width=1.5), name="EMA-21")
 
         # Fiyat etiketi — ignoreBounds: bounding rect hesabını etkilemesin
-        self._price_label = pg.TextItem(
-            text="", color=COLORS["text_primary"], anchor=(0, 0.5)
-        )
+        self._price_label = pg.TextItem(text="", color=COLORS["text_primary"], anchor=(0, 0.5))
         self._p_candle.addItem(self._price_label, ignoreBounds=True)
 
         # OHLCV tooltip
-        self._ohlcv_label = pg.TextItem(
-            text="", color=COLORS["text_muted"], anchor=(0, 1)
-        )
+        self._ohlcv_label = pg.TextItem(text="", color=COLORS["text_muted"], anchor=(0, 1))
         self._ohlcv_label.setPos(0, 0)
         self._p_candle.addItem(self._ohlcv_label, ignoreBounds=True)
 
         # Satır 1: Hacim
         self._p_vol = self.addPlot(
-            row=1, col=0,
+            row=1,
+            col=0,
             axisItems={"left": _left_axis(), "bottom": _date_axis()},
         )
         self._p_vol.showGrid(x=False, y=True, alpha=0.1)
@@ -228,7 +227,8 @@ class CandleChart(pg.GraphicsLayoutWidget):
 
         # Satır 2: RSI — sadece bu panelde tarih ekseni görünür
         self._p_rsi = self.addPlot(
-            row=2, col=0,
+            row=2,
+            col=0,
             axisItems={"left": _left_axis(), "bottom": _date_axis()},
         )
         self._p_rsi.showGrid(x=True, y=True, alpha=0.1)
@@ -237,14 +237,13 @@ class CandleChart(pg.GraphicsLayoutWidget):
         self._p_rsi.setYRange(0, 100)
         self._p_rsi.setXLink(self._p_candle)
 
-        self._rsi_line = self._p_rsi.plot(
-            pen=pg.mkPen(_RSI_COLOR, width=1.5), name="RSI-14"
-        )
+        self._rsi_line = self._p_rsi.plot(pen=pg.mkPen(_RSI_COLOR, width=1.5), name="RSI-14")
 
         for level, color in [(30, COLORS["green"]), (70, COLORS["red"])]:
             self._p_rsi.addItem(
                 pg.InfiniteLine(
-                    pos=level, angle=0,
+                    pos=level,
+                    angle=0,
                     pen=pg.mkPen(color, width=1, style=Qt.PenStyle.DashLine),
                 )
             )
@@ -267,23 +266,25 @@ class CandleChart(pg.GraphicsLayoutWidget):
 
     # ── Veri yükleme ──────────────────────────────────────────────────────────
 
-    def load_df(self, df: pd.DataFrame, symbol: str = "", tf: str = "", auto_range: bool = False) -> None:
+    def load_df(
+        self, df: pd.DataFrame, symbol: str = "", tf: str = "", auto_range: bool = False
+    ) -> None:
         """DataFrame'i grafiklere yükler. Sütunlar: timestamp, open, high, low, close, volume."""
         if df is None or df.empty:
             self.clear_chart()
             return
 
-        symbol_changed = (symbol != self._symbol or tf != self._tf)
+        symbol_changed = symbol != self._symbol or tf != self._tf
         self._symbol = symbol
         self._tf = tf
         self._df = df.copy()
 
         ts = df["timestamp"].astype("int64") // 10**9  # Unix saniye
-        opens  = df["open"].astype(float)
-        highs  = df["high"].astype(float)
-        lows   = df["low"].astype(float)
+        opens = df["open"].astype(float)
+        highs = df["high"].astype(float)
+        lows = df["low"].astype(float)
         closes = df["close"].astype(float)
-        vols   = df["volume"].astype(float)
+        vols = df["volume"].astype(float)
 
         # Mumluk
         candle_data = list(zip(ts, opens, highs, lows, closes))
@@ -305,7 +306,7 @@ class CandleChart(pg.GraphicsLayoutWidget):
 
         # Son fiyat etiketi
         last_price = closes.iloc[-1]
-        last_ts    = ts.iloc[-1]
+        last_ts = ts.iloc[-1]
         self._price_label.setPos(last_ts + 1, last_price)
         self._price_label.setText(f" {last_price:,.4f}")
 

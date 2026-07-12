@@ -21,9 +21,9 @@ from PyQt6.QtWidgets import (  # pylint: disable=no-name-in-module
     QHeaderView,
     QLabel,
     QLineEdit,
-    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -33,38 +33,48 @@ from desktop.theme import COLORS
 pg.setConfigOption("background", "#0d0d12")
 pg.setConfigOption("foreground", "#555566")
 
-_COLS       = ["Sembol", "Δ VPMV", "Şimdi", "vs Med", "Sinyal", "Pre", "Zaman"]
+_COLS = ["Sembol", "Δ VPMV", "Şimdi", "vs Med", "Sinyal", "Pre", "Zaman"]
 _COL_SYMBOL = 0
-_COL_DELTA  = 1
-_COL_NOW    = 2
+_COL_DELTA = 1
+_COL_NOW = 2
 _COL_VS_MED = 3
-_COL_SIG    = 4
-_COL_PRE    = 5
-_COL_TIME   = 6
+_COL_SIG = 4
+_COL_PRE = 5
+_COL_TIME = 6
 
-_C_GREEN       = QColor(COLORS["green"])
-_C_RED         = QColor(COLORS["red"])
-_C_MUTED       = QColor(COLORS["text_muted"])
+_C_GREEN = QColor(COLORS["green"])
+_C_RED = QColor(COLORS["red"])
+_C_MUTED = QColor(COLORS["text_muted"])
 _C_TRANSPARENT = QColor(0, 0, 0, 0)
 
 _BG_POS_STRONG = QColor(0, 120, 40, 150)
-_BG_POS_SOFT   = QColor(0, 80, 20, 80)
+_BG_POS_SOFT = QColor(0, 80, 20, 80)
 _BG_NEG_STRONG = QColor(180, 20, 20, 150)
-_BG_NEG_SOFT   = QColor(120, 10, 10, 80)
+_BG_NEG_SOFT = QColor(120, 10, 10, 80)
 
 _PALETTE = [
-    (100, 220, 100), (220, 100, 100), (100, 160, 240),
-    (240, 180,  80), (180, 100, 240), (80,  220, 220),
-    (240, 240,  80), (240, 140, 180), (140, 240, 160),
-    (200, 160, 240), (240, 140,  80), (80,  180, 200),
-    (160, 240, 100), (240, 100, 140), (100, 200, 240),
+    (100, 220, 100),
+    (220, 100, 100),
+    (100, 160, 240),
+    (240, 180, 80),
+    (180, 100, 240),
+    (80, 220, 220),
+    (240, 240, 80),
+    (240, 140, 180),
+    (140, 240, 160),
+    (200, 160, 240),
+    (240, 140, 80),
+    (80, 180, 200),
+    (160, 240, 100),
+    (240, 100, 140),
+    (100, 200, 240),
 ]
 
 _INDICATOR_FILTERS = [
-    ("Tümü",        ""),
-    ("RSI Cross",   "RSI_Cross"),
-    ("Supertrend",  "Supertrend"),
-    ("HA Cross",    "HA_Cross"),
+    ("Tümü", ""),
+    ("RSI Cross", "RSI_Cross"),
+    ("Supertrend", "Supertrend"),
+    ("HA Cross", "HA_Cross"),
     ("MA200 Cross", "MA200_Cross"),
 ]
 
@@ -99,7 +109,7 @@ def _make_table() -> QTableWidget:
     # görünümü verir, sürekli yeniden ölçüm olmadan.
     hh.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
     hh.setSectionResizeMode(_COL_SYMBOL, QHeaderView.ResizeMode.Interactive)
-    hh.setSectionResizeMode(_COL_TIME,   QHeaderView.ResizeMode.Interactive)
+    hh.setSectionResizeMode(_COL_TIME, QHeaderView.ResizeMode.Interactive)
     return t
 
 
@@ -154,9 +164,7 @@ class VpmvDivergencePanel(QWidget):
         ctrl.addWidget(self._ind_combo)
         ctrl.addStretch()
         self._status_label = QLabel("Sinyal bekleniyor…")
-        self._status_label.setStyleSheet(
-            f"color: {COLORS['text_muted']}; font-size: 11px;"
-        )
+        self._status_label.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px;")
         ctrl.addWidget(self._status_label)
         root.addLayout(ctrl)
 
@@ -165,7 +173,7 @@ class VpmvDivergencePanel(QWidget):
 
         # ── Tab 0: Tablo ──────────────────────────────────────────────────
         tables_w = QWidget()
-        tbl_lay  = QHBoxLayout(tables_w)
+        tbl_lay = QHBoxLayout(tables_w)
         tbl_lay.setContentsMargins(0, 4, 0, 0)
         tbl_lay.setSpacing(8)
 
@@ -286,7 +294,7 @@ class VpmvDivergencePanel(QWidget):
                 self._sym_colors[sym] = _PALETTE[i % len(_PALETTE)]
 
         for sym, vpmv_arr in series.items():
-            color  = self._sym_colors[sym]
+            color = self._sym_colors[sym]
             x_data = np.arange(len(vpmv_arr), dtype=np.float32)
             y_data = vpmv_arr.astype(np.float32)
 
@@ -312,28 +320,28 @@ class VpmvDivergencePanel(QWidget):
     # ── Tablo ─────────────────────────────────────────────────────────────
 
     def _populate(self, result: dict) -> None:
-        delta        = result.get("delta", {})
+        delta = result.get("delta", {})
         current_vpmv = result.get("current", {})
-        signal_vpmv  = result.get("signal", {})
-        pre_vpmv     = result.get("pre", {})
-        series       = result.get("series", {})
-        indicators   = result.get("indicators", {})
-        tf_map       = result.get("tf", {})
-        time_map     = result.get("time", {})
+        signal_vpmv = result.get("signal", {})
+        pre_vpmv = result.get("pre", {})
+        series = result.get("series", {})
+        indicators = result.get("indicators", {})
+        tf_map = result.get("tf", {})
+        time_map = result.get("time", {})
 
         tf = self._tf_filter
         if tf:
             keep = {sym for sym, v in tf_map.items() if v == tf}
-            delta        = {s: v for s, v in delta.items()        if s in keep}
+            delta = {s: v for s, v in delta.items() if s in keep}
             current_vpmv = {s: v for s, v in current_vpmv.items() if s in keep}
-            series       = {s: v for s, v in series.items()       if s in keep}
+            series = {s: v for s, v in series.items() if s in keep}
 
         ind = self._indicator_filter
         if ind:
             keep = {sym for sym, v in indicators.items() if ind in v}
-            delta        = {s: v for s, v in delta.items()        if s in keep}
+            delta = {s: v for s, v in delta.items() if s in keep}
             current_vpmv = {s: v for s, v in current_vpmv.items() if s in keep}
-            series       = {s: v for s, v in series.items()       if s in keep}
+            series = {s: v for s, v in series.items() if s in keep}
 
         self._update_chart(series)
 
@@ -342,7 +350,8 @@ class VpmvDivergencePanel(QWidget):
 
         pos_rows = sorted(
             [(sym, d) for sym, d in delta.items() if d >= 0],
-            key=lambda x: x[1], reverse=True,
+            key=lambda x: x[1],
+            reverse=True,
         )
         neg_rows = sorted(
             [(sym, d) for sym, d in delta.items() if d < 0],
@@ -350,12 +359,24 @@ class VpmvDivergencePanel(QWidget):
         )
 
         self._fill_table(
-            self._pos_table, pos_rows, current_vpmv, signal_vpmv,
-            pre_vpmv, time_map, median_vpmv, positive=True,
+            self._pos_table,
+            pos_rows,
+            current_vpmv,
+            signal_vpmv,
+            pre_vpmv,
+            time_map,
+            median_vpmv,
+            positive=True,
         )
         self._fill_table(
-            self._neg_table, neg_rows, current_vpmv, signal_vpmv,
-            pre_vpmv, time_map, median_vpmv, positive=False,
+            self._neg_table,
+            neg_rows,
+            current_vpmv,
+            signal_vpmv,
+            pre_vpmv,
+            time_map,
+            median_vpmv,
+            positive=False,
         )
         self._apply_filter(self._pos_table, self._pos_search)
         self._apply_filter(self._neg_table, self._neg_search)
@@ -374,10 +395,10 @@ class VpmvDivergencePanel(QWidget):
         table.setSortingEnabled(False)
         table.setRowCount(len(rows))
 
-        mono     = QFont("Courier New", 11)
-        bold     = QFont("Courier New", 11, QFont.Weight.Bold)
-        d_color  = _C_GREEN if positive else _C_RED
-        now      = datetime.now()
+        mono = QFont("Courier New", 11)
+        bold = QFont("Courier New", 11, QFont.Weight.Bold)
+        d_color = _C_GREEN if positive else _C_RED
+        now = datetime.now()
 
         for row_idx, (symbol, delta) in enumerate(rows):
             sym_item = QTableWidgetItem(symbol)
@@ -418,13 +439,9 @@ class VpmvDivergencePanel(QWidget):
             vs_item.setFont(mono)
             vs_item.setForeground(_C_GREEN if vs_med >= 0 else _C_RED)
             if abs(vs_med) >= 15:
-                vs_item.setBackground(
-                    _BG_POS_STRONG if vs_med >= 0 else _BG_NEG_STRONG
-                )
+                vs_item.setBackground(_BG_POS_STRONG if vs_med >= 0 else _BG_NEG_STRONG)
             elif abs(vs_med) >= 8:
-                vs_item.setBackground(
-                    _BG_POS_SOFT if vs_med >= 0 else _BG_NEG_SOFT
-                )
+                vs_item.setBackground(_BG_POS_SOFT if vs_med >= 0 else _BG_NEG_SOFT)
             else:
                 vs_item.setBackground(_C_TRANSPARENT)
             table.setItem(row_idx, _COL_VS_MED, vs_item)
