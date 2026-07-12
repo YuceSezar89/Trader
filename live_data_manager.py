@@ -470,6 +470,8 @@ class LiveDataManager:
                 logger.info(f"[{symbol}] Senkronizasyon tamamlandı: {total_inserted} mum eklendi.")
                 if self.mtf_enabled:
                     await self._refresh_mtf_redis(symbol)
+            elif BinanceClientManager.is_banned():
+                logger.warning(f"[{symbol}] Ban cooldown aktifken senkronizasyon denendi, sonuç belirsiz (gap-heal telafi edecek).")
             else:
                 logger.info(f"[{symbol}] Yeni veri bulunamadı, sistem güncel.")
 

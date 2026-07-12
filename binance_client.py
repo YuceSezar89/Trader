@@ -134,6 +134,13 @@ class BinanceClientManager:
         await RedisClient.throttle_external_api("binance", cls._MAX_REQUESTS_PER_MIN)
 
     @classmethod
+    def is_banned(cls) -> bool:
+        """fetch_klines'ın boş DataFrame dönüşünün ban cooldown'undan mı yoksa
+        gerçekten yeni veri olmamasından mı kaynaklandığını ayırt etmek için —
+        çağıranlar "sistem güncel" gibi yanıltıcı loglar atmasın diye (12 Tem 2026)."""
+        return time.time() < cls._banned_until
+
+    @classmethod
     async def fetch_klines(cls, symbol: str, interval: str, limit: int = 500, startTime: Optional[int] = None) -> pd.DataFrame:
         """Fetches historical klines for a single symbol."""
         if time.time() < cls._banned_until:
@@ -174,6 +181,11 @@ class BinanceClientManager:
             ])
             df = df.astype({"open": float, "high": float, "low": float, "close": float, "volume": float,
                             "taker_buy_base_asset_volume": float, "taker_buy_quote_asset_volume": float})
+            # endTime verilmediğinde Binance son elemanı oluşum halindeki (henüz
+            # kapanmamış) mum olarak döndürür — bu satır filtrelenmezse "kapanmış"
+            # gibi indikatörlenip DB'ye/buffer'a yazılıyordu (12 Tem 2026 fix).
+            now_ms = int(time.time() * 1000)
+            df = df[df["close_time"] < now_ms].reset_index(drop=True)
             df["buy_volume"] = df["taker_buy_base_asset_volume"]
             df["sell_volume"] = df["volume"] - df["buy_volume"]
             return check_kline_schema(df, "REST.fetch_klines")
