@@ -29,7 +29,7 @@ from database.crud import (
 )
 from database.engine import get_session, run_with_db_timeout
 from sqlalchemy import text
-from signals.signal_processor import process_and_enrich_signals
+from signals.signal_processor import process_and_enrich_signals, trim_to_closed_bar
 from signals.risk_manager import risk_manager
 from signals.paper_trade_manager import paper_trade_manager, ha_cross_manager, rsi_15m_manager, manual_manager, do_kirilimi_manager, do_open_streak_manager
 from utils.exceptions import BinanceAPIError, DatabaseError
@@ -709,17 +709,37 @@ class LiveDataManager:
         await self._handle_tick(symbol, interval, kline)
         await self._derive_and_dispatch_forming_tfs(symbol)
 
+    async def _refresh_1d_bar(self, symbol: str) -> None:
+        """1d kapanışını 1m buffer'ından türetmek yerine (yapısal olarak imkansız
+        — bkz. _derive_and_dispatch_forming_tfs docstring'i) doğrudan Binance
+        REST'ten son kapanmış günü çeker; her zaman tam/doğru, UTC-anchor'lı
+        (12 Tem 2026)."""
+        try:
+            df_1d = await BinanceClientManager.fetch_klines(symbol=symbol, interval="1d", limit=2)
+            if df_1d.empty:
+                return
+            new_row = df_1d.iloc[-1].to_dict()
+            logger.info(f"🕯️ [{symbol}] 1d mum kapandı (REST'ten). Fiyat: {new_row['close']}")
+            await self._update_and_process_symbol_mtf(symbol, "1d", self._new_row_to_kline_dict(new_row))
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.debug("[1d-Refresh] %s hata: %s", symbol, exc)
+
     async def _derive_and_dispatch_closing_tfs(self, symbol: str, next_open_time_ms: int) -> None:
         """1m-türetme projesi (Adım 5-6, 10 Tem 2026): bir 1m barı kapandığında,
         hangi üst TF'lerin de kapandığını (TimeframeAggregator.get_closing_timeframes)
         tespit eder, her biri için 1m buffer'ından kapanan barı türetir
         (_build_derived_closed_bar) ve mevcut _update_and_process_symbol_mtf'e AYNEN
         besler — indikatör hesaplama/sinyal üretimi/do_kirilimi-do_open_streak
-        tetikleme kodlarına HİÇ dokunulmadı, sadece verinin kaynağı değişti."""
+        tetikleme kodlarına HİÇ dokunulmadı, sadece verinin kaynağı değişti.
+
+        1d ayrı ele alınır (12 Tem 2026) — bkz. _refresh_1d_bar."""
         derive_tfs = [tf for tf in self.supported_timeframes if tf != "1m"]
         if not derive_tfs:
             return
         closing_tfs = TimeframeAggregator.get_closing_timeframes(next_open_time_ms, derive_tfs)
+        if "1d" in closing_tfs:
+            closing_tfs = [tf for tf in closing_tfs if tf != "1d"]
+            asyncio.create_task(self._refresh_1d_bar(symbol))
         if not closing_tfs:
             return
         df_1m = self.mtf_buffers.get(symbol, {}).get("1m")
@@ -759,8 +779,15 @@ class LiveDataManager:
         720-1440 satırlık dilimleri, 6 ayrı fillna+sum çağrısıyla), bu da MTF Batch
         Initialization gibi AYNI executor'ı paylaşan işleri kuyrukta süresiz bekletip
         120s timeout'a düşürüyordu. 1d artık 120sn'de bir hesaplanıyor (2sn yerine) —
-        60x daha az çağrı, executor üzerindeki büyük TF yükü ortadan kalkıyor."""
-        derive_tfs = [tf for tf in self.supported_timeframes if tf != "1m"]
+        60x daha az çağrı, executor üzerindeki büyük TF yükü ortadan kalkıyor.
+
+        1d bu türetmenin DIŞINDA (12 Tem 2026) — 1m buffer'ı en fazla
+        mtf_buffer_limits['1m']=1000 satır (~16.7 saat) tutuyor, 1d'nin tam bir
+        periyodu (1440 dk) için hiçbir zaman yeterli olamaz. Eksik pencereyle
+        üretilen "forming" bar, Redis/REST'ten doğru şekilde dolmuş son 1d
+        satırının üzerine yanlış OHLCV yazıp indikatörlerini NaN'a düşürüyordu
+        (bkz. _refresh_1d_bar — kapanış tarafı artık REST'ten besleniyor)."""
+        derive_tfs = [tf for tf in self.supported_timeframes if tf != "1m" and tf != "1d"]
         if not derive_tfs:
             return
         df_1m = self.mtf_buffers.get(symbol, {}).get("1m")
@@ -887,11 +914,13 @@ class LiveDataManager:
                         df_copy = await loop.run_in_executor(
                             _MTF_EXECUTOR, pd.DataFrame.copy, self.mtf_buffers[symbol][interval]
                         )
+                        df_copy = trim_to_closed_bar(df_copy, new_row["open_time"])
+                        ref_df_trimmed = trim_to_closed_bar(ref_df, new_row["open_time"])
                         task = asyncio.create_task(
                             process_and_enrich_signals(
                                 symbol=symbol,
                                 df=df_copy,
-                                ref_df=ref_df,
+                                ref_df=ref_df_trimmed,
                                 interval=interval,
                                 oi_data=oi_data_json,
                                 symbol_buffers=self.mtf_buffers.get(symbol, {}),
@@ -1753,7 +1782,7 @@ class LiveDataManager:
                 df_1m_ind = await loop.run_in_executor(_MTF_EXECUTOR, add_all_indicators, df_1m)
                 self.mtf_buffers[symbol]["1m"] = df_1m_ind.tail(self.mtf_buffer_limits.get("1m", 1000))
                 await RedisClient.set_mtf_klines(symbol, "1m", self.mtf_buffers[symbol]["1m"])
-            for ws_tf in ["5m", "15m", "30m", "6h", "8h", "12h"]:
+            for ws_tf in ["5m", "15m", "30m", "6h", "8h", "12h", "1d"]:
                 limit = self.mtf_buffer_limits.get(ws_tf, 250)
                 df_ws = await BinanceClientManager.fetch_klines(symbol=symbol, interval=ws_tf, limit=limit)
                 if df_ws.empty:
