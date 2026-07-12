@@ -74,7 +74,7 @@ class SignalLifecycleManager:
         async def _do_process() -> Optional[int]:
             async with get_session() as session:
                 try:
-                    active = await self._get_active(session, symbol, interval)
+                    active = await self._get_active(session, symbol, interval, indicators)
 
                     if active:
                         if active.signal_type == sig_type:
@@ -87,8 +87,8 @@ class SignalLifecycleManager:
                         close_px = current_price or open_price
                         await self._close(session, active, close_px, "reversal")
                         logger.info(
-                            "[%s] %s %s kapatıldı → %s açılıyor",
-                            symbol, interval, active.signal_type, sig_type,
+                            "[%s] %s %s(%s) kapatıldı → %s açılıyor",
+                            symbol, interval, active.signal_type, indicators, sig_type,
                         )
 
                     atr_val = signal_data.get("atr") or 0.0
@@ -109,7 +109,7 @@ class SignalLifecycleManager:
                         sl_price = tp_price = sl_mult = tp_mult = None
 
                     new_deviso = signal_data.get("devisso_score")
-                    prev_deviso = await self._get_prev_devisso(session, symbol, interval, sig_type)
+                    prev_deviso = await self._get_prev_devisso(session, symbol, interval, indicators, sig_type)
                     devisso_delta = (
                         round(new_deviso - prev_deviso, 2)
                         if new_deviso is not None and prev_deviso is not None
@@ -307,12 +307,13 @@ class SignalLifecycleManager:
             return False
 
     async def _get_prev_devisso(
-        self, session: AsyncSession, symbol: str, interval: str, signal_type: str
+        self, session: AsyncSession, symbol: str, interval: str, indicators: str, signal_type: str
     ) -> Optional[float]:
         result = await session.execute(
             select(Signal.devisso_score).where(
                 Signal.symbol      == symbol,
                 Signal.interval    == interval,
+                Signal.indicators  == indicators,
                 Signal.signal_type == signal_type,
                 Signal.devisso_score.isnot(None),
             ).order_by(Signal.id.desc()).limit(1)
@@ -321,13 +322,19 @@ class SignalLifecycleManager:
         return float(row) if row is not None else None
 
     async def _get_active(
-        self, session: AsyncSession, symbol: str, interval: str
+        self, session: AsyncSession, symbol: str, interval: str, indicators: str
     ) -> Optional[Signal]:
+        """(symbol, interval, indicators) üçlüsü kendi bağımsız pozisyonuna sahip —
+        farklı indicator'lar (HA_Cross/RSI_Cross/...) aynı sembol+interval'de
+        eşzamanlı sinyal üretse bile birbirinin sinyalini kapatmaz/güncellemez
+        (12 Tem 2026: eski davranışta reversal'ların %40'ı çapraz-indicator
+        kirlenmesiydi)."""
         result = await session.execute(
             select(Signal).where(
-                Signal.symbol   == symbol,
-                Signal.interval == interval,
-                Signal.status   == "active",
+                Signal.symbol     == symbol,
+                Signal.interval   == interval,
+                Signal.indicators == indicators,
+                Signal.status     == "active",
             ).order_by(Signal.id.desc()).with_for_update()
         )
         actives = result.scalars().all()
@@ -337,8 +344,8 @@ class SignalLifecycleManager:
             for stale in actives[1:]:
                 await self._close(session, stale, float(stale.open_price), "reconciliation")
             logger.warning(
-                "[%s] %s: %d duplikat aktif sinyal temizlendi",
-                symbol, interval, len(actives) - 1,
+                "[%s] %s (%s): %d duplikat aktif sinyal temizlendi",
+                symbol, interval, indicators, len(actives) - 1,
             )
         return actives[0]
 
