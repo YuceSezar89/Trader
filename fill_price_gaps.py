@@ -12,14 +12,12 @@ Kullanım:
 import argparse
 import asyncio
 import logging
-import os
 from typing import Optional
 
 import pandas as pd
 import psycopg2
-from dotenv import load_dotenv
 
-load_dotenv()
+from config import Config
 
 logging.basicConfig(
     level=logging.INFO,
@@ -41,11 +39,11 @@ _INTERVAL_MS: dict[str, int] = {
 
 def _db_conn():
     return psycopg2.connect(
-        host=os.getenv("DB_HOST", "localhost"),
-        port=int(os.getenv("DB_PORT", 5432)),
-        dbname=os.getenv("DB_NAME", "trader"),
-        user=os.getenv("DB_USER", "trader"),
-        password=os.getenv("DB_PASSWORD", ""),
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        dbname=Config.DB_NAME,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
     )
 
 
@@ -84,72 +82,34 @@ def find_gaps(symbol: str, interval: str, days: int) -> list[tuple[int, int]]:
 async def _fetch_with_ban_retry(
     symbol: str, interval: str, start_ms: int
 ) -> Optional[pd.DataFrame]:
-    """Kline verisi çeker — ban (-1003) gelirse ban kalkana kadar bekler."""
-    import re
+    """Kline verisi çeker — kanonik BinanceClientManager.fetch_klines'ı kullanır
+    (float cast, forming-mum filtresi, buy/sell_volume, check_kline_schema zaten
+    orada uygulanıyor — bu script'in kendi ayrı/eksik kopyasını tutması 13 Tem
+    2026 gecesi taker_buy_base_asset_volume'un string kalıp sessizce script'i
+    0-bar-eklendi gibi bitirmesine yol açmıştı). Ban kalkana kadar bekler."""
     import time
 
-    import aiohttp
-
-    url = (
-        f"https://fapi.binance.com/fapi/v1/klines"
-        f"?symbol={symbol}&interval={interval}&limit=1500&startTime={start_ms}"
-    )
+    from binance_client import BinanceClientManager
 
     for attempt in range(10):
+        if BinanceClientManager.is_banned():
+            wait_s = max(10, BinanceClientManager._banned_until - time.time() + 5)
+            logger.warning("IP ban aktif — %.0f saniye bekleniyor...", wait_s)
+            await asyncio.sleep(wait_s)
+            continue
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-                    data = await resp.json()
-
-            if isinstance(data, dict):
-                code = data.get("code", 0)
-                msg = data.get("msg", "")
-                if code == -1003:  # IP ban
-                    match = re.search(r"banned until (\d+)", msg)
-                    if match:
-                        ban_until_ms = int(match.group(1))
-                        wait_s = max(10, (ban_until_ms - int(time.time() * 1000)) / 1000 + 15)
-                    else:
-                        wait_s = 60
-                    logger.warning("IP ban — %.0f saniye bekleniyor...", wait_s)
-                    await asyncio.sleep(wait_s)
-                    continue
-                logger.warning("[%s] API hatası: %s", symbol, data)
-                return None
-
-            df = pd.DataFrame(
-                data,
-                columns=[
-                    "open_time",
-                    "open",
-                    "high",
-                    "low",
-                    "close",
-                    "volume",
-                    "close_time",
-                    "quote_asset_volume",
-                    "number_of_trades",
-                    "taker_buy_base_asset_volume",
-                    "taker_buy_quote_asset_volume",
-                    "ignore",
-                ],
+            df = await BinanceClientManager.fetch_klines(
+                symbol=symbol, interval=interval, limit=1500, startTime=start_ms
             )
-            df = df.astype(
-                {
-                    "open_time": int,
-                    "open": float,
-                    "high": float,
-                    "low": float,
-                    "close": float,
-                    "volume": float,
-                    "taker_buy_base_asset_volume": float,
-                }
-            )
+            if df is not None and not df.empty:
+                return df
+            if BinanceClientManager.is_banned():
+                continue
             return df
-
         except Exception as exc:
             logger.warning("[%s] Bağlantı hatası: %s — 10s bekleniyor", symbol, exc)
             await asyncio.sleep(10)
+    return None
 
     return None
 
