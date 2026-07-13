@@ -142,6 +142,7 @@ async def _fetch_with_ban_retry(
                     "low": float,
                     "close": float,
                     "volume": float,
+                    "taker_buy_base_asset_volume": float,
                 }
             )
             return df
