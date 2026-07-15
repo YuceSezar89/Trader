@@ -139,6 +139,7 @@ class ManualTradeDialog(QDialog):
         )
 
     def _get_current_price(self, symbol: str) -> float | None:
+        r = None
         try:
             r = _redis.Redis.from_url(
                 self._redis_url, socket_connect_timeout=2, decode_responses=True
@@ -151,6 +152,9 @@ class ManualTradeDialog(QDialog):
                 return float(d.get("price") or d.get("last_price") or 0) or None
         except Exception:
             pass
+        finally:
+            if r is not None:
+                r.close()
         return None
 
     def _on_accept(self) -> None:
@@ -173,6 +177,7 @@ class ManualTradeDialog(QDialog):
         tf = self._tf.currentText()
         now = datetime.now()
 
+        conn = None
         try:
             conn = psycopg2.connect(**self._db_config)
             with conn.cursor() as cur:
@@ -190,18 +195,24 @@ class ManualTradeDialog(QDialog):
                     (symbol, self._direction, tf, _POSITION_USD, entry, sl, tp, now),
                 )
             conn.commit()
-            conn.close()
         except Exception as exc:
             self._status.setText(f"DB hatası: {exc}")
             self._status.setStyleSheet(f"color: {COLORS['red']}; font-size: 11px;")
             logger.error("[ManualTrade] DB insert hatası: %s", exc)
             return
+        finally:
+            if conn is not None:
+                conn.close()
 
+        r = None
         try:
             r = _redis.Redis.from_url(self._redis_url, socket_connect_timeout=2)
             r.set("manual_trade:refresh", "1", ex=60)
         except Exception:
             pass
+        finally:
+            if r is not None:
+                r.close()
 
         logger.info("[ManualTrade] %s %s %s @ %.6f açıldı", symbol, self._direction, tf, entry)
         self.accept()

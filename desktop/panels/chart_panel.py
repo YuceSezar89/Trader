@@ -183,6 +183,7 @@ class ChartPanel(QWidget):  # pylint: disable=too-many-instance-attributes
 
     def _fetch_data(self, symbol: str, tf: str) -> Optional[pd.DataFrame]:
         """Redis Arrow → JSON fallback → DB fallback."""
+        r = None
         try:
             import redis as _redis  # pylint: disable=import-outside-toplevel
 
@@ -197,7 +198,10 @@ class ChartPanel(QWidget):  # pylint: disable=too-many-instance-attributes
                     import pyarrow as pa  # pylint: disable=import-outside-toplevel
 
                     reader = pa.ipc.open_stream(raw[4:])
-                    df = reader.read_pandas()
+                    try:
+                        df = reader.read_pandas()
+                    finally:
+                        reader.close()
                 else:
                     df = pd.read_json(io.StringIO(raw.decode("utf-8")), orient="split")
                 df = self._normalize_df(df)
@@ -205,6 +209,9 @@ class ChartPanel(QWidget):  # pylint: disable=too-many-instance-attributes
                     return df.tail(_LIMIT)
         except Exception:  # pylint: disable=broad-exception-caught
             pass
+        finally:
+            if r is not None:
+                r.close()
         return self._fetch_from_db(symbol, tf)
 
     @staticmethod
@@ -232,6 +239,7 @@ class ChartPanel(QWidget):  # pylint: disable=too-many-instance-attributes
         return df
 
     def _fetch_from_db(self, symbol: str, tf: str) -> Optional[pd.DataFrame]:
+        conn = None
         try:
             import psycopg2  # pylint: disable=import-outside-toplevel
 
@@ -248,7 +256,6 @@ class ChartPanel(QWidget):  # pylint: disable=too-many-instance-attributes
                 (symbol, tf, _LIMIT),
             )
             rows = cur.fetchall()
-            conn.close()
             if not rows:
                 return None
             df = pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
@@ -257,6 +264,9 @@ class ChartPanel(QWidget):  # pylint: disable=too-many-instance-attributes
             return df
         except Exception:  # pylint: disable=broad-exception-caught
             return None
+        finally:
+            if conn is not None:
+                conn.close()
 
     # ── Slot'lar ──────────────────────────────────────────────────────────────
 

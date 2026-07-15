@@ -283,7 +283,10 @@ class MarketWorker(QThread):  # pylint: disable=too-many-instance-attributes
                 import pyarrow as pa  # pylint: disable=import-outside-toplevel
 
                 reader = pa.ipc.open_stream(raw[4:])
-                df = reader.read_pandas()
+                try:
+                    df = reader.read_pandas()
+                finally:
+                    reader.close()
             else:
                 df = pd.read_json(StringIO(raw.decode("utf-8")), orient="split")
             if "open_time" in df.columns and pd.api.types.is_integer_dtype(df["open_time"]):

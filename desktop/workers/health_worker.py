@@ -49,6 +49,7 @@ class HealthWorker(QThread):
             "symbol_count": 0,
             "active_signals": 0,
         }
+        r = None
         try:
             r = redis.Redis.from_url(self._redis_url, socket_connect_timeout=2)
             r.ping()
@@ -57,16 +58,22 @@ class HealthWorker(QThread):
             result["symbol_count"] = len(keys)
         except Exception:
             result["redis"] = ServiceStatus.ERROR
+        finally:
+            if r is not None:
+                r.close()
 
+        conn = None
         try:
             conn = psycopg2.connect(**self._db_config, connect_timeout=2)
             with conn.cursor() as cur:
                 cur.execute("SELECT COUNT(*) FROM signals WHERE status = 'active'")
                 result["active_signals"] = cur.fetchone()[0]
-            conn.close()
             result["db"] = ServiceStatus.OK
         except Exception:
             result["db"] = ServiceStatus.ERROR
+        finally:
+            if conn is not None:
+                conn.close()
 
         return result
 
