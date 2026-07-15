@@ -1,27 +1,28 @@
 """
-VpmvWorker — aktif sinyallerin kendi TF'lerinde VPMV serisini hesaplar.
+VpmvWorker — aktif sinyallerin VPMV'sini gösterir.
 
-Her sembol için sinyal barından itibaren VPMV (0-100) serisi üretir.
+14 Tem 2026: backend (live_data_manager.py::_publish_vpmv_live) artık her bar
+kapanışında VPMV'yi zaten bellekteki buffer'la hesaplayıp `vpmv_live:{signal_id}`
+Redis key'ine yazıyor — bu worker artık ham kline çekip compute_series() ile
+SIFIRDAN hesaplamıyor (o eski yol, oluşmakta olan/forming barı da dahil ettiği
+için saniye saniye titriyordu VE 96GB/16.5GB bellek patlamalarının kök
+nedeniydi), sadece backend'in yayınladığı hazır değeri okuyor.
+
 Delta = vpmv_now - vpmv_signal → pozitif: momentum devam ediyor, negatif: söndü.
 """
 
+import json
 import logging
 import threading
 import time
 from datetime import datetime
-from io import StringIO
 from typing import Optional
 
-import pandas as pd
+import numpy as np
 import redis
 from PyQt6.QtCore import QThread, pyqtSignal, pyqtSlot  # pylint: disable=no-name-in-module
 
-from utils.vpmv import compute_series
-
 logger = logging.getLogger(__name__)
-
-_ARROW_MAGIC = b"ARDF"
-_MIN_BARS = 20
 
 
 def _to_dt(val) -> Optional[datetime]:
@@ -35,25 +36,8 @@ def _to_dt(val) -> Optional[datetime]:
         return None
 
 
-def _find_signal_bar(df: pd.DataFrame, opened_at: datetime) -> Optional[int]:
-    """Sinyal zamanına en yakın bar indeksini döner."""
-    col = next((c for c in ("open_time", "timestamp") if c in df.columns), None)
-    if col is None:
-        return None
-    times = df[col]
-    try:
-        if pd.api.types.is_integer_dtype(times):
-            target = opened_at.timestamp() * 1000
-        else:
-            target = pd.Timestamp(opened_at)
-        pos = int((times - target).abs().idxmin())
-        return df.index.get_loc(pos)
-    except Exception:  # pylint: disable=broad-exception-caught
-        return None
-
-
 class VpmvWorker(QThread):
-    """Aktif sinyaller için post-sinyal VPMV serisini hesaplayan worker."""
+    """Aktif sinyaller için backend'in yayınladığı VPMV'yi okuyan worker."""
 
     vpmv_updated = pyqtSignal(object)  # dict
     status_updated = pyqtSignal(str)
@@ -186,38 +170,29 @@ class VpmvWorker(QThread):
         time_map: dict = {}
 
         for sig in signals.values():
+            sig_id = sig.get("id")
+            if sig_id is None:
+                continue
             symbol = sig.get("symbol") or ""
-            sig_type = sig.get("signal_type") or "Long"
             opened_at = _to_dt(sig.get("opened_at"))
             vpms_score = sig.get("vpms_score") or 0.0
             vpmv_pre = sig.get("vpmv_pre_avg") or 0.0
             interval = sig.get("interval") or "1h"
             display = f"{symbol} ({interval})"
 
-            redis_key = f"live_kline_data:{symbol}:{interval}".encode()
-            df = self._fetch_klines(redis_key)
-            if df is None or len(df) < _MIN_BARS:
+            raw = self._redis.get(f"vpmv_live:{int(sig_id)}")
+            if not raw:
                 continue
-
             try:
-                vpmv_ser = compute_series(df, sig_type)
+                data = json.loads(raw)
+                v_now = float(data["vpmv"])
+                recent = data.get("recent") or [v_now]
             except Exception:  # pylint: disable=broad-exception-caught
                 continue
 
-            sig_bar_idx = None
-            if opened_at:
-                sig_bar_idx = _find_signal_bar(df, opened_at)
-            if sig_bar_idx is None:
-                sig_bar_idx = max(0, len(vpmv_ser) - 50)
+            v_signal = float(vpms_score) if vpms_score else v_now
 
-            post = vpmv_ser.iloc[sig_bar_idx:].values
-            if len(post) == 0:
-                continue
-
-            v_now = float(post[-1])
-            v_signal = float(vpms_score) if vpms_score else float(vpmv_ser.iloc[sig_bar_idx])
-
-            series[display] = post
+            series[display] = np.array(recent, dtype=float)
             current_vpmv[display] = v_now
             signal_vpmv[display] = v_signal
             pre_vpmv[display] = vpmv_pre
@@ -240,20 +215,6 @@ class VpmvWorker(QThread):
             "tf": tf_map,
             "time": time_map,
         }
-
-    def _fetch_klines(self, key: bytes) -> Optional[pd.DataFrame]:
-        raw = self._redis.get(key)
-        if not raw:
-            return None
-        try:
-            if raw[:4] == _ARROW_MAGIC:
-                import pyarrow as pa  # pylint: disable=import-outside-toplevel
-
-                reader = pa.ipc.open_stream(raw[4:])
-                return reader.read_pandas()
-            return pd.read_json(StringIO(raw.decode()), orient="split")
-        except Exception:  # pylint: disable=broad-exception-caught
-            return None
 
     def stop(self) -> None:
         self._running = False

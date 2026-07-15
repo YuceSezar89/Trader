@@ -3,6 +3,7 @@ import concurrent.futures
 import json
 import logging
 import time
+from collections import deque
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -24,7 +25,7 @@ from database.crud import (
     initialize_database,
 )
 from database.engine import get_session, run_with_db_timeout
-from indicators.core import add_all_indicators, truncate_after_gap
+from indicators.core import add_all_indicators, calculate_atr, calculate_rsi, truncate_after_gap
 from indicators.incremental import RESYNC_INTERVAL, IndicatorState, bootstrap_state, update_state
 from signals.paper_trade_manager import (
     do_kirilimi_manager,
@@ -33,17 +34,26 @@ from signals.paper_trade_manager import (
     manual_manager,
     paper_trade_manager,
     rsi_15m_manager,
+    rsi_cross_live_manager,
 )
 from signals.risk_manager import risk_manager
 from signals.signal_processor import process_and_enrich_signals, trim_to_closed_bar
+from signals.vpm_calculator import VPMCalculator
 from utils.asyncio_ws_client import AsyncioBinanceStreamManager
 from utils.exceptions import BinanceAPIError, DatabaseError
 from utils.heartbeat import beat, record_activity
 from utils.kline_schema import check_kline_schema
 from utils.logger import get_logger
-from utils.redis_client import RedisClient
+from utils.preprocessing import (
+    normalize_momentum_0_100,
+    normalize_price_0_100,
+    normalize_volatility_0_100,
+    normalize_volume_0_100,
+)
+from utils.redis_client import SAFE_EXTERNAL_TIMEOUT, RedisClient
 from utils.telegram_notify import send_telegram_message
 from utils.timeframe_aggregator import TimeframeAggregator
+from utils.vpmv import compute_components
 
 # MTF init/refresh için ayrı thread pool — default executor'ı (WS sinyalleri) bloklamaz
 # 12→4 (10 Tem 2026): incremental indikatör hesaplama (17.8x hızlanma, ~2.9ms/çağrı)
@@ -51,6 +61,15 @@ from utils.timeframe_aggregator import TimeframeAggregator
 # yaratıyorlardı — bu da (WS artık aynı event loop'ta olduğu için) ping/pong
 # gecikmesine ve DB timeout'larına yol açıyordu. Bkz. memory: project_data_layer_debt.md.
 _MTF_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="mtf_init")
+# Evren-geneli ranking sweep'i (~500 sembol × 4 TF) için AYRI, küçük havuz —
+# gerçek zamanlı bar birleştirmeyi kullanan _MTF_EXECUTOR'ı boğmamak için
+# (14 Tem 2026 planı: "RankingWorker: Backend Hesaplar, UI Okur"). max_workers=1:
+# 2 worker'la bile canlıda (15 Tem sabahı) event loop'un Redis I/O'sunu
+# yetiştiremediği, havuz timeout'larına yol açtığı gözlemlendi (GIL çekişmesi) —
+# tek thread + batch'ler arası gerçek asyncio.sleep ile daha yumuşak bir profil.
+_RANKING_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="ranking"
+)
 _TICK_TF_WHITELIST = {"1m", "5m", "15m", "30m", "1h", "4h", "6h", "8h", "12h", "1d"}
 _TICK_THROTTLE_SECS = {
     "1m": 2,
@@ -352,6 +371,22 @@ class LiveDataManager:
         self._gap_retry_count: Dict[str, int] = {}  # sembol -> ardışık kapanmamış-gap tur sayısı
         self._startup_complete_event: asyncio.Event = asyncio.Event()
         self._oi_cache: Dict[str, dict] = {}  # OI in-memory cache
+        # (symbol, interval) -> [{"id": int, "signal_type": str}, ...] — VPMV canlı
+        # yayını hangi sembol+TF'lerin aktif sinyali olduğunu bilsin diye (14 Tem 2026,
+        # bkz. plan: "VPMV: Backend Hesaplar, UI Okur"). _active_signal_registry_loop
+        # tarafından periyodik tazelenir.
+        self._active_signal_registry: Dict[tuple, list] = {}
+        # active_signal_registry'nin sadece sembol kümesi — Divergence yayını
+        # VPMV'nin aksine sinyalin KENDİ TF'iyle sınırlı değil (kullanıcı panelde
+        # farklı bir TF seçip aynı sembolü görebilmeli), bu yüzden ayrı tutuluyor.
+        self._active_signal_symbols: set = set()
+        # signal_id -> son ~20 VPMV değeri (Redis'e "recent" olarak yayınlanır,
+        # panelin grafik çizmesi için — DB'ye gidilmeden).
+        self._vpmv_recent: Dict[int, deque] = {}
+        # Açık paper trade'lerin (symbol, interval) kümesi — _active_signal_symbols'tan
+        # KASITLI ayrı (bkz. _open_trade_registry_loop docstring), dinamik ATR trailing
+        # yayınının (_publish_atr_live) kapsamını belirler (15 Tem 2026 planı).
+        self._open_trade_symbols: set = set()
 
         # Multi-WebSocket configuration
         self.max_streams_per_connection = 200  # Binance limit
@@ -964,6 +999,31 @@ class LiveDataManager:
                     symbol, interval, self.mtf_buffers[symbol][interval]
                 )
                 logger.debug(f"[{symbol}] {interval} buffer updated and cached")
+
+                # VPMV canlı yayını — SADECE bu sembol+TF'de aktif sinyali varsa
+                # (14 Tem 2026 planı: "Backend Hesaplar, UI Okur"). Masaüstü
+                # VpmvWorker'ın her açık sinyal için ham kline çekip compute_series
+                # ile sıfırdan hesapladığı tekrarlayan işi ortadan kaldırır —
+                # aynı hesaplama BURADA, zaten bellekte olan buffer'la, sadece
+                # aktif sinyaller için (657 sembolün tamamı değil) bir kez yapılır.
+                active_here = self._active_signal_registry.get((symbol, interval))
+                if active_here:
+                    await self._publish_vpmv_live(symbol, interval, merged, active_here)
+                # Divergence (Z-score) canlı yayını — aynı desen, aynı gerekçe:
+                # DivergenceWorker (desktop) da her sembol için ham kline çekip
+                # EMA/rolling-std'i sıfırdan hesaplıyordu (14 Tem 2026 gece,
+                # VPMV fix'i sonrası hâlâ devam eden bellek patlamasının kaynağı
+                # bulundu). VPMV'nin aksine sinyalin KENDİ TF'iyle sınırlı değil —
+                # panelde kullanıcı farklı bir TF seçip aynı sembolü görebilmeli
+                # (eski kod da böyleydi, ham kline'ı seçilen TF'den çekiyordu),
+                # bu yüzden SEMBOL bazında (aktif sinyali olan herhangi bir TF'de
+                # varsa) her (symbol, interval) bar kapanışında yayınlanır.
+                if symbol in self._active_signal_symbols:
+                    await self._publish_divergence_live(symbol, interval, merged)
+                # Dinamik ATR trailing yayını — açık paper trade'i olan (symbol,
+                # interval) çiftleri için (15 Tem 2026 planı: "trailing dinamik ATR").
+                if (symbol, interval) in self._open_trade_symbols:
+                    await self._publish_atr_live(symbol, interval, merged)
                 # do_kirilimi/do_open_streak tetikleme artık signal_service.py'de
                 # (bkz. paper trading ayrıştırması, 10 Tem 2026 cutover).
 
@@ -2185,6 +2245,416 @@ class LiveDataManager:
                 oi_logger.warning("OI güncelleme hatası: %s", exc)
             await asyncio.sleep(_INTERVAL)
 
+    async def _active_signal_registry_loop(self) -> None:
+        """Her 60 saniyede bir aktif sinyalleri DB'den çekip
+        `self._active_signal_registry`'yi tazeler — VPMV canlı yayınının
+        (bkz. plan: "VPMV: Backend Hesaplar, UI Okur") hangi sembol+TF'lerde
+        çalışacağını bilmesi için. signal_service.py AYRI bir süreç olduğundan
+        (in-process callback yok), bu periyodik DB okuması gerekli."""
+        from sqlalchemy import select as _sel
+
+        from database.models import Signal as _Sig
+
+        _INTERVAL = 60
+        reg_logger = logging.getLogger("ActiveSignalRegistry")
+
+        while True:
+            try:
+                async with get_session() as session:
+                    rows = (
+                        await run_with_db_timeout(
+                            session.execute(
+                                _sel(_Sig.id, _Sig.symbol, _Sig.interval, _Sig.signal_type).where(
+                                    _Sig.status == "active"
+                                )
+                            )
+                        )
+                    ).all()
+                new_registry: Dict[tuple, list] = {}
+                for sig_id, symbol, interval, signal_type in rows:
+                    new_registry.setdefault((symbol, interval), []).append(
+                        {"id": sig_id, "signal_type": signal_type}
+                    )
+                self._active_signal_registry = new_registry
+                self._active_signal_symbols = {sym for sym, _ in new_registry}
+                reg_logger.debug(
+                    "%d aktif sinyal, %d (sembol,TF) çifti", len(rows), len(new_registry)
+                )
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                reg_logger.warning("Yenileme hatası: %s", exc)
+            await asyncio.sleep(_INTERVAL)
+
+    async def _open_trade_registry_loop(self) -> None:
+        """Her 60 saniyede bir açık paper trade'leri (TÜM stratejiler, TÜM
+        durumlar) DB'den çekip `self._open_trade_symbols`'ı tazeler — dinamik
+        trailing-stop'un (`_publish_atr_live`) hangi (symbol,interval)'lerde
+        çalışacağını bilmesi için. `_active_signal_registry`'den KASITLI
+        olarak AYRI: bir paper trade, kendi Signal'i kapansa/supersede olsa
+        bile SL/TP/trailing mantığıyla açık kalabiliyor (15 Tem 2026,
+        "trailing dinamik ATR" planı) — Signal.status='active' kapsamı bu
+        durumu KAÇIRIR."""
+        from sqlalchemy import select as _sel
+
+        from database.models import PaperTrade as _PT
+
+        _INTERVAL = 60
+        reg_logger = logging.getLogger("OpenTradeRegistry")
+
+        while True:
+            try:
+                async with get_session() as session:
+                    rows = (
+                        await run_with_db_timeout(
+                            session.execute(
+                                _sel(_PT.symbol, _PT.interval).where(_PT.status == "open")
+                            )
+                        )
+                    ).all()
+                self._open_trade_symbols = {(symbol, interval) for symbol, interval in rows}
+                reg_logger.debug(
+                    "%d açık trade, %d (sembol,TF) çifti",
+                    len(rows),
+                    len(self._open_trade_symbols),
+                )
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                reg_logger.warning("Yenileme hatası: %s", exc)
+            await asyncio.sleep(_INTERVAL)
+
+    _ATR_LIVE_TTL_BY_INTERVAL = {"1m": 180, "5m": 900, "15m": 2700, "1h": 10800, "4h": 43200}
+
+    async def _publish_atr_live(self, symbol: str, interval: str, df: pd.DataFrame) -> None:
+        """(symbol, interval) için GÜNCEL ATR'yi zaten bellekteki buffer'dan
+        (`df["atr"]`, incremental indikatör hesabından gelir) alıp Redis'e
+        yazar — `paper_trade_manager.py::_trail_distance`'ın trailing-stop
+        mesafesini pozisyon açılışındaki SABİT ATR yerine GÜNCEL volatiliteye
+        göre ayarlayabilmesi için (15 Tem 2026 planı: "trailing dinamik ATR").
+        VPMV-live ile AYNI ucuz desen — periyodik sweep DEĞİL, tek skaler,
+        sadece açık trade'i olan (symbol,interval) için bar kapanışında."""
+        if "atr" not in df.columns or df.empty:
+            return
+        try:
+            atr_val = float(df["atr"].iloc[-1])
+        except (ValueError, TypeError, IndexError):
+            return
+        if atr_val <= 0:
+            return
+        ttl = self._ATR_LIVE_TTL_BY_INTERVAL.get(interval, 900)
+        redis = RedisClient.get_client()
+        try:
+            await asyncio.wait_for(
+                redis.set(f"atr_live:{symbol}:{interval}", atr_val, ex=ttl),
+                timeout=SAFE_EXTERNAL_TIMEOUT,
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.debug("[AtrLive] %s %s Redis yazımı başarısız: %s", symbol, interval, exc)
+
+    _RANKING_TF_WEIGHTS: Dict[str, float] = {"5m": 0.35, "15m": 0.30, "1h": 0.20, "4h": 0.15}
+    _RANKING_Z_LOOKBACK = 100
+    _RANKING_R_PERIOD = 14
+    _RANKING_MIN_BARS = 50
+    _RANKING_INTERVAL = 90
+
+    @staticmethod
+    def _ranking_vpmv(df: pd.DataFrame) -> Tuple[Optional[float], int, Optional[float]]:
+        """desktop/workers/ranking_worker.py::_vpmv ile BİREBİR aynı formül —
+        utils/vpmv.py::compute_components'ten FARKLI, yönsüz/evren-geneli 3.
+        bir VPMV varyantı (14 Tem 2026 planı: "RankingWorker: Backend Hesaplar,
+        UI Okur"). Kasıtlı olarak DEĞİŞTİRİLMEDİ, sadece taşındı."""
+        try:
+            rsi_series = calculate_rsi(df, period=14)
+            rsi_centered = rsi_series - 50
+            atr_series = calculate_atr(df, period=Config.ATR_PERIOD)
+            price_pct = df["close"].pct_change().fillna(0.0) * 100.0
+
+            vpmv_series = (
+                normalize_volume_0_100(df["volume"]) * 0.35
+                + normalize_momentum_0_100(rsi_centered) * 0.35
+                + normalize_volatility_0_100(atr_series) * 0.20
+                + normalize_price_0_100(price_pct) * 0.10
+            )
+
+            current = float(vpmv_series.iloc[-1])
+            direction = 1 if float(rsi_series.iloc[-1]) >= 50 else -1
+
+            lookback = vpmv_series.iloc[-LiveDataManager._RANKING_Z_LOOKBACK - 1 : -1]
+            if len(lookback) >= 20:
+                mean = float(lookback.mean())
+                std = float(lookback.std())
+                z = round((current - mean) / std, 2) if std > 0 else 0.0
+            else:
+                z = None
+
+            return round(current, 1), direction, z
+        except Exception:  # pylint: disable=broad-exception-caught
+            return None, 0, None
+
+    @staticmethod
+    def _ranking_r_score(df: pd.DataFrame) -> Optional[float]:
+        """desktop/workers/ranking_worker.py::_r_score ile BİREBİR aynı formül
+        (Sharpe/Sortino/Calmar/Omega blend), sadece taşındı."""
+        try:
+            closes = df["close"].astype(float).values
+            r_period = LiveDataManager._RANKING_R_PERIOD
+            returns = np.diff(np.log(closes + 1e-12))[-r_period:]
+            if len(returns) < r_period // 2:
+                return None
+
+            avg = returns.mean()
+            std = returns.std() + 1e-12
+            sharpe = avg / std
+
+            neg = returns[returns < 0]
+            neg_std = neg.std() + 1e-12 if len(neg) > 1 else 1e-12
+            sortino = avg / neg_std
+
+            price_window = closes[-r_period - 1 :]
+            max_dd = (price_window.max() - price_window.min()) / (price_window.max() + 1e-12)
+            calmar = avg / (max_dd + 1e-12)
+
+            gains = returns[returns >= 0].sum()
+            losses = abs(returns[returns < 0].sum()) + 1e-12
+            omega = gains / losses
+
+            r = sortino * 0.40 + omega * 0.30 + calmar * 0.20 + sharpe * 0.10
+            return round(float(r), 3)
+        except Exception:  # pylint: disable=broad-exception-caught
+            return None
+
+    def _ranking_compute_symbol(self, symbol: str) -> Optional[dict]:
+        """Tek sembol için 4 TF'lik VPMV parçalarını + r_score'u zaten bellekteki
+        `self.mtf_buffers`'tan hesaplar — Redis GET/Arrow decode YOK. Ayrı bir
+        thread executor'da (`_RANKING_EXECUTOR`) çalıştırılmak üzere tasarlandı,
+        pandas/numpy işlemleri senkron."""
+        tf_scores: Dict[str, float] = {}
+        tf_dirs: Dict[str, int] = {}
+        tf_zscores: Dict[str, float] = {}
+
+        buffers = self.mtf_buffers.get(symbol) or {}
+        for tf in self._RANKING_TF_WEIGHTS:
+            df = buffers.get(tf)
+            if df is None or df.empty or len(df) < self._RANKING_MIN_BARS:
+                continue
+            vpmv, direction, z = self._ranking_vpmv(df)
+            if vpmv is not None:
+                tf_scores[tf] = vpmv
+                tf_dirs[tf] = direction
+                if z is not None:
+                    tf_zscores[tf] = z
+
+        if not tf_scores:
+            return None
+
+        total_w = sum(self._RANKING_TF_WEIGHTS[tf] for tf in tf_scores)
+        combined = sum(tf_scores[tf] * self._RANKING_TF_WEIGHTS[tf] for tf in tf_scores) / total_w
+
+        if tf_zscores:
+            total_zw = sum(self._RANKING_TF_WEIGHTS[tf] for tf in tf_zscores)
+            z_confluence = round(
+                sum(tf_zscores[tf] * self._RANKING_TF_WEIGHTS[tf] for tf in tf_zscores) / total_zw,
+                2,
+            )
+        else:
+            z_confluence = None
+
+        dirs = list(tf_dirs.values())
+        n_bull = sum(1 for d in dirs if d > 0)
+        n_bear = len(dirs) - n_bull
+        aligned = max(n_bull, n_bear) == len(dirs)
+
+        df_1h = buffers.get("1h")
+        r_score = (
+            self._ranking_r_score(df_1h)
+            if df_1h is not None and not df_1h.empty and len(df_1h) >= self._RANKING_R_PERIOD
+            else None
+        )
+
+        return {
+            "symbol": symbol,
+            "score_5m": tf_scores.get("5m"),
+            "score_15m": tf_scores.get("15m"),
+            "score_1h": tf_scores.get("1h"),
+            "score_4h": tf_scores.get("4h"),
+            "combined": round(combined, 1),
+            "z_confluence": z_confluence,
+            "r_score": r_score,
+            "aligned": aligned,
+            "alignment_count": max(n_bull, n_bear),
+            "tf_count": len(dirs),
+            "direction": "long" if n_bull >= n_bear else "short",
+        }
+
+    async def _ranking_publish_loop(self) -> None:
+        """Her ~90 saniyede bir TÜM izlenen evreni (self.mtf_buffers'ta bulunan
+        semboller) VPMV skoruna göre sıralayıp `ranking:snapshot` Redis key'ine
+        yazar (14 Tem 2026 planı: "RankingWorker: Backend Hesaplar, UI Okur").
+
+        ÖNCEDEN masaüstündeki RankingWorker bunu 3 dakikada bir, 500+ sembol ×
+        4 TF için Redis'ten ham kline çekip Arrow decode ederek yapıyordu —
+        periyodik 30+GB'lık bellek patlamalarının (footprint ile doğrulandı)
+        kaynağıydı. Burada aynı hesap `self.mtf_buffers`'tan (zaten bellekte,
+        Redis round-trip yok) yapılıyor. Paylaşımlı `_MTF_EXECUTOR`'ı (gerçek
+        zamanlı bar birleştirme için kullanılıyor, max_workers=4) bu ~2000+
+        çağrılık sweep'le boğmamak için AYRI, küçük bir executor kullanılıyor.
+
+        Bonus: `ranking:snapshot` ÖNCEDEN sadece masaüstü açıkken doluyordu —
+        `signals/paper_trade_manager.py`/`signals/signal_lifecycle_manager.py`
+        bu key'i okuyup rank_at_entry/rank_score/vs_btc yazıyor, artık backend
+        her zaman taze tutuyor (UI kapalıyken de)."""
+        rank_logger = logging.getLogger("RankingPublish")
+        loop = asyncio.get_running_loop()
+
+        while True:
+            try:
+                symbols = list(self.mtf_buffers.keys())
+                scores: Dict[str, dict] = {}
+                for i in range(0, len(symbols), 20):
+                    batch = symbols[i : i + 20]
+                    results = await asyncio.gather(
+                        *(
+                            loop.run_in_executor(
+                                _RANKING_EXECUTOR, self._ranking_compute_symbol, sym
+                            )
+                            for sym in batch
+                        )
+                    )
+                    for sym, data in zip(batch, results):
+                        if data is not None:
+                            scores[sym] = data
+                    # asyncio.sleep(0) SADECE bir sonraki hazır coroutine'e geçiş
+                    # yapar, gerçek zaman kaybettirmez — 2 executor thread'i pandas/
+                    # numpy ile GIL'i sürekli tuttuğunda event loop'un Redis I/O'sunu
+                    # yetiştirememesine (havuz timeout'u, "No connection available",
+                    # 15 Tem sabahı canlıda yakalandı) yetmiyordu. Gerçek bir bekleme
+                    # event loop'a GIL'i geri verip birikmiş I/O'yu tamamlama şansı
+                    # veriyor.
+                    await asyncio.sleep(0.2)
+
+                if scores:
+                    all_combined = [v["combined"] for v in scores.values()]
+                    n = len(all_combined)
+                    for data in scores.values():
+                        data["rank_score"] = round(
+                            sum(1 for v in all_combined if v < data["combined"]) / n * 100, 1
+                        )
+
+                    btc_combined = scores.get(Config.MARKET_REFERENCE_SYMBOL, {}).get("combined")
+                    for data in scores.values():
+                        data["vs_btc"] = (
+                            round(data["combined"] - btc_combined, 1)
+                            if btc_combined is not None
+                            else None
+                        )
+
+                    result = sorted(scores.values(), key=lambda x: x["rank_score"], reverse=True)
+                    for idx, item in enumerate(result):
+                        item["rank"] = idx + 1
+
+                    redis = RedisClient.get_client()
+                    await asyncio.wait_for(
+                        redis.set("ranking:snapshot", json.dumps(result), ex=600),
+                        timeout=SAFE_EXTERNAL_TIMEOUT,
+                    )
+                    rank_logger.info("Sıralama güncellendi: %d sembol", len(result))
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                rank_logger.warning("Sıralama güncelleme hatası: %s", exc, exc_info=True)
+            await asyncio.sleep(self._RANKING_INTERVAL)
+
+    _VPMV_TTL_BY_INTERVAL = {"1m": 180, "5m": 900, "15m": 2700, "1h": 10800, "4h": 43200}
+
+    async def _publish_vpmv_live(
+        self, symbol: str, interval: str, df: pd.DataFrame, active_signals: list
+    ) -> None:
+        """(symbol, interval) için aktif sinyal(ler)in VPMV'sini zaten bellekte
+        olan buffer'dan hesaplayıp Redis'e yazar — masaüstü VpmvWorker'ın aynı
+        hesabı ham kline'ları yeniden çekip tekrar yapmasını gereksiz kılar
+        (14 Tem 2026 planı: "VPMV: Backend Hesaplar, UI Okur"). Gölge-mod
+        doğrulaması tamamlandı, vpmv_worker.py artık SADECE bu değeri okuyor,
+        eski ağır hesap yolu silindi."""
+        vpm_weights = Config.VPM.get("WEIGHTS")
+        ttl = self._VPMV_TTL_BY_INTERVAL.get(interval, 900)
+        redis = RedisClient.get_client()
+
+        for sig in active_signals:
+            sig_id = sig["id"]
+            sig_type = sig["signal_type"]
+            try:
+                vol_s, mom_s, vlt_s, prc_s = compute_components(df, sig_type)
+                vpmv = VPMCalculator.calculate(
+                    vol_score=vol_s,
+                    momentum_score=mom_s,
+                    vlt_score=vlt_s,
+                    price_score=prc_s,
+                    weights=vpm_weights,
+                )
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.debug("[VPMVLive] %s %s hesaplanamadı: %s", symbol, interval, exc)
+                continue
+
+            recent = self._vpmv_recent.setdefault(sig_id, deque(maxlen=20))
+            recent.append(round(float(vpmv), 2))
+
+            payload = {
+                "vpmv": round(float(vpmv), 2),
+                "vol": round(float(vol_s), 2),
+                "mom": round(float(mom_s), 2),
+                "vlt": round(float(vlt_s), 2),
+                "price": round(float(prc_s), 2),
+                "ts": int(time.time()),
+                "recent": list(recent),
+            }
+            try:
+                await asyncio.wait_for(
+                    redis.set(f"vpmv_live:{sig_id}", json.dumps(payload), ex=ttl),
+                    timeout=SAFE_EXTERNAL_TIMEOUT,
+                )
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.debug(
+                    "[VPMVLive] %s (id=%s) Redis yazımı başarısız: %s", symbol, sig_id, exc
+                )
+
+    _DIVERGENCE_EMA_PERIOD = 200  # desktop/workers/divergence_worker.py::_EMA_PERIOD ile aynı
+    _DIVERGENCE_SERIES_LEN = 100  # desktop/workers/divergence_worker.py::_SERIES_LEN ile aynı
+    _DIVERGENCE_TTL_BY_INTERVAL = {"1m": 180, "5m": 900, "15m": 2700, "1h": 10800, "4h": 43200}
+
+    async def _publish_divergence_live(self, symbol: str, interval: str, df: pd.DataFrame) -> None:
+        """(symbol, interval) için HAM (offset uygulanmamış) Z-score serisini
+        zaten bellekteki buffer'dan hesaplayıp Redis'e yazar —
+        `desktop/workers/divergence_worker.py::_zscore_series` ile BİREBİR aynı
+        formül (EMA/rolling-std). Ters-sinyal offset'i (`_offsets`) DESKTOP
+        tarafında kalıyor — bu, o mantığın ihtiyaç duymadığı, gerçekten pahalı
+        olan kısmı (ham kline çekme + hesaplama) ortadan kaldırıyor."""
+        ttl = self._DIVERGENCE_TTL_BY_INTERVAL.get(interval, 900)
+        redis = RedisClient.get_client()
+        try:
+            close = df["close"].astype(float).reset_index(drop=True)
+            n = min(self._DIVERGENCE_EMA_PERIOD, len(close))
+            ema = close.ewm(span=n, adjust=False).mean()
+            std = close.rolling(n, min_periods=5).std().bfill()
+            z = (close - ema) / (std + 1e-8)
+            z_tail = z.tail(self._DIVERGENCE_SERIES_LEN)
+
+            if "open_time" in df.columns:
+                ts_tail = (df["open_time"].tail(len(z_tail)) / 1000.0).tolist()
+            else:
+                ts_tail = []
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.debug("[DivergenceLive] %s %s hesaplanamadı: %s", symbol, interval, exc)
+            return
+
+        payload = {
+            "z_now": round(float(z_tail.iloc[-1]), 4),
+            "recent": [round(float(v), 4) for v in z_tail.tolist()],
+            "ts_recent": ts_tail,
+            "ts": int(time.time()),
+        }
+        try:
+            await asyncio.wait_for(
+                redis.set(f"divergence_live:{symbol}:{interval}", json.dumps(payload), ex=ttl),
+                timeout=SAFE_EXTERNAL_TIMEOUT,
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.debug("[DivergenceLive] %s %s Redis yazımı başarısız: %s", symbol, interval, exc)
+
     async def _price_publish_loop(self) -> None:
         """Her 1 saniyede canlı fiyatları tek Redis key'ine yazar (panel canlı PnL için).
         Ticker (REST, 628 sembol) taban; WS tick fiyatları daha taze olduğundan üzerine yazar.
@@ -2355,6 +2825,9 @@ class LiveDataManager:
                 asyncio.create_task(self._price_publish_loop()),
                 asyncio.create_task(self._vpmv_post_loop()),
                 asyncio.create_task(self._manual_refresh_loop()),
+                asyncio.create_task(self._active_signal_registry_loop()),
+                asyncio.create_task(self._open_trade_registry_loop()),
+                asyncio.create_task(self._ranking_publish_loop()),
             ]
 
             logger.info(
@@ -2588,6 +3061,7 @@ async def main():
     await manual_manager.load_open_symbols()
     await do_kirilimi_manager.load_open_symbols()
     await do_open_streak_manager.load_open_symbols()
+    await rsi_cross_live_manager.load_open_symbols()
 
     logger.info("En yüksek hacimli semboller Binance'ten çekiliyor...")
     symbols_to_track: List[str] = []

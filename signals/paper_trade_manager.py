@@ -31,6 +31,9 @@ POSITION_USD = 100.0
 FEE_RATE = 0.0005
 MAX_OPEN = 10
 
+# Strateji-özel kaldıraç çarpanı (PnL'e uygulanır) — tanımlı olmayan stratejiler 1.0 (kaldıraçsız).
+LEVERAGE_BY_STRATEGY: dict[str, float] = {"rsi_cross_live": 3.0}
+
 # EVOL-disiplinli erken çıkış (HA_Cross Long'a özel — [[project_devisso_ersi]],
 # ha_cross_evol_exit_sweep_bt.py'de eşik=25/min_hold=8 "güvenilir bölge" olarak
 # doğrulandı: PF 1.585→1.821, split-period'ın iki yarısında da tutarlı).
@@ -43,12 +46,25 @@ _STRATEGY_TRIGGERS: dict[str, Callable[[dict], bool]] = {
     "ha_cross": lambda sd: sd.get("indicators") == "HA_Cross",
     "rsi_15m": lambda sd: "RSI_Cross" in (sd.get("indicators") or "")
     and sd.get("interval") == "15m",
+    # all_up+gövde canlı formülle doğrulandı (14 Tem, memory: rsi_ha_cross_live_readiness).
+    # Short filtresiz bırakılmıştı ("baseline zaten sağlam" varsayımı) ama canlı veri
+    # (258 işlem, %8.8 win rate, -$115.50) bunu çürüttü — Long'daki filtre Short'a da
+    # uygulandı (14 Tem gece, aynı gün içinde revize).
+    "rsi_cross_live": lambda sd: sd.get("indicators") == "RSI_Cross(9,24)"
+    and sd.get("all_up")
+    and sd.get("candle_kategori") == "govde",
 }
 
 
 class PaperTradeManager:
 
-    def __init__(self, strategy: str = "conf_100", max_hold_hours: Optional[float] = None) -> None:
+    def __init__(
+        self,
+        strategy: str = "conf_100",
+        max_hold_hours: Optional[float] = None,
+        max_open: Optional[int] = None,
+        position_usd: Optional[float] = None,
+    ) -> None:
         self.strategy = strategy
         self._open_symbols: set[str] = set()
         # None: eski davranış (fiyat kapanışı yok, sadece ters sinyal/manuel/paper
@@ -57,6 +73,9 @@ class PaperTradeManager:
         # backtestte kazananın büyük hareketi 24h'e kadar sınırsız bırakması gerektiği
         # bulundu — bkz. research/pattern_lab/do_break_gauss_sltp_bt.py).
         self.max_hold_hours = max_hold_hours
+        # Strateji-özel kapasite/boyut — verilmezse global MAX_OPEN/POSITION_USD kullanılır.
+        self.max_open = max_open if max_open is not None else MAX_OPEN
+        self.position_usd = position_usd if position_usd is not None else POSITION_USD
 
     async def load_open_symbols(self) -> None:
         async def _do_load() -> set[str]:
@@ -121,11 +140,11 @@ class PaperTradeManager:
                             PaperTrade.status == "open",
                         )
                     )
-                    if open_count_result.scalar() >= MAX_OPEN:
+                    if open_count_result.scalar() >= self.max_open:
                         logger.debug(
                             "[PaperTrade][%s] MAX_OPEN=%d dolu, atlandı (%s)",
                             self.strategy,
-                            MAX_OPEN,
+                            self.max_open,
                             symbol,
                         )
                         return
@@ -177,7 +196,7 @@ class PaperTradeManager:
                         symbol=symbol,
                         signal_type=signal_data.get("signal_type", ""),
                         interval=signal_data.get("interval", ""),
-                        position_usd=POSITION_USD,
+                        position_usd=self.position_usd,
                         entry_price=current_price,
                         stop_loss_price=sl_price,
                         take_profit_price=tp_price,
@@ -261,7 +280,7 @@ class PaperTradeManager:
                             PaperTrade.status == "open",
                         )
                     )
-                    if open_count.scalar() >= MAX_OPEN:
+                    if open_count.scalar() >= self.max_open:
                         logger.debug(
                             "[PaperTrade][%s] MAX_OPEN dolu, %s atlandı", self.strategy, symbol
                         )
@@ -274,7 +293,9 @@ class PaperTradeManager:
                         symbol=symbol,
                         signal_type=signal_type,
                         interval=interval,
-                        position_usd=position_usd if position_usd is not None else POSITION_USD,
+                        position_usd=(
+                            position_usd if position_usd is not None else self.position_usd
+                        ),
                         entry_price=price,
                         stop_loss_price=sl_price,
                         take_profit_price=tp_price,
@@ -379,7 +400,7 @@ class PaperTradeManager:
                                 continue
 
                         old_trail = trade.trailing_stop_price
-                        reason = self._update_trailing(trade, price)
+                        reason = await self._update_trailing(trade, price)
                         if reason:
                             self._apply_close(trade, price, reason, portfolio)
                             closed_symbols.add(trade.symbol)
@@ -495,7 +516,9 @@ class PaperTradeManager:
             logger.error("[PaperTrade][%s] EVOL-exit check zaman aşımı: %s", self.strategy, exc)
 
     @staticmethod
-    def _trail_distance(trade: PaperTrade) -> float:
+    def _static_trail_distance(trade: PaperTrade) -> float:
+        """Girişteki SABİT ATR'ye dayalı mesafe — dinamik (canlı ATR) okuma
+        başarısız olursa (key henüz yok/expire) düşülen fallback."""
         if trade.atr and trade.stop_loss_price and trade.entry_price:
             return abs(float(trade.entry_price) - float(trade.stop_loss_price))
         if trade.entry_price:
@@ -503,8 +526,32 @@ class PaperTradeManager:
         return 0.0
 
     @staticmethod
-    def _update_trailing(trade: PaperTrade, price: float) -> Optional[str]:
-        return update_trailing(trade, price, PaperTradeManager._trail_distance(trade))
+    async def _trail_distance(trade: PaperTrade) -> float:
+        """Trailing-stop mesafesi — mümkünse GÜNCEL ATR'den (backend'in
+        `atr_live:{symbol}:{interval}` yayını, 15 Tem 2026 planı: "trailing
+        dinamik ATR"), yoksa girişteki SABİT mesafeden (eski davranış,
+        bozulmadı)."""
+        try:
+            raw = await asyncio.wait_for(
+                RedisClient.get_client().get(f"atr_live:{trade.symbol}:{trade.interval}"),
+                timeout=SAFE_EXTERNAL_TIMEOUT,
+            )
+            if raw:
+                current_atr = float(raw)
+                if current_atr > 0:
+                    return current_atr * Config.RISK_SL_MULTIPLIER
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.debug(
+                "[PaperTrade] %s canlı ATR okunamadı, sabit mesafeye düşülüyor: %s",
+                trade.symbol,
+                exc,
+            )
+        return PaperTradeManager._static_trail_distance(trade)
+
+    @staticmethod
+    async def _update_trailing(trade: PaperTrade, price: float) -> Optional[str]:
+        dist = await PaperTradeManager._trail_distance(trade)
+        return update_trailing(trade, price, dist)
 
     @staticmethod
     def _apply_close(
@@ -515,8 +562,9 @@ class PaperTradeManager:
     ) -> None:
         pnl_pct = _calc_pnl(trade.signal_type, float(trade.entry_price), exit_price)
         position_usd = float(trade.position_usd) if trade.position_usd else POSITION_USD
+        leverage = LEVERAGE_BY_STRATEGY.get(trade.strategy, 1.0)
         fee_usd = position_usd * FEE_RATE * 2
-        pnl_usd = (pnl_pct / 100) * position_usd - fee_usd
+        pnl_usd = (pnl_pct / 100) * position_usd * leverage - fee_usd
 
         trade.status = "closed"
         trade.closed_at = datetime.now()
@@ -581,3 +629,6 @@ rsi_15m_manager = PaperTradeManager("rsi_15m")
 manual_manager = PaperTradeManager("manual")
 do_kirilimi_manager = PaperTradeManager("do_kirilimi")
 do_open_streak_manager = PaperTradeManager("do_open_streak", max_hold_hours=24.0)
+# $2000 bakiye tavanı, işlem başına düşük risk için düşük POSITION_USD + yüksek MAX_OPEN
+# (bkz. [[project_rsi_ha_cross_live_readiness_13_14tem]] — filtreli hacim zaten ~8-9 eşzamanlı).
+rsi_cross_live_manager = PaperTradeManager("rsi_cross_live", max_open=80, position_usd=25.0)

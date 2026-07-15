@@ -27,6 +27,7 @@ from signals.paper_trade_manager import (
     manual_manager,
     paper_trade_manager,
     rsi_15m_manager,
+    rsi_cross_live_manager,
 )
 from signals.risk_manager import risk_manager
 from signals.signal_processor import process_and_enrich_signals, trim_to_closed_bar
@@ -243,7 +244,10 @@ async def _check_do_kirilimi(symbol: str, df_5m: pd.DataFrame, btc_df_5m: pd.Dat
         entry = await loop.run_in_executor(None, do_kirilimi_detector.check, symbol, df_5m, btc_ctx)
         if not entry:
             return
-        opened = await do_kirilimi_manager.open_direct(
+        # Paper trade açma BİLİNÇLİ OLARAK devre dışı (14 Tem 2026, Config.PAPER
+        # ENABLED_STRATEGIES'ten çıkarıldı) — Telegram bildirimi buna bağlı değil,
+        # sinyal tespit edildiğinde her zaman gönderilir.
+        await do_kirilimi_manager.open_direct(
             symbol=symbol,
             signal_type="Long",
             interval="5m",
@@ -253,13 +257,12 @@ async def _check_do_kirilimi(symbol: str, df_5m: pd.DataFrame, btc_df_5m: pd.Dat
             tp_price=entry["tp_price"],
             note=f"{entry['pattern']} {entry['ayrisma']:+.1f}%",
         )
-        if opened:
-            await send_telegram_message(
-                f"🎯 DO Kırılımı — {symbol}\n"
-                f"Giriş: {entry['price']:.6g}\n"
-                f"SL: {entry['sl_price']:.6g} · TP: {entry['tp_price']:.6g}\n"
-                f"Pattern: {entry['pattern']} · Ayrışma: {entry['ayrisma']:+.1f}%"
-            )
+        await send_telegram_message(
+            f"🎯 DO Kırılımı — {symbol}\n"
+            f"Giriş: {entry['price']:.6g}\n"
+            f"SL: {entry['sl_price']:.6g} · TP: {entry['tp_price']:.6g}\n"
+            f"Pattern: {entry['pattern']} · Ayrışma: {entry['ayrisma']:+.1f}%"
+        )
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.error("[DOKirilimi] %s kanca hatası: %s", symbol, exc, exc_info=True)
 
@@ -322,6 +325,7 @@ async def _risk_check_loop() -> None:
         await manual_manager.check_all_prices(prices)
         await do_kirilimi_manager.check_all_prices(prices)
         await do_open_streak_manager.check_all_prices(prices)
+        await rsi_cross_live_manager.check_all_prices(prices)
         await beat("paper_trading_risk_check")
 
 
@@ -472,6 +476,7 @@ async def run_all() -> None:
     await manual_manager.load_open_symbols()
     await do_kirilimi_manager.load_open_symbols()
     await do_open_streak_manager.load_open_symbols()
+    await rsi_cross_live_manager.load_open_symbols()
 
     consume_task = asyncio.create_task(
         _supervised(_consume_loop(), "signal_service_consume"), name="signal_service_consume"

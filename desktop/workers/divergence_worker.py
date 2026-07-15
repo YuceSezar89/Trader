@@ -1,25 +1,29 @@
 """
-DivergenceWorker — sinyal gelen coinlerde fiyat Z-score zaman serisi hesaplar.
+DivergenceWorker — sinyal gelen coinlerde fiyat Z-score zaman serisi gösterir.
 Her coinin kendi EMA/StdDev'ine göre: z = (close - EMA) / StdDev
 Ters sinyal geldiğinde o anki z-score offset olarak alınır → çizgi 0'a döner.
+
+14 Tem 2026: backend (live_data_manager.py::_publish_divergence_live) artık
+her bar kapanışında HAM (offset'siz) Z-score serisini zaten bellekteki
+buffer'la hesaplayıp `divergence_live:{symbol}:{interval}` Redis key'ine
+yazıyor — bu worker artık ham kline çekip EMA/rolling-std'i SIFIRDAN
+hesaplamıyor (VPMV'nin düzeltilmesinden SONRA bile devam eden bellek
+patlamasının ikinci kaynağıydı). Offset/ters-sinyal mantığı (gerçekten
+UI-özel, ucuz bir state) burada, desktop tarafında kalıyor.
 """
 
+import json
 import logging
 import threading
 import time
-from io import StringIO
 from typing import Optional
 
-import pandas as pd
+import numpy as np
 import redis
 from PyQt6.QtCore import QThread, pyqtSignal, pyqtSlot  # pylint: disable=no-name-in-module
 
-from indicators.core import truncate_after_gap
-
 logger = logging.getLogger(__name__)
 
-_ARROW_MAGIC = b"ARDF"
-_EMA_PERIOD = 200
 _MIN_BARS = 30
 _SERIES_LEN = 100
 _OFFSETS_KEY = "divergence_offsets"  # Redis hash: sembol -> z-score offset
@@ -27,17 +31,6 @@ _OFFSETS_KEY = "divergence_offsets"  # Redis hash: sembol -> z-score offset
 
 def _direction(signal_type: str) -> str:
     return "short" if "short" in signal_type.lower() else "long"
-
-
-def _extract_timestamps(df: pd.DataFrame, length: int):
-    """open_time veya timestamp kolonundan Unix saniye dizisi döner."""
-    col = next((c for c in ("open_time", "timestamp") if c in df.columns), None)
-    if col is None:
-        return None
-    raw = df[col].values[-length:]
-    if pd.api.types.is_integer_dtype(df[col]):
-        return raw / 1000.0
-    return pd.to_datetime(raw).astype("int64").values / 1e9
 
 
 def _diverge_start(z_slice, ts) -> Optional[float]:
@@ -49,7 +42,7 @@ def _diverge_start(z_slice, ts) -> Optional[float]:
 
 
 class DivergenceWorker(QThread):  # pylint: disable=too-many-instance-attributes
-    """Sinyal coinlerinin Z-score zaman serilerini Redis'ten hesaplayan worker."""
+    """Sinyal coinlerinin backend'in yayınladığı Z-score'unu okuyan worker."""
 
     divergence_updated = pyqtSignal(object)  # dict
     status_updated = pyqtSignal(str)
@@ -119,7 +112,7 @@ class DivergenceWorker(QThread):  # pylint: disable=too-many-instance-attributes
         self._wake.set()
 
     def run(self) -> None:
-        """Worker döngüsü: Redis'e bağlanır, uyandığında Z-score hesaplar."""
+        """Worker döngüsü: Redis'e bağlanır, uyandığında Z-score okur."""
         self._running = True
         try:
             self._redis = redis.Redis.from_url(
@@ -188,18 +181,19 @@ class DivergenceWorker(QThread):  # pylint: disable=too-many-instance-attributes
         diverge_since: dict = {}
 
         for symbol in symbols:
-            key = f"live_kline_data:{symbol}:{self._timeframe}".encode()
-            df = self._fetch_klines(key)
-            if df is None:
+            raw = self._redis.get(f"divergence_live:{symbol}:{self._timeframe}")
+            if not raw:
                 continue
-            df = truncate_after_gap(df)
-            if len(df) < _MIN_BARS:
+            try:
+                data = json.loads(raw)
+                z = np.array(data.get("recent") or [], dtype=float)
+                ts = np.array(data.get("ts_recent") or [], dtype=float)
+            except Exception:  # pylint: disable=broad-exception-caught
                 continue
-            z = self._zscore_series(df)
-            if z is None:
+            if len(z) < _MIN_BARS:
                 continue
 
-            z_now = float(z.iloc[-1])
+            z_now = float(z[-1])
 
             # Ters sinyal geldiyse: o anki z-score'u yeni offset olarak ayarla
             if symbol in pending_resets:
@@ -213,14 +207,14 @@ class DivergenceWorker(QThread):  # pylint: disable=too-many-instance-attributes
             offset = self._offsets.get(symbol, 0.0)
             z_adj = z - offset
 
-            z_slice = z_adj.values[-_SERIES_LEN:]
+            z_slice = z_adj[-_SERIES_LEN:]
             series[symbol] = z_slice
-            current[symbol] = float(z_adj.iloc[-1])
+            current[symbol] = float(z_adj[-1])
 
-            ts = _extract_timestamps(df, len(z_slice))
-            if ts is not None:
-                timestamps[symbol] = ts
-                diverge_since[symbol] = _diverge_start(z_slice, ts)
+            if len(ts) > 0:
+                ts_slice = ts[-len(z_slice) :]
+                timestamps[symbol] = ts_slice
+                diverge_since[symbol] = _diverge_start(z_slice, ts_slice)
 
         if not series:
             return None
@@ -238,30 +232,6 @@ class DivergenceWorker(QThread):  # pylint: disable=too-many-instance-attributes
             "indicators": indicators_map,
             "vpmv": vpmv_map,
         }
-
-    def _fetch_klines(self, key: bytes) -> Optional[pd.DataFrame]:
-        raw = self._redis.get(key)
-        if not raw:
-            return None
-        try:
-            if raw[:4] == _ARROW_MAGIC:
-                import pyarrow as pa  # pylint: disable=import-outside-toplevel
-
-                reader = pa.ipc.open_stream(raw[4:])
-                return reader.read_pandas()
-            return pd.read_json(StringIO(raw.decode()), orient="split")
-        except Exception:  # pylint: disable=broad-exception-caught
-            return None
-
-    def _zscore_series(self, df: pd.DataFrame) -> Optional[pd.Series]:
-        try:
-            close = df["close"].astype(float).reset_index(drop=True)
-            n = min(_EMA_PERIOD, len(close))
-            ema = close.ewm(span=n, adjust=False).mean()
-            std = close.rolling(n, min_periods=5).std().bfill()
-            return (close - ema) / (std + 1e-8)
-        except Exception:  # pylint: disable=broad-exception-caught
-            return None
 
     def _subscribe_loop(self) -> None:
         """Redis pub/sub kanalını dinler; ilgili kline güncellemelerinde _wake'i tetikler."""
