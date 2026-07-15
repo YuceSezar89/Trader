@@ -4,11 +4,19 @@ from typing import Awaitable, Callable, Optional
 
 import numpy as np
 import pandas as pd
+from sqlalchemy import select
 
 from config import Config
+from database.engine import get_session, run_with_db_timeout
+from database.models import Signal
 from indicators.core import calculate_adx, calculate_atr, calculate_rsi, truncate_after_gap
 from indicators.financial_metrics import calculate_metrics
-from signals.paper_trade_manager import ha_cross_manager, paper_trade_manager, rsi_15m_manager
+from signals.paper_trade_manager import (
+    ha_cross_manager,
+    paper_trade_manager,
+    rsi_15m_manager,
+    rsi_cross_live_manager,
+)
 from signals.risk_manager import risk_manager
 from signals.signal_engine import signal_engine
 from signals.signal_lifecycle_manager import signal_lifecycle_manager
@@ -41,6 +49,50 @@ def trim_to_closed_bar(df: pd.DataFrame, closed_open_time: int) -> pd.DataFrame:
     if not mask.any():
         return df.iloc[:0]
     return df.loc[mask]
+
+
+async def _compute_all_up(
+    symbol: str,
+    interval: str,
+    indicators_name: str,
+    sig_type: str,
+    vol_s: Optional[float],
+    mom_s: Optional[float],
+    vlt_s: Optional[float],
+    prc_s: Optional[float],
+) -> Optional[bool]:
+    """Aynı symbol+interval+indicators+signal_type için bir önceki sinyale göre
+    hacim/momentum/volatilite/fiyat skorlarının HEPSİ arttı mı?"""
+    if None in (vol_s, mom_s, vlt_s, prc_s):
+        return None
+
+    async def _do_query() -> Optional[bool]:
+        async with get_session() as session:
+            result = await session.execute(
+                select(Signal.vol_score, Signal.mom_score, Signal.volat_score, Signal.price_score)
+                .where(
+                    Signal.symbol == symbol,
+                    Signal.interval == interval,
+                    Signal.indicators == indicators_name,
+                    Signal.signal_type == sig_type,
+                    Signal.vol_score.isnot(None),
+                )
+                .order_by(Signal.opened_at.desc())
+                .limit(1)
+            )
+            row = result.first()
+            if row is None:
+                return None
+            prev_vol, prev_mom, prev_vlt, prev_prc = row
+            if None in (prev_vol, prev_mom, prev_vlt, prev_prc):
+                return None
+            return vol_s > prev_vol and mom_s > prev_mom and vlt_s > prev_vlt and prc_s > prev_prc
+
+    try:
+        return await run_with_db_timeout(_do_query())
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.debug("[%s] all_up hesaplanamadı: %s", symbol, exc)
+        return None
 
 
 async def _get_pt_flag() -> str:
@@ -322,6 +374,20 @@ def _compute_candle_pattern(df: pd.DataFrame) -> str:
         return "-"
 
 
+def _classify_candle(last: pd.Series) -> str:
+    """Son mumun gövde/üst fitil/alt fitil oranına göre baskın kısmı döner."""
+    rng = last["high"] - last["low"]
+    if rng <= 0:
+        return "belirsiz"
+    upper = max(last["open"], last["close"])
+    lower = min(last["open"], last["close"])
+    body = abs(last["close"] - last["open"]) / rng * 100
+    upper_wick = (last["high"] - upper) / rng * 100
+    lower_wick = (lower - last["low"]) / rng * 100
+    parts = {"govde": body, "ust_fitil": upper_wick, "alt_fitil": lower_wick}
+    return max(parts, key=parts.get)
+
+
 _FVG_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
 _FVG_LOOKBACK = 30
 
@@ -561,6 +627,8 @@ async def process_and_enrich_signals(
 
                 # 3. VPMV Hesapla
                 vpms_score: Optional[float] = None
+                vol_s = mom_s = vlt_s = prc_s = None
+                candle_kategori = _classify_candle(df.iloc[-1]) if len(df) >= 1 else None
                 try:
                     vol_s, mom_s, vlt_s, prc_s = compute_components(df, sig_type)
                     vpms_score = VPMCalculator.calculate(
@@ -767,7 +835,16 @@ async def process_and_enrich_signals(
                     "is_confluence": is_confluence,
                     "htf_bull_count": htf_bull_count,
                     "ha_ultra_confirm": ha_ultra_confirm,
+                    "vol_score": vol_s,
+                    "mom_score": mom_s,
+                    "volat_score": vlt_s,
+                    "price_score": prc_s,
+                    "candle_kategori": candle_kategori,
                 }
+
+                enriched_signal["all_up"] = await _compute_all_up(
+                    symbol, interval, indicators_name, sig_type, vol_s, mom_s, vlt_s, prc_s
+                )
 
                 _vpmv_pre_avg = _vpmv_slope = _vpmv_ratio = None
                 try:
@@ -921,6 +998,7 @@ async def process_and_enrich_signals(
                             await paper_trade_manager.on_new_signal(**_pt_kwargs)
                         await ha_cross_manager.on_new_signal(**_pt_kwargs)
                         await rsi_15m_manager.on_new_signal(**_pt_kwargs)
+                        await rsi_cross_live_manager.on_new_signal(**_pt_kwargs)
 
             except Exception as e:
                 logger.error(f"[{symbol}] Sinyal kayıt hatası: {e}", exc_info=True)

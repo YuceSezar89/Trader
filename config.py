@@ -171,9 +171,10 @@ class Config:
     # Paper Trading stratejileri
     PAPER = {
         "ENABLED_STRATEGIES": [
-            "do_kirilimi",
-            "do_open_streak",
-        ],  # otomatik pozisyon açabilen stratejiler
+            "rsi_cross_live",
+        ],  # otomatik pozisyon açabilen stratejiler — do_kirilimi ve do_open_streak
+        # BİLİNÇLİ OLARAK çıkarıldı (14 Tem 2026): sadece rsi_cross_live performansı
+        # izlenecek. do_kirilimi'nin Telegram bildirimi buna bağlı değil, devam ediyor.
         "DO_KIRILIMI": {
             "SL_ATR": 3.0,  # backtest: 1.5 verimsiz, 3.0 en iyi (PF 1.75)
             "TP_ATR": 6.0,  # R:R 1:2 korunur, TP'de trailing devralır
@@ -196,6 +197,11 @@ class Config:
     # =============================================================================
     # SİNYAL İŞLEME AYARLARI
     # =============================================================================
+
+    # Yeni sinyal ÜRETİMİ durdurulan indikatörler (signal_engine.calculate_all_signals
+    # anahtarlarıyla eşleşir) — mevcut açık sinyaller/pozisyonlar etkilenmez, sadece
+    # yeni üretim durur. MA200_Cross zayıf bulundu (bkz. memory: project_ml_vision), 14 Tem 2026.
+    DISABLED_SIGNAL_TYPES = ["ma200_crossover"]
 
     # RSI eşik değerleri (dictionary)
     RSI_THRESHOLDS = {"C10": {"long": 10, "short": -10}}

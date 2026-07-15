@@ -453,11 +453,14 @@ class SignalEngine:
             "ha_crossover": self.ha_crossover_signal,
         }
 
+        disabled = set(Config.DISABLED_SIGNAL_TYPES)
         active_signals: List[str]
         if signal_types is None:
-            active_signals = list(signal_methods.keys())
+            active_signals = [st for st in signal_methods if st not in disabled]
         else:
-            active_signals = [st for st in signal_types if st in signal_methods]
+            active_signals = [
+                st for st in signal_types if st in signal_methods and st not in disabled
+            ]
 
         tasks: Dict[str, asyncio.Task] = {
             name: asyncio.create_task(method(df, symbol, interval))

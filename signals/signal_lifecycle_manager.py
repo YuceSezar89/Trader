@@ -196,6 +196,12 @@ class SignalLifecycleManager:
                         candle_pattern=signal_data.get("candle_pattern"),
                         rank_score=rank_score_val,
                         vs_btc=vs_btc_val,
+                        vol_score=signal_data.get("vol_score"),
+                        mom_score=signal_data.get("mom_score"),
+                        volat_score=signal_data.get("volat_score"),
+                        price_score=signal_data.get("price_score"),
+                        candle_kategori=signal_data.get("candle_kategori"),
+                        all_up=signal_data.get("all_up"),
                     )
                     session.add(new_sig)
                     await session.flush()
