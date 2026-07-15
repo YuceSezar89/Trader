@@ -39,6 +39,7 @@ from PyQt6.QtWidgets import (  # pylint: disable=no-name-in-module
 )
 
 from desktop.theme import COLORS
+from signals.paper_trade_manager import LEVERAGE_BY_STRATEGY
 
 
 class _FetchWorker(QThread):
@@ -49,19 +50,24 @@ class _FetchWorker(QThread):
         self._db_config = db_config
 
     def run(self) -> None:
+        conn = None
         try:
             conn = psycopg2.connect(**self._db_config)
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                # Sadece rsi_cross_live izleniyor (14 Tem 2026) — do_kirilimi/do_open_streak
+                # paper trade açmıyor artık, panel karışmasın diye özet/tablolar buna göre
+                # filtrelendi. $2000 başlangıç bakiyesi rsi_cross_live'ın bütçesiyle eşleşiyor.
                 cur.execute(
                     """
                     SELECT
                         COUNT(*) FILTER (WHERE status = 'closed') AS total_trades,
                         COUNT(*) FILTER (WHERE status = 'closed' AND pnl_pct > 0) AS winning_trades,
                         COALESCE(SUM(pnl_usd) FILTER (WHERE status = 'closed'), 0) AS total_pnl_usd,
-                        10000 + COALESCE(SUM(pnl_usd) FILTER (WHERE status = 'closed'), 0) AS balance,
-                        10000 AS initial_balance,
+                        2000 + COALESCE(SUM(pnl_usd) FILTER (WHERE status = 'closed'), 0) AS balance,
+                        2000 AS initial_balance,
                         0 AS max_drawdown_pct
                     FROM paper_trades
+                    WHERE strategy = 'rsi_cross_live'
                 """
                 )
                 pf = dict(cur.fetchone()) if cur.rowcount else None
@@ -73,7 +79,7 @@ class _FetchWorker(QThread):
                            trailing_stop_price, opened_at, vpms_score, z_score_entry,
                            position_usd
                     FROM paper_trades
-                    WHERE status = 'open'
+                    WHERE status = 'open' AND strategy = 'rsi_cross_live'
                     ORDER BY opened_at DESC
                 """
                 )
@@ -85,14 +91,13 @@ class _FetchWorker(QThread):
                            entry_price, exit_price, pnl_usd, pnl_pct,
                            close_reason, closed_at
                     FROM paper_trades
-                    WHERE status = 'closed'
+                    WHERE status = 'closed' AND strategy = 'rsi_cross_live'
                     ORDER BY closed_at DESC
                     LIMIT 200
                 """
                 )
                 hist_rows = [dict(r) for r in cur.fetchall()]
 
-            conn.close()
             self.fetched.emit(pf, open_rows, hist_rows)
         except Exception as exc:
             import logging
@@ -100,6 +105,9 @@ class _FetchWorker(QThread):
             logging.getLogger(__name__).error(
                 "[PaperTradePanel] fetch hatası: %s", exc, exc_info=True
             )
+        finally:
+            if conn is not None:
+                conn.close()
 
 
 OPEN_COLS = [
@@ -183,11 +191,17 @@ class PaperTradePanel(QWidget):
         self._open_prices: dict[str, float] = {}
         self._open_ids: list[int] = []
         self._open_rows: list[dict] = []
-        self._open_filter: dict[str, str] = {"side": "Tümü", "tf": "Tümü", "search": ""}
+        self._open_filter: dict[str, str] = {
+            "side": "Tümü",
+            "tf": "Tümü",
+            "strategy": "Tümü",
+            "search": "",
+        }
         self._hist_filter: dict[str, str] = {
             "side": "Tümü",
             "tf": "Tümü",
             "reason": "Tümü",
+            "strategy": "Tümü",
             "search": "",
         }
 
@@ -236,7 +250,7 @@ class PaperTradePanel(QWidget):
 
         # ── Özet bar ──
         summary = QHBoxLayout()
-        self._lbl_balance = self._stat_label("Bakiye", "$10,000.00")
+        self._lbl_balance = self._stat_label("Bakiye", "$2,000.00")
         self._lbl_pnl = self._stat_label("Toplam P&L", "$0.00")
         self._lbl_winrate = self._stat_label("Win Rate", "—")
         self._lbl_drawdown = self._stat_label("Max DD", "0.00%")
@@ -304,9 +318,13 @@ class PaperTradePanel(QWidget):
         self._btn_manual.clicked.connect(self._on_manual_trade)
         self._open_cb_side = self._make_combo(["Tümü", "Long", "Short"])
         self._open_cb_tf = self._make_combo(["Tümü", "5m", "15m", "1h", "4h"])
+        self._open_cb_strategy = self._make_combo(["Tümü"])
         self._open_search = self._make_search("Sembol ara...")
         self._open_cb_side.currentTextChanged.connect(lambda v: self._set_open_filter("side", v))
         self._open_cb_tf.currentTextChanged.connect(lambda v: self._set_open_filter("tf", v))
+        self._open_cb_strategy.currentTextChanged.connect(
+            lambda v: self._set_open_filter("strategy", v)
+        )
         self._open_search.textChanged.connect(lambda v: self._set_open_filter("search", v))
         open_bar.addWidget(self._btn_manual)
         open_bar.addSpacing(8)
@@ -314,6 +332,8 @@ class PaperTradePanel(QWidget):
         open_bar.addWidget(self._open_cb_side)
         open_bar.addWidget(QLabel("TF:"))
         open_bar.addWidget(self._open_cb_tf)
+        open_bar.addWidget(QLabel("Strateji:"))
+        open_bar.addWidget(self._open_cb_strategy)
         open_bar.addWidget(self._open_search)
         open_bar.addStretch()
         open_layout.addLayout(open_bar)
@@ -332,11 +352,15 @@ class PaperTradePanel(QWidget):
         self._hist_cb_side = self._make_combo(["Tümü", "Long", "Short"])
         self._hist_cb_tf = self._make_combo(["Tümü", "5m", "15m", "1h", "4h"])
         self._hist_cb_reason = self._make_combo(["Tümü"])
+        self._hist_cb_strategy = self._make_combo(["Tümü"])
         self._hist_search = self._make_search("Sembol ara...")
         self._hist_cb_side.currentTextChanged.connect(lambda v: self._set_hist_filter("side", v))
         self._hist_cb_tf.currentTextChanged.connect(lambda v: self._set_hist_filter("tf", v))
         self._hist_cb_reason.currentTextChanged.connect(
             lambda v: self._set_hist_filter("reason", v)
+        )
+        self._hist_cb_strategy.currentTextChanged.connect(
+            lambda v: self._set_hist_filter("strategy", v)
         )
         self._hist_search.textChanged.connect(lambda v: self._set_hist_filter("search", v))
         hist_bar.addWidget(QLabel("Yön:"))
@@ -345,6 +369,8 @@ class PaperTradePanel(QWidget):
         hist_bar.addWidget(self._hist_cb_tf)
         hist_bar.addWidget(QLabel("Neden:"))
         hist_bar.addWidget(self._hist_cb_reason)
+        hist_bar.addWidget(QLabel("Strateji:"))
+        hist_bar.addWidget(self._hist_cb_strategy)
         hist_bar.addWidget(self._hist_search)
         hist_bar.addStretch()
         hist_layout.addLayout(hist_bar)
@@ -520,7 +546,10 @@ class PaperTradePanel(QWidget):
         try:
             if raw[:4] == b"ARDF":
                 reader = _pa.ipc.open_stream(raw[4:])
-                df = reader.read_pandas()
+                try:
+                    df = reader.read_pandas()
+                finally:
+                    reader.close()
                 if "close" in df.columns and not df.empty:
                     return float(df["close"].iloc[-1])
             else:
@@ -550,10 +579,11 @@ class PaperTradePanel(QWidget):
             tp = row["take_profit_price"]
 
             position_usd = float(row.get("position_usd") or 100.0)
+            leverage = LEVERAGE_BY_STRATEGY.get(row.get("strategy", ""), 1.0)
             pnl_pct = (
                 (live - entry) / entry * 100 if side == "Long" else (entry - live) / entry * 100
             )
-            pnl_usd = pnl_pct / 100 * position_usd
+            pnl_usd = pnl_pct / 100 * position_usd * leverage
 
             if sl and live:
                 sl_dist = (
@@ -643,6 +673,7 @@ class PaperTradePanel(QWidget):
         self._open_rows = rows
 
         total_unrealized = 0.0
+        strategies: set[str] = set()
         for r_idx, row in enumerate(rows):
             sym = row["symbol"]
             side = row["signal_type"]
@@ -655,10 +686,11 @@ class PaperTradePanel(QWidget):
 
             live = self._open_prices.get(sym, entry)
             position_usd = float(row.get("position_usd") or 100.0)
+            leverage = LEVERAGE_BY_STRATEGY.get(row.get("strategy", ""), 1.0)
             pnl_pct = (
                 (live - entry) / entry * 100 if side == "Long" else (entry - live) / entry * 100
             )
-            pnl_usd = pnl_pct / 100 * position_usd
+            pnl_usd = pnl_pct / 100 * position_usd * leverage
             total_unrealized += pnl_usd
 
             sl = row["stop_loss_price"]
@@ -688,6 +720,7 @@ class PaperTradePanel(QWidget):
             vpms_val = float(vpms) if vpms is not None else 0.0
             vpms_str = f"{vpms_val:.1f}" if vpms is not None else "—"
             strat_label = "✋ " + strat if src == "manual" else strat
+            strategies.add(strat_label)
             sl_danger = sl_dist is not None and abs(sl_dist) < 1.0
 
             # (text, sort_value)
@@ -727,6 +760,15 @@ class PaperTradePanel(QWidget):
                     it.setForeground(QColor(COLORS["accent"]))
                 self._open_table.setItem(r_idx, c_idx, it)
 
+        # Strateji dropdown'ını güncelle
+        cur_strategy = self._open_cb_strategy.currentText()
+        self._open_cb_strategy.blockSignals(True)
+        self._open_cb_strategy.clear()
+        self._open_cb_strategy.addItems(["Tümü"] + sorted(strategies))
+        idx = self._open_cb_strategy.findText(cur_strategy)
+        self._open_cb_strategy.setCurrentIndex(max(0, idx))
+        self._open_cb_strategy.blockSignals(False)
+
         self._open_table.setSortingEnabled(True)
         self._apply_open_filter()
         return total_unrealized
@@ -738,6 +780,7 @@ class PaperTradePanel(QWidget):
         self._hist_table.setRowCount(len(rows))
 
         reasons: set[str] = set()
+        strategies: set[str] = set()
         for r_idx, row in enumerate(rows):
             pnl_usd = float(row["pnl_usd"]) if row["pnl_usd"] else 0.0
             pnl_pct = float(row["pnl_pct"]) if row["pnl_pct"] else 0.0
@@ -747,6 +790,7 @@ class PaperTradePanel(QWidget):
             src = row.get("source", "signal")
             strat = row.get("strategy", "")
             strat_label = "✋ " + strat if src == "manual" else strat
+            strategies.add(strat_label)
             reason = row["close_reason"] or "—"
             reasons.add(reason)
 
@@ -786,6 +830,15 @@ class PaperTradePanel(QWidget):
         self._hist_cb_reason.setCurrentIndex(max(0, idx))
         self._hist_cb_reason.blockSignals(False)
 
+        # Strateji dropdown'ını güncelle
+        cur_strategy = self._hist_cb_strategy.currentText()
+        self._hist_cb_strategy.blockSignals(True)
+        self._hist_cb_strategy.clear()
+        self._hist_cb_strategy.addItems(["Tümü"] + sorted(strategies))
+        idx = self._hist_cb_strategy.findText(cur_strategy)
+        self._hist_cb_strategy.setCurrentIndex(max(0, idx))
+        self._hist_cb_strategy.blockSignals(False)
+
         self._hist_table.setSortingEnabled(True)
         self._apply_hist_filter()
 
@@ -802,15 +855,18 @@ class PaperTradePanel(QWidget):
     def _apply_open_filter(self) -> None:
         side = self._open_filter["side"]
         tf = self._open_filter["tf"]
+        strategy = self._open_filter["strategy"]
         search = self._open_filter["search"].upper()
         visible = 0
         for r in range(self._open_table.rowCount()):
             sym_it = self._open_table.item(r, 0)
             side_it = self._open_table.item(r, 1)
             tf_it = self._open_table.item(r, 2)
+            strat_it = self._open_table.item(r, 3)
             hide = bool(
                 (side != "Tümü" and side_it and side_it.text() != side)
                 or (tf != "Tümü" and tf_it and tf_it.text() != tf)
+                or (strategy != "Tümü" and strat_it and strat_it.text() != strategy)
                 or (search and sym_it and search not in sym_it.text().upper())
             )
             self._open_table.setRowHidden(r, hide)
@@ -822,17 +878,20 @@ class PaperTradePanel(QWidget):
         side = self._hist_filter["side"]
         tf = self._hist_filter["tf"]
         reason = self._hist_filter["reason"]
+        strategy = self._hist_filter["strategy"]
         search = self._hist_filter["search"].upper()
         visible = 0
         for r in range(self._hist_table.rowCount()):
             sym_it = self._hist_table.item(r, 0)
             side_it = self._hist_table.item(r, 1)
             tf_it = self._hist_table.item(r, 2)
+            strat_it = self._hist_table.item(r, 3)
             reason_it = self._hist_table.item(r, 8)
             hide = bool(
                 (side != "Tümü" and side_it and side_it.text() != side)
                 or (tf != "Tümü" and tf_it and tf_it.text() != tf)
                 or (reason != "Tümü" and reason_it and reason_it.text() != reason)
+                or (strategy != "Tümü" and strat_it and strat_it.text() != strategy)
                 or (search and sym_it and search not in sym_it.text().upper())
             )
             self._hist_table.setRowHidden(r, hide)
@@ -882,6 +941,7 @@ class PaperTradePanel(QWidget):
     def _manual_close(self, trade_id: int, symbol: str) -> None:
         price = self._open_prices.get(symbol, 0.0)
         if price == 0.0:
+            r = None
             try:
                 import json
 
@@ -896,21 +956,26 @@ class PaperTradePanel(QWidget):
                     price = float(d.get("price") or d.get("last_price") or 0)
             except Exception:
                 pass
+            finally:
+                if r is not None:
+                    r.close()
 
+        conn = None
         try:
             conn = psycopg2.connect(**self._db_config)
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
-                    "SELECT signal_type, entry_price, position_usd FROM paper_trades WHERE id = %s",
+                    "SELECT signal_type, entry_price, position_usd, strategy "
+                    "FROM paper_trades WHERE id = %s",
                     (trade_id,),
                 )
                 rec = cur.fetchone()
                 if not rec:
-                    conn.close()
                     return
                 side = rec["signal_type"]
                 entry = float(rec["entry_price"])
                 position_usd = float(rec["position_usd"] or 100.0)
+                leverage = LEVERAGE_BY_STRATEGY.get(rec["strategy"] or "", 1.0)
                 if price == 0.0:
                     price = entry
                 pnl_pct = (
@@ -919,7 +984,7 @@ class PaperTradePanel(QWidget):
                     else (entry - price) / entry * 100
                 )
                 fee_usd = position_usd * 0.0005 * 2
-                pnl_usd = pnl_pct / 100 * position_usd - fee_usd
+                pnl_usd = pnl_pct / 100 * position_usd * leverage - fee_usd
                 cur.execute(
                     """
                     UPDATE paper_trades SET
@@ -931,12 +996,14 @@ class PaperTradePanel(QWidget):
                     (price, round(pnl_pct, 4), fee_usd, round(pnl_usd, 4), trade_id),
                 )
             conn.commit()
-            conn.close()
             self._trigger_fetch()
         except Exception as exc:
             import logging
 
             logging.getLogger(__name__).error("[PaperTrade] manuel kapat hatası: %s", exc)
+        finally:
+            if conn is not None:
+                conn.close()
 
     def _on_manual_trade(self) -> None:
         from desktop.dialogs.manual_trade_dialog import ManualTradeDialog
