@@ -37,7 +37,12 @@ from signals.paper_trade_manager import (
     rsi_cross_live_manager,
 )
 from signals.risk_manager import risk_manager
-from signals.signal_processor import process_and_enrich_signals, trim_to_closed_bar
+from signals.signal_processor import (
+    _compute_devisso_score,
+    process_and_enrich_signals,
+    trim_to_closed_bar,
+)
+from signals.tf_alignment_gate import _heikin_ashi_bull
 from signals.vpm_calculator import VPMCalculator
 from utils.asyncio_ws_client import AsyncioBinanceStreamManager
 from utils.exceptions import BinanceAPIError, DatabaseError
@@ -387,6 +392,15 @@ class LiveDataManager:
         # KASITLI ayrı (bkz. _open_trade_registry_loop docstring), dinamik ATR trailing
         # yayınının (_publish_atr_live) kapsamını belirler (15 Tem 2026 planı).
         self._open_trade_symbols: set = set()
+        # 18 Tem 2026: bar-kapanışı burst kontrolü — _handle_websocket_message tüm
+        # sembollerin (aynı dakika sınırında near-simultaneous) kapanış coroutine'lerini
+        # run_coroutine_threadsafe ile fire-and-forget başlatıyor; 15 Tem refaktörü
+        # sonrası her sembol artık 1 yerine kadar 4 Redis yazımı yapıyor
+        # (set_mtf_klines + vpmv/divergence/atr live), bu da dakika başı ~657 sembol ×
+        # 4 = binlerce eşzamanlı bağlantı talebiyle pool'u (300) tüketip
+        # "No connection available" hatasına yol açıyordu. Semaphore hiçbir sembolü
+        # atlamadan sadece eşzamanlılığı sınırlayıp dalgalar halinde işlemeye zorlar.
+        self._bar_close_semaphore = asyncio.Semaphore(50)
 
         # Multi-WebSocket configuration
         self.max_streams_per_connection = 200  # Binance limit
@@ -815,15 +829,23 @@ class LiveDataManager:
     ) -> None:
         """1m-türetme: _update_and_process_symbol_mtf (1m barını buffer'a ekler)
         ile _derive_and_dispatch_closing_tfs (o buffer'ı okuyup üst TF türetir)
-        SIRALI await edilir — bkz. _handle_websocket_message'daki açıklama."""
-        await self._update_and_process_symbol_mtf(symbol, interval, kline)
-        await self._derive_and_dispatch_closing_tfs(symbol, next_open_time_ms)
+        SIRALI await edilir — bkz. _handle_websocket_message'daki açıklama.
+
+        _bar_close_semaphore ile sarılı (18 Tem 2026, bkz. __init__ açıklaması):
+        tüm semboller dakika sınırında near-simultaneous tetiklendiği için,
+        eşzamanlılığı sınırlamadan Redis pool'u tükeniyordu."""
+        async with self._bar_close_semaphore:
+            await self._update_and_process_symbol_mtf(symbol, interval, kline)
+            await self._derive_and_dispatch_closing_tfs(symbol, next_open_time_ms)
 
     async def _process_tick_and_derive(self, symbol: str, interval: str, kline: Dict) -> None:
         """1m-türetme: _handle_tick ile _derive_and_dispatch_forming_tfs için aynı
-        sıralama garantisi (bkz. _process_closed_1m_and_derive)."""
-        await self._handle_tick(symbol, interval, kline)
-        await self._derive_and_dispatch_forming_tfs(symbol)
+        sıralama garantisi (bkz. _process_closed_1m_and_derive). Aynı
+        _bar_close_semaphore'u paylaşır — toplam eşzamanlı Redis bağlantı
+        talebi (kapanış+forming) tek noktadan sınırlanır."""
+        async with self._bar_close_semaphore:
+            await self._handle_tick(symbol, interval, kline)
+            await self._derive_and_dispatch_forming_tfs(symbol)
 
     async def _refresh_1d_bar(self, symbol: str) -> None:
         """1d kapanışını 1m buffer'ından türetmek yerine (yapısal olarak imkansız
@@ -1009,6 +1031,9 @@ class LiveDataManager:
                 active_here = self._active_signal_registry.get((symbol, interval))
                 if active_here:
                     await self._publish_vpmv_live(symbol, interval, merged, active_here)
+                    # Verimlilik (devisso, ERSI) canlı yayını — VPMV ile AYNI
+                    # tetikleyici (27 Tem 2026, kullanıcı isteği).
+                    await self._publish_devisso_live(symbol, interval, merged, active_here)
                 # Divergence (Z-score) canlı yayını — aynı desen, aynı gerekçe:
                 # DivergenceWorker (desktop) da her sembol için ham kline çekip
                 # EMA/rolling-std'i sıfırdan hesaplıyordu (14 Tem 2026 gece,
@@ -2389,6 +2414,25 @@ class LiveDataManager:
             return None, 0, None
 
     @staticmethod
+    def _ranking_rsi_cross_score(df: pd.DataFrame) -> Optional[float]:
+        """RSI9-RSI24 farkinin (Config.RSI_FAST_WINDOW/SLOW_WINDOW —
+        RSI_Cross(9,24) sinyalinin kendi mantigi) normalize_momentum_0_100 ile
+        0-100'e normalize edilmis hali. 18 Tem 2026: research/pattern_lab/
+        rsi_cross_combined_score_bt.py ile 4 kapili dogrulandi (gercek korelasyon
+        Long rho=+0.196/Short +0.215, gercek $ dogrulamasi, placebo, split-period)
+        — mevcut _ranking_vpmv'nin RSI(14)>=50 esikli direction'indan (rho≈+0.02,
+        gercek $'da etkisiz) cok daha guclu. Ayri, ek bir sutun olarak eklendi —
+        mevcut Birlesik/TF Uyum degistirilmedi."""
+        try:
+            rsi_fast = calculate_rsi(df, period=Config.RSI_FAST_WINDOW)
+            rsi_slow = calculate_rsi(df, period=Config.RSI_SLOW_WINDOW)
+            spread = rsi_fast - rsi_slow
+            score_series = normalize_momentum_0_100(spread)
+            return round(float(score_series.iloc[-1]), 1)
+        except Exception:  # pylint: disable=broad-exception-caught
+            return None
+
+    @staticmethod
     def _ranking_r_score(df: pd.DataFrame) -> Optional[float]:
         """desktop/workers/ranking_worker.py::_r_score ile BİREBİR aynı formül
         (Sharpe/Sortino/Calmar/Omega blend), sadece taşındı."""
@@ -2399,21 +2443,31 @@ class LiveDataManager:
             if len(returns) < r_period // 2:
                 return None
 
+            # Oranların paydası (std/drawdown/kayıp toplamı) gerçekten sıfıra
+            # yakınsa (ör. pencerede neredeyse hiç kayıp/dalgalanma yoksa)
+            # 1e-12'lik epsilon blow-up'ı ENGELLEMİYOR — pay/1e-12 hâlâ
+            # milyarlarca çıkabiliyor (20 Tem 2026, ZESTUSDT R-Score=+4.58
+            # milyar, masaüstü panelinde donmaya/bellek patlamasına eşlik
+            # etti). Her bileşen makul bir aralığa (±50) kırpılıyor — gerçek
+            # sinyal kalitesi skorları zaten bu aralıkta, blow-up olursa
+            # sonucu sınırlıyor.
+            _CLIP = 50.0
+
             avg = returns.mean()
             std = returns.std() + 1e-12
-            sharpe = avg / std
+            sharpe = float(np.clip(avg / std, -_CLIP, _CLIP))
 
             neg = returns[returns < 0]
             neg_std = neg.std() + 1e-12 if len(neg) > 1 else 1e-12
-            sortino = avg / neg_std
+            sortino = float(np.clip(avg / neg_std, -_CLIP, _CLIP))
 
             price_window = closes[-r_period - 1 :]
             max_dd = (price_window.max() - price_window.min()) / (price_window.max() + 1e-12)
-            calmar = avg / (max_dd + 1e-12)
+            calmar = float(np.clip(avg / (max_dd + 1e-12), -_CLIP, _CLIP))
 
             gains = returns[returns >= 0].sum()
             losses = abs(returns[returns < 0].sum()) + 1e-12
-            omega = gains / losses
+            omega = float(np.clip(gains / losses, -_CLIP, _CLIP))
 
             r = sortino * 0.40 + omega * 0.30 + calmar * 0.20 + sharpe * 0.10
             return round(float(r), 3)
@@ -2428,6 +2482,7 @@ class LiveDataManager:
         tf_scores: Dict[str, float] = {}
         tf_dirs: Dict[str, int] = {}
         tf_zscores: Dict[str, float] = {}
+        tf_rsi_cross: Dict[str, float] = {}
 
         buffers = self.mtf_buffers.get(symbol) or {}
         for tf in self._RANKING_TF_WEIGHTS:
@@ -2440,12 +2495,25 @@ class LiveDataManager:
                 tf_dirs[tf] = direction
                 if z is not None:
                     tf_zscores[tf] = z
+            rsi_cross = self._ranking_rsi_cross_score(df)
+            if rsi_cross is not None:
+                tf_rsi_cross[tf] = rsi_cross
 
         if not tf_scores:
             return None
 
         total_w = sum(self._RANKING_TF_WEIGHTS[tf] for tf in tf_scores)
         combined = sum(tf_scores[tf] * self._RANKING_TF_WEIGHTS[tf] for tf in tf_scores) / total_w
+
+        if tf_rsi_cross:
+            total_rw = sum(self._RANKING_TF_WEIGHTS[tf] for tf in tf_rsi_cross)
+            rsi_cross_combined = round(
+                sum(tf_rsi_cross[tf] * self._RANKING_TF_WEIGHTS[tf] for tf in tf_rsi_cross)
+                / total_rw,
+                1,
+            )
+        else:
+            rsi_cross_combined = None
 
         if tf_zscores:
             total_zw = sum(self._RANKING_TF_WEIGHTS[tf] for tf in tf_zscores)
@@ -2475,6 +2543,7 @@ class LiveDataManager:
             "score_1h": tf_scores.get("1h"),
             "score_4h": tf_scores.get("4h"),
             "combined": round(combined, 1),
+            "rsi_cross_combined": rsi_cross_combined,
             "z_confluence": z_confluence,
             "r_score": r_score,
             "aligned": aligned,
@@ -2559,6 +2628,84 @@ class LiveDataManager:
                 rank_logger.warning("Sıralama güncelleme hatası: %s", exc, exc_info=True)
             await asyncio.sleep(self._RANKING_INTERVAL)
 
+    _HA_ALIGNMENT_TFS = ("4h", "6h", "8h", "12h")
+    _HA_ALIGNMENT_INTERVAL = 90  # ranking ile aynı kademe
+    _HA_ALIGNMENT_BARS = 60  # _get_ha_alignment (tf_alignment_gate.py) ile aynı pencere
+    # DB pool (database/engine.py: pool_size=20 + max_overflow=30 = 50, TÜM
+    # loop'lar arasında paylaşımlı) tükenmesine karşı — 15 Tem 2026'daki
+    # "sınırsız eşzamanlılık patlaması" olayının (bkz. memory:
+    # project_redis_pool_exhaustion_18tem) tekrarını önlemek için bilinçli
+    # olarak DÜŞÜK tutuluyor (ranking'in kullandığı ayrı thread-executor'dan
+    # farklı olarak bu loop doğrudan DB I/O yapıyor).
+    _HA_ALIGNMENT_SEMAPHORE = asyncio.Semaphore(10)
+
+    async def _ha_alignment_fetch_one(self, symbol: str, tf: str) -> Tuple[str, str, Optional[bool]]:
+        async with self._HA_ALIGNMENT_SEMAPHORE:
+            try:
+                df = await get_cagg_klines(symbol, tf, self._HA_ALIGNMENT_BARS, closed_only=True)
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.debug("[HAAlignment] %s %s çekilemedi: %s", symbol, tf, exc)
+                return symbol, tf, None
+        return symbol, tf, _heikin_ashi_bull(df)
+
+    async def _ha_alignment_publish_loop(self) -> None:
+        """Her ~90 saniyede TÜM izlenen sembol evreni (self.mtf_buffers'taki
+        semboller, ranking:snapshot ile aynı kaynak) için 4h/6h/8h/12h
+        Heikin-Ashi rengini hesaplayıp `ha_alignment:snapshot` Redis
+        key'ine yazar (27 Tem 2026, kullanıcı isteği — HTF hizalanan
+        coinlerde sinyal açma planının izleme altyapısı).
+
+        `_heikin_ashi_bull` (signals/tf_alignment_gate.py) BİREBİR aynı
+        fonksiyon — closed_only=True disiplinli, 27 Tem'de bulunan
+        look-ahead hatasının (research/pattern_lab/rsi_cross_ta_percentile_bt.py
+        ::searchsorted(...,'right')-1, kapanmamış barı kapanmış sayma) AYNI
+        deseni burada TEKRARLANMASIN diye ayrı bir hesap YAZILMADI, mevcut
+        (doğru) fonksiyon içe aktarıldı."""
+        ha_logger = logging.getLogger("HAAlignmentPublish")
+
+        while True:
+            try:
+                symbols = list(self.mtf_buffers.keys())
+                tasks = [
+                    self._ha_alignment_fetch_one(sym, tf)
+                    for sym in symbols
+                    for tf in self._HA_ALIGNMENT_TFS
+                ]
+                results = await asyncio.gather(*tasks)
+
+                per_symbol: Dict[str, Dict[str, Optional[bool]]] = {}
+                for sym, tf, bull in results:
+                    per_symbol.setdefault(sym, {})[tf] = bull
+
+                snapshot = []
+                for sym, bulls in per_symbol.items():
+                    if any(bulls.get(tf) is None for tf in self._HA_ALIGNMENT_TFS):
+                        continue
+                    bull_count = sum(1 for tf in self._HA_ALIGNMENT_TFS if bulls[tf])
+                    snapshot.append(
+                        {
+                            "symbol": sym,
+                            "ha_4h": bulls["4h"],
+                            "ha_6h": bulls["6h"],
+                            "ha_8h": bulls["8h"],
+                            "ha_12h": bulls["12h"],
+                            "bull_count": bull_count,
+                            "aligned_bull": bull_count == len(self._HA_ALIGNMENT_TFS),
+                            "aligned_bear": bull_count == 0,
+                        }
+                    )
+
+                if snapshot:
+                    redis = RedisClient.get_client()
+                    await asyncio.wait_for(
+                        redis.set("ha_alignment:snapshot", json.dumps(snapshot), ex=600),
+                        timeout=SAFE_EXTERNAL_TIMEOUT,
+                    )
+                    ha_logger.info("HA hizalanma güncellendi: %d sembol", len(snapshot))
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                ha_logger.warning("HA hizalanma güncelleme hatası: %s", exc, exc_info=True)
+            await asyncio.sleep(self._HA_ALIGNMENT_INTERVAL)
+
     _VPMV_TTL_BY_INTERVAL = {"1m": 180, "5m": 900, "15m": 2700, "1h": 10800, "4h": 43200}
 
     async def _publish_vpmv_live(
@@ -2610,6 +2757,50 @@ class LiveDataManager:
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.debug(
                     "[VPMVLive] %s (id=%s) Redis yazımı başarısız: %s", symbol, sig_id, exc
+                )
+
+    _DEVISSO_TTL_BY_INTERVAL = {"1m": 180, "5m": 900, "15m": 2700, "1h": 10800, "4h": 43200}
+
+    async def _publish_devisso_live(
+        self, symbol: str, interval: str, df: pd.DataFrame, active_signals: list
+    ) -> None:
+        """(symbol, interval) için aktif sinyal(ler)in Verimlilik'ini (ERSI,
+        signal_processor.py::_compute_devisso_score ile BİREBİR aynı fonksiyon)
+        zaten bellekteki buffer'dan hesaplayıp `devisso_live:{signal_id}`
+        Redis key'ine yazar — _publish_vpmv_live ile AYNI desen (27 Tem 2026,
+        kullanıcı isteği). Yön'den bağımsız bir metrik (RSI/fiyat verimliliği),
+        bu yüzden VPMV'nin aksine sig_type'a göre değişmiyor — (symbol,
+        interval) başına bir kez hesaplanıp aynı (symbol, interval)'daki tüm
+        aktif sinyallere yayınlanıyor.
+
+        Panel tarafı "sinyalden beri" deltasını (bu değer − DB'deki
+        devisso_score, sinyal açılış anı) kendisi hesaplayacak — VPMV'de
+        de aynı disiplin (vpmv_pre_avg zaten sinyal-öncesi statik snapshot,
+        canlı delta client-side türetiliyor)."""
+        ttl = self._DEVISSO_TTL_BY_INTERVAL.get(interval, 900)
+        redis = RedisClient.get_client()
+
+        try:
+            live_score = _compute_devisso_score(df)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning(
+                "[DevissoLive] %s %s hesaplanamadı: %s", symbol, interval, exc, exc_info=True
+            )
+            return
+        if live_score is None:
+            return
+
+        payload = {"devisso": live_score, "ts": int(time.time())}
+        for sig in active_signals:
+            sig_id = sig["id"]
+            try:
+                await asyncio.wait_for(
+                    redis.set(f"devisso_live:{sig_id}", json.dumps(payload), ex=ttl),
+                    timeout=SAFE_EXTERNAL_TIMEOUT,
+                )
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.debug(
+                    "[DevissoLive] %s (id=%s) Redis yazımı başarısız: %s", symbol, sig_id, exc
                 )
 
     _DIVERGENCE_EMA_PERIOD = 200  # desktop/workers/divergence_worker.py::_EMA_PERIOD ile aynı
@@ -2828,6 +3019,7 @@ class LiveDataManager:
                 asyncio.create_task(self._active_signal_registry_loop()),
                 asyncio.create_task(self._open_trade_registry_loop()),
                 asyncio.create_task(self._ranking_publish_loop()),
+                asyncio.create_task(self._ha_alignment_publish_loop()),
             ]
 
             logger.info(

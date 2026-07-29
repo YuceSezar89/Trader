@@ -32,7 +32,7 @@ FEE_RATE = 0.0005
 MAX_OPEN = 10
 
 # Strateji-özel kaldıraç çarpanı (PnL'e uygulanır) — tanımlı olmayan stratejiler 1.0 (kaldıraçsız).
-LEVERAGE_BY_STRATEGY: dict[str, float] = {"rsi_cross_live": 3.0}
+LEVERAGE_BY_STRATEGY: dict[str, float] = {"rsi_cross_live": 3.0, "ta_kovalama_live": 3.0}
 
 # EVOL-disiplinli erken çıkış (HA_Cross Long'a özel — [[project_devisso_ersi]],
 # ha_cross_evol_exit_sweep_bt.py'de eşik=25/min_hold=8 "güvenilir bölge" olarak
@@ -53,6 +53,13 @@ _STRATEGY_TRIGGERS: dict[str, Callable[[dict], bool]] = {
     "rsi_cross_live": lambda sd: sd.get("indicators") == "RSI_Cross(9,24)"
     and sd.get("all_up")
     and sd.get("candle_kategori") == "govde",
+    # Gating (HA hizalanma + kohort sıralaması) signals/tf_alignment_gate.py'de
+    # on_new_signal çağrılmadan ÖNCE bitiyor — burada ek şart yok.
+    "tf_alignment_live": lambda sd: True,
+    # Gating (all_up + TA-percentile/kovalama + HA) signals/ta_kovalama_gate.py'de
+    # on_new_signal çağrılmadan ÖNCE bitiyor — burada ek şart yok (24 Tem 2026,
+    # [[project_rsi_cross_ta_triple_combo_24tem]]).
+    "ta_kovalama_live": lambda sd: True,
 }
 
 
@@ -64,9 +71,16 @@ class PaperTradeManager:
         max_hold_hours: Optional[float] = None,
         max_open: Optional[int] = None,
         position_usd: Optional[float] = None,
+        allow_scale_in: bool = False,
     ) -> None:
         self.strategy = strategy
         self._open_symbols: set[str] = set()
+        # False (varsayılan, eski davranış): sembolde HERHANGİ bir açık pozisyon
+        # varsa yeni sinyal reddedilir. True: SADECE ters yönde açık pozisyon
+        # varsa reddedilir — aynı yönde ikinci bir bacak (kendi SL/TP'siyle)
+        # açılabilir (24 Tem 2026, [[project_combo_scale_in]] — küçük ama gerçek
+        # kazanç, +$77/116 işlem, risk artışı ihmal edilebilir).
+        self.allow_scale_in = allow_scale_in
         # None: eski davranış (fiyat kapanışı yok, sadece ters sinyal/manuel/paper
         # SL-TP-trailing). Verilirse: bu süreyi aşan açık pozisyonlar check_all_prices'ta
         # "timeout" ile kapatılır (do_open_streak — SL=3xATR TEK BAŞINA, TP/breakeven yok,
@@ -119,20 +133,39 @@ class PaperTradeManager:
         async def _do_open() -> None:
             async with get_session() as session:
                 try:
-                    existing = await session.execute(
-                        select(PaperTrade.id).where(
-                            PaperTrade.strategy == self.strategy,
-                            PaperTrade.symbol == symbol,
-                            PaperTrade.status == "open",
+                    if self.allow_scale_in:
+                        existing = await session.execute(
+                            select(PaperTrade.signal_type).where(
+                                PaperTrade.strategy == self.strategy,
+                                PaperTrade.symbol == symbol,
+                                PaperTrade.status == "open",
+                            )
                         )
-                    )
-                    if existing.scalars().first() is not None:
-                        logger.info(
-                            "[PaperTrade][%s] %s için zaten açık pozisyon var, atlandı",
-                            self.strategy,
-                            symbol,
+                        existing_dirs = set(existing.scalars().all())
+                        new_dir = signal_data.get("signal_type", "")
+                        if existing_dirs and existing_dirs - {new_dir}:
+                            logger.info(
+                                "[PaperTrade][%s] %s için TERS yönde açık pozisyon var, atlandı",
+                                self.strategy,
+                                symbol,
+                            )
+                            return
+                        # aynı yönde açıksa (veya hiç açık yoksa) devam — scale-in (2. bacak)
+                    else:
+                        existing = await session.execute(
+                            select(PaperTrade.id).where(
+                                PaperTrade.strategy == self.strategy,
+                                PaperTrade.symbol == symbol,
+                                PaperTrade.status == "open",
+                            )
                         )
-                        return
+                        if existing.scalars().first() is not None:
+                            logger.info(
+                                "[PaperTrade][%s] %s için zaten açık pozisyon var, atlandı",
+                                self.strategy,
+                                symbol,
+                            )
+                            return
 
                     open_count_result = await session.execute(
                         select(func.count()).where(
@@ -218,6 +251,17 @@ class PaperTradeManager:
                         vpmv_pre_avg=signal_data.get("vpmv_pre_avg"),
                         vpmv_slope=signal_data.get("vpmv_slope"),
                         vpmv_ratio=signal_data.get("vpmv_ratio"),
+                        devisso_score=sig.devisso_score if sig else signal_data.get("devisso_score"),
+                        devisso_delta=sig.devisso_delta if sig else None,
+                        devisso_ratio=sig.devisso_ratio if sig else None,
+                        # 19 Tem 2026: giriş anındaki TÜM enriched_signal dict'i
+                        # (VPMV bileşenleri, SMC, finansal oranlar, vb. — yukarıdaki
+                        # kolonlarda olmayan her şey). json round-trip ile
+                        # datetime/numpy tiplerini (JSONB'nin serileştiremeyeceği)
+                        # güvenli string'e çeviriyoruz — bkz. utils/redis_client.py
+                        # aynı desen (default=str), 18 Tem'deki numpy.bool_ bug'ıyla
+                        # aynı sınıf hatayı burada önceden önlüyor.
+                        entry_features=_json.loads(_json.dumps(signal_data, default=str)),
                     )
                     session.add(trade)
                     await session.commit()
@@ -632,3 +676,20 @@ do_open_streak_manager = PaperTradeManager("do_open_streak", max_hold_hours=24.0
 # $2000 bakiye tavanı, işlem başına düşük risk için düşük POSITION_USD + yüksek MAX_OPEN
 # (bkz. [[project_rsi_ha_cross_live_readiness_13_14tem]] — filtreli hacim zaten ~8-9 eşzamanlı).
 rsi_cross_live_manager = PaperTradeManager("rsi_cross_live", max_open=80, position_usd=25.0)
+# TF Hizalanma + Erken Ayrışma (18 Tem 2026, bkz. [[project_tf_alignment_early_divergence]]):
+# tetikleme mantığı (1h+4h HA hizalanması + kohort içi erken ayrışma sıralaması)
+# signals/tf_alignment_gate.py'de dışarıda yapılıyor — bu yüzden trigger'ı her
+# zaman True (gating zaten on_new_signal çağrılmadan ÖNCE bitmiş oluyor).
+# Kaldıraçsız başlatıldı (henüz gerçek $'da doğrulanmadı, LEVERAGE_BY_STRATEGY'de
+# tanımsız = 1.0 varsayılan).
+tf_alignment_live_manager = PaperTradeManager(
+    "tf_alignment_live", max_open=80, position_usd=25.0
+)
+# all_up + TA-percentile/kovalama + HA-hizalanma (24 Tem 2026, [[project_rsi_cross_ta_triple_combo_24tem]]
+# — "didik didik" serisinin canlıya alınması). Gating signals/ta_kovalama_gate.py'de
+# on_new_signal ÇAĞRILMADAN ÖNCE bitiyor. Scale-in AÇIK (aynı yönde 2. bacağa izin
+# verir, [[project_combo_scale_in]]) — kapasite analizi $500 sermayenin bile
+# yetiyor göstermişti, max_open=80 rahat bir tavan.
+ta_kovalama_live_manager = PaperTradeManager(
+    "ta_kovalama_live", max_open=80, position_usd=25.0, allow_scale_in=True
+)

@@ -7,10 +7,17 @@ tepki alıp art arda yeşil mum yakma → büyük hareket) + arşivinden bulduğ
 Pine script'in ("Ardışık Sistemler.txt") ardışık mum + Gauss toplamı (n(n+1)/2)
 fikirlerinin birleşimi.
 
-Sinyal: DO'nun kapanışla yukarı kesilmesi (do_break) → TAM 3 ardışık yeşil mum →
-o 3 mumda kat edilen mesafenin (streak başlangıcının low'undan şu anki high'a)
-Gauss-ağırlıklı büyüklüğü eşik üzerinde. 390 sembol/45 gün/15m/24h ufkunda
-split-period + OOS ekonomik test ile doğrulandı (+$367-1175/ay, yönteme göre).
+Sinyal: DO'nun kapanışla yukarı kesilmesi (do_break) → EN AZ 3 ardışık yeşil mum
+(21 Tem 2026 — önceden TAM 3'tü, "en az"a gevşetildi: tarama tam 3. barı
+kaçırırsa (servis gecikmesi/restart) sinyal artık tamamen kaybolmuyor) →
+streak'in İLK 3 mumunda pullback şartı (2. mumun low'u 1. mumun fitil dahil
+yarısının altına sarkmasın, 3. mumun low'u 2. mumun fitil dahil yarısının
+altına sarkmasın — kesintisiz/sağlıklı bir itiş arıyoruz, üst üste binen
+derin fitilli "sahte" streak'leri elemek için) → o 3 mumda kat edilen
+mesafenin (streak başlangıcının low'undan şu anki high'a) Gauss-ağırlıklı
+büyüklüğü eşik üzerinde. 390 sembol/45 gün/15m/24h ufkunda split-period + OOS
+ekonomik test ile doğrulandı (+$367-1175/ay, yönteme göre) — pullback şartı
+bu testten SONRA eklendi, henüz ayrıca doğrulanmadı.
 
 SADECE LONG — Short tarafı simetrik çıkmadı (Gauss refinement işe yaramadı,
 split-period tutarsız), bilinçli olarak dahil edilmedi.
@@ -85,7 +92,7 @@ class DoOpenStreakDetector:
 
             gate_active = False
             count_long = 0
-            start_low = np.nan
+            streak_start_idx = -1
             for i in range(n):
                 if do_break[i]:
                     gate_active = True
@@ -94,16 +101,27 @@ class DoOpenStreakDetector:
 
                 if is_long[i]:
                     count_long += 1
-                    if count_long == 1 or np.isnan(start_low):
-                        start_low = l[i]
+                    if count_long == 1:
+                        streak_start_idx = i
                 else:
                     count_long = 0
-                    start_low = np.nan
+                    streak_start_idx = -1
 
             last = n - 1
-            if not gate_active or count_long != STREAK_THRESHOLD:
+            if not gate_active or count_long < STREAK_THRESHOLD or streak_start_idx < 0:
                 return None
 
+            # İlk 3 mumda pullback şartı: her mum bir öncekinin fitil-dahil
+            # yarısının altına sarkmasın (kesintisiz/sağlıklı itiş).
+            bar1, bar2, bar3 = streak_start_idx, streak_start_idx + 1, streak_start_idx + 2
+            mid1 = (h[bar1] + l[bar1]) / 2.0
+            if l[bar2] < mid1:
+                return None
+            mid2 = (h[bar2] + l[bar2]) / 2.0
+            if l[bar3] < mid2:
+                return None
+
+            start_low = l[bar1]
             long_perc = (h[last] - start_low) / start_low * 100.0
             gauss_val = _gauss_sum(round(long_perc, 2))
             if gauss_val < GAUSS_THRESHOLD:

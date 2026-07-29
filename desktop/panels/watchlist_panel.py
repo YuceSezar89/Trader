@@ -7,7 +7,7 @@ ile bildirir; bu panel sadece görüntüler. Sembol seçiminde `symbol_selected`
 sinyali yayınlanır.
 """
 
-from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
@@ -44,6 +44,16 @@ class WatchlistPanel(QWidget):
         self._proxy.setSourceModel(self._model)
 
         self._setup_ui()
+        self._setup_resort_timer()
+
+    def _setup_resort_timer(self) -> None:
+        """WatchlistProxyModel.setDynamicSortFilter(False) olduğu için
+        sıralama artık otomatik tazelenmiyor — bunu 5 saniyede bir (20sn'lik
+        fiyat tick'inden bağımsız) tazeler."""
+        timer = QTimer(self)
+        timer.setInterval(5_000)
+        timer.timeout.connect(self._proxy.invalidate)
+        timer.start()
 
     # ── UI ────────────────────────────────────────────────────────────────
 

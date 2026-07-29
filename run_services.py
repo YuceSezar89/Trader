@@ -2,11 +2,19 @@
 
 import asyncio
 import os
+import resource
 import signal
 import socket
 import subprocess
 import time
 from datetime import datetime, timedelta
+
+# macOS varsayılan fd limiti (256) ağır importlarla tek başına doluyor,
+# Binance bağlantıları için yer kalmıyor (bkz. signal_service.py, 17 Tem 2026).
+try:
+    resource.setrlimit(resource.RLIMIT_NOFILE, (4096, 8192))
+except (ValueError, OSError):
+    pass
 
 # Çalıştırılacak servislerin ana fonksiyonlarını import et
 from live_data_manager import main as live_data_main

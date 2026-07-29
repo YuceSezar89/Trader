@@ -7,7 +7,9 @@ Kullanım:
     .venv/bin/python -m desktop.main
 """
 
+import logging
 import os
+import resource
 import subprocess
 import sys
 from pathlib import Path
@@ -15,6 +17,20 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu")
+
+# basicConfig hiç çağrılmıyordu — root logger varsayılan (WARNING) seviyede
+# kalıp tüm .info() çağrıları (JS console köprüsü dahil) sessizce yutuluyordu
+# (25 Tem 2026, bellek sızıntısı teşhisi sırasında fark edildi).
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s"
+)
+
+# macOS varsayılan fd limiti (256) ağır importlarla tek başına doluyor,
+# Binance bağlantıları için yer kalmıyor (bkz. signal_service.py, 17 Tem 2026).
+try:
+    resource.setrlimit(resource.RLIMIT_NOFILE, (4096, 8192))
+except (ValueError, OSError):
+    pass
 
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import QApplication

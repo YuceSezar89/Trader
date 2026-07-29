@@ -30,10 +30,11 @@ _COL_15M = 3
 _COL_1H = 4
 _COL_4H = 5
 _COL_COMBINED = 6
-_COL_ZCONF = 7
-_COL_RSCORE = 8
-_COL_ALIGN = 9
-_COL_VSBTC = 10
+_COL_RSICROSS = 7
+_COL_ZCONF = 8
+_COL_RSCORE = 9
+_COL_ALIGN = 10
+_COL_VSBTC = 11
 _HEADERS = [
     "#",
     "Sembol",
@@ -42,6 +43,7 @@ _HEADERS = [
     "1h",
     "4h",
     "Birleşik",
+    "RSI Cross",
     "Z-Conf",
     "R-Score",
     "TF Uyum",
@@ -298,6 +300,9 @@ class RankingPanel(QWidget):
 
             # Birleşik
             self._set_score(row, _COL_COMBINED, combined, bg, bold=True)
+
+            # RSI Cross (RSI9-RSI24, 18 Tem 2026 dogrulamasi)
+            self._set_score(row, _COL_RSICROSS, row_data.get("rsi_cross_combined"), bg)
 
             # Z-Conf
             self._set_zconf(row, row_data.get("z_confluence"), bg)

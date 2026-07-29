@@ -35,6 +35,12 @@ _WATCHED: dict[str, dict[str, float]] = {
     "signal_service.py": {"warn_mb": 3000, "critical_mb": 6000},
 }
 
+# fd limiti (setrlimit ile 4096/8192'ye çıkarıldı, 17 Tem 2026) doluşu sessizce
+# ilerleyip "DNS'e ulaşılamıyor" gibi kafa karıştırıcı hatalara yol açabiliyor —
+# eşiğe yaklaşınca erken uyar (bkz. signal_service.py'deki setrlimit yorumu).
+_FD_WARN = 3000
+_FD_CRITICAL = 3800
+
 
 def _find_pids() -> dict[str, int]:
     found: dict[str, int] = {}
@@ -132,8 +138,27 @@ def main() -> None:
                             f"({thresholds['warn_mb']:.0f}MB) aşıldı, {elapsed_min:.0f} dk çalışıyor."
                         )
                         alerted[name].add("warn")
-                    elif rss_mb < thresholds["warn_mb"] and alerted[name]:
-                        alerted[name].clear()  # düştü, bir sonraki aşımda tekrar uyarabiliriz
+                    elif rss_mb < thresholds["warn_mb"] and alerted[name] - {
+                        "fd_warn",
+                        "fd_critical",
+                    }:
+                        alerted[name] -= {"warn", "critical"}  # düştü, tekrar uyarabiliriz
+
+                    if num_fds >= 0:
+                        if num_fds >= _FD_CRITICAL and "fd_critical" not in alerted[name]:
+                            _alert(
+                                f"{name} (PID {proc.pid}) açık dosya tanıtıcısı {num_fds} — "
+                                f"KRİTİK eşik ({_FD_CRITICAL}) aşıldı, fd limiti dolabilir."
+                            )
+                            alerted[name].add("fd_critical")
+                        elif num_fds >= _FD_WARN and "fd_warn" not in alerted[name]:
+                            _alert(
+                                f"{name} (PID {proc.pid}) açık dosya tanıtıcısı {num_fds} — "
+                                f"uyarı eşiği ({_FD_WARN}) aşıldı."
+                            )
+                            alerted[name].add("fd_warn")
+                        elif num_fds < _FD_WARN:
+                            alerted[name] -= {"fd_warn", "fd_critical"}
 
                 except psutil.NoSuchProcess:
                     print(f"[{name}] artık çalışmıyor, izlemeden çıkarılıyor")

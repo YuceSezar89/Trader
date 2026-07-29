@@ -30,7 +30,6 @@ from PyQt6.QtWidgets import (  # pylint: disable=no-name-in-module
     QLineEdit,
     QMenu,
     QPushButton,
-    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -54,9 +53,11 @@ class _FetchWorker(QThread):
         try:
             conn = psycopg2.connect(**self._db_config)
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                # Sadece rsi_cross_live izleniyor (14 Tem 2026) — do_kirilimi/do_open_streak
-                # paper trade açmıyor artık, panel karışmasın diye özet/tablolar buna göre
-                # filtrelendi. $2000 başlangıç bakiyesi rsi_cross_live'ın bütçesiyle eşleşiyor.
+                # Sadece ta_kovalama_live izleniyor (24 Tem 2026 — tf_alignment_live
+                # ÇÜRÜTÜLDÜ/durduruldu, ta_kovalama_live'a geçildi; 14 Tem'deki AYNI
+                # tasarım kararı: panel karışmasın diye özet/tablolar tek aktif
+                # stratejiye göre filtrelendi). $2000 başlangıç bakiyesi bu bütçeyle
+                # eşleşiyor (bkz. paper_portfolio tablosu).
                 cur.execute(
                     """
                     SELECT
@@ -67,7 +68,7 @@ class _FetchWorker(QThread):
                         2000 AS initial_balance,
                         0 AS max_drawdown_pct
                     FROM paper_trades
-                    WHERE strategy = 'rsi_cross_live'
+                    WHERE strategy = 'ta_kovalama_live'
                 """
                 )
                 pf = dict(cur.fetchone()) if cur.rowcount else None
@@ -77,9 +78,9 @@ class _FetchWorker(QThread):
                     SELECT id, symbol, signal_type, interval, strategy, source,
                            entry_price, stop_loss_price, take_profit_price,
                            trailing_stop_price, opened_at, vpms_score, z_score_entry,
-                           position_usd
+                           position_usd, devisso_score
                     FROM paper_trades
-                    WHERE status = 'open' AND strategy = 'rsi_cross_live'
+                    WHERE status = 'open' AND strategy = 'ta_kovalama_live'
                     ORDER BY opened_at DESC
                 """
                 )
@@ -87,11 +88,12 @@ class _FetchWorker(QThread):
 
                 cur.execute(
                     """
-                    SELECT symbol, signal_type, interval, strategy, source,
+                    SELECT id, symbol, signal_type, interval, strategy, source,
                            entry_price, exit_price, pnl_usd, pnl_pct,
-                           close_reason, closed_at
+                           close_reason, closed_at, opened_at,
+                           stop_loss_price, take_profit_price, trailing_stop_price
                     FROM paper_trades
-                    WHERE status = 'closed' AND strategy = 'rsi_cross_live'
+                    WHERE status = 'closed' AND strategy = 'ta_kovalama_live'
                     ORDER BY closed_at DESC
                     LIMIT 200
                 """
@@ -123,6 +125,7 @@ OPEN_COLS = [
     "TP%",
     "Trail$",
     "VPMV",
+    "Kolaylık",
     "Süre",
 ]
 HIST_COLS = [
@@ -183,6 +186,7 @@ class _NumItem(QTableWidgetItem):
 class PaperTradePanel(QWidget):
 
     symbol_selected = pyqtSignal(str, str)  # (symbol, interval)
+    signal_data_selected = pyqtSignal(dict)  # grafikte giriş/çıkış marker'ı için
 
     def __init__(self, db_config: dict[str, Any], redis_url: str = "", parent=None):
         super().__init__(parent)
@@ -191,6 +195,9 @@ class PaperTradePanel(QWidget):
         self._open_prices: dict[str, float] = {}
         self._open_ids: list[int] = []
         self._open_rows: list[dict] = []
+        self._open_rows_by_id: dict[int, dict] = {}
+        self._hist_rows_by_id: dict[int, dict] = {}
+        self._symbol_to_rows: dict[str, list[int]] = {}
         self._open_filter: dict[str, str] = {
             "side": "Tümü",
             "tf": "Tümü",
@@ -564,9 +571,9 @@ class PaperTradePanel(QWidget):
         if not id_to_row:
             return
 
-        for t_idx in range(self._open_table.rowCount()):
+        for t_idx in self._symbol_to_rows.get(symbol, []):
             sym_item = self._open_table.item(t_idx, 0)
-            if not sym_item or sym_item.text() != symbol:
+            if not sym_item:
                 continue
             trade_id = sym_item.data(Qt.ItemDataRole.UserRole)
             row = id_to_row.get(trade_id)
@@ -662,8 +669,8 @@ class PaperTradePanel(QWidget):
             self._lbl_drawdown, f"{dd:.2f}%", COLORS["red"] if dd > 5 else COLORS["text_primary"]
         )
 
-    # OPEN_COLS = [Sembol0, Yön1, TF2, Strateji3, Giriş$4, Fiyat$5, P&L$6, P&L%7, SL%8, TP%9, Trail$10, VPMS11, Süre12]
-    _OPEN_NUM_COLS = {4, 5, 6, 7, 8, 9, 10, 11}  # numerik sıralama gereken kolonlar
+    # OPEN_COLS = [Sembol0, Yön1, TF2, Strateji3, Giriş$4, Fiyat$5, P&L$6, P&L%7, SL%8, TP%9, Trail$10, VPMS11, Kolaylık12, Süre13]
+    _OPEN_NUM_COLS = {4, 5, 6, 7, 8, 9, 10, 11, 12}  # numerik sıralama gereken kolonlar
 
     def _fill_open(self, rows: list[dict]) -> float:
         self._open_table.setSortingEnabled(False)
@@ -671,6 +678,10 @@ class PaperTradePanel(QWidget):
         self._stat_value(self._lbl_open, str(len(rows)))
         self._open_ids = [r["id"] for r in rows]
         self._open_rows = rows
+        self._open_rows_by_id = {r["id"]: r for r in rows}
+        self._symbol_to_rows = {}
+        for r_idx, row in enumerate(rows):
+            self._symbol_to_rows.setdefault(row["symbol"], []).append(r_idx)
 
         total_unrealized = 0.0
         strategies: set[str] = set()
@@ -683,6 +694,7 @@ class PaperTradePanel(QWidget):
             entry = float(row["entry_price"])
             trail = row["trailing_stop_price"]
             vpms = row.get("vpms_score")
+            devisso = row.get("devisso_score")
 
             live = self._open_prices.get(sym, entry)
             position_usd = float(row.get("position_usd") or 100.0)
@@ -719,6 +731,8 @@ class PaperTradePanel(QWidget):
             trail_str = f"{float(trail):.5g}" if trail else "—"
             vpms_val = float(vpms) if vpms is not None else 0.0
             vpms_str = f"{vpms_val:.1f}" if vpms is not None else "—"
+            devisso_val = float(devisso) if devisso is not None else 0.0
+            devisso_str = f"{devisso_val:.1f}" if devisso is not None else "—"
             strat_label = "✋ " + strat if src == "manual" else strat
             strategies.add(strat_label)
             sl_danger = sl_dist is not None and abs(sl_dist) < 1.0
@@ -737,6 +751,7 @@ class PaperTradePanel(QWidget):
                 (tp_str, tp_dist if tp_dist is not None else 0.0),
                 (trail_str, float(trail) if trail else 0.0),
                 (vpms_str, vpms_val),
+                (devisso_str, devisso_val),
                 (_age(row["opened_at"]), None),
             ]
 
@@ -778,6 +793,7 @@ class PaperTradePanel(QWidget):
     def _fill_hist(self, rows: list[dict]) -> None:
         self._hist_table.setSortingEnabled(False)
         self._hist_table.setRowCount(len(rows))
+        self._hist_rows_by_id = {r["id"]: r for r in rows}
 
         reasons: set[str] = set()
         strategies: set[str] = set()
@@ -811,6 +827,8 @@ class PaperTradePanel(QWidget):
             ]
             for c_idx, (text, sort_val) in enumerate(cell_data):
                 it = _NumItem(text, sort_val) if sort_val is not None else _item(text)
+                if c_idx == 0:
+                    it.setData(Qt.ItemDataRole.UserRole, row["id"])
                 if c_idx == 1:
                     it.setForeground(
                         QColor(COLORS["green"])
@@ -906,6 +924,18 @@ class PaperTradePanel(QWidget):
         tf_item = table.item(row, 2)
         if sym_item and tf_item:
             self.symbol_selected.emit(sym_item.text(), tf_item.text())
+
+        trade_id = sym_item.data(Qt.ItemDataRole.UserRole) if sym_item else None
+        if trade_id is None:
+            return
+        if table is self._open_table:
+            trade = self._open_rows_by_id.get(trade_id)
+        elif table is self._hist_table:
+            trade = self._hist_rows_by_id.get(trade_id)
+        else:
+            trade = None
+        if trade:
+            self.signal_data_selected.emit(dict(trade))
 
     def _on_open_context_menu(self, pos: QPoint) -> None:
         row = self._open_table.rowAt(pos.y())

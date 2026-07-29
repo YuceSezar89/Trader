@@ -28,6 +28,8 @@ from desktop.panels.deviso_panel import DevisoPanel
 from desktop.panels.divergence_panel import DivergencePanel
 from desktop.panels.paper_trade_panel import PaperTradePanel
 from desktop.panels.ranking_panel import RankingPanel
+from desktop.panels.tf_alignment_panel import TFAlignmentPanel
+from desktop.panels.trade_xray_panel import TradeXRayPanel
 from desktop.panels.vpmv_divergence_panel import VpmvDivergencePanel
 from desktop.panels.watchlist_panel import WatchlistPanel
 from desktop.theme import COLORS
@@ -36,6 +38,7 @@ from desktop.workers.divergence_worker import DivergenceWorker
 from desktop.workers.health_worker import HealthWorker, ServiceStatus
 from desktop.workers.market_worker import MarketWorker
 from desktop.workers.signal_worker import SignalWorker
+from desktop.workers.live_metrics_worker import LiveMetricsWorker
 from desktop.workers.vpmv_worker import VpmvWorker
 
 
@@ -299,6 +302,28 @@ class MainWindow(QMainWindow):
         self._add_panel_toggle(ranking_dock)
         self._docks["ranking"] = ranking_dock
 
+        # ── TF Hizalanma Adayları paneli (sağ tabified) ────────────────────
+        self._tf_alignment_panel = TFAlignmentPanel(db_cfg, redis_url, self)
+        tf_alignment_dock = QDockWidget("TF Hizalanma Adayları", self)
+        tf_alignment_dock.setObjectName("dock_tf_alignment")
+        tf_alignment_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        tf_alignment_dock.setWidget(self._tf_alignment_panel)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, tf_alignment_dock)
+        self.tabifyDockWidget(chart_dock, tf_alignment_dock)
+        self._add_panel_toggle(tf_alignment_dock)
+        self._docks["tf_alignment"] = tf_alignment_dock
+
+        # ── İşlem Röntgeni paneli (alt, geniş — Aktif Sinyaller/Paper Trade ile tabified)
+        self._trade_xray_panel = TradeXRayPanel(db_cfg, self)
+        trade_xray_dock = QDockWidget("İşlem Röntgeni", self)
+        trade_xray_dock.setObjectName("dock_trade_xray")
+        trade_xray_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        trade_xray_dock.setWidget(self._trade_xray_panel)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, trade_xray_dock)
+        self.tabifyDockWidget(active_sig_dock, trade_xray_dock)
+        self._add_panel_toggle(trade_xray_dock)
+        self._docks["trade_xray"] = trade_xray_dock
+
         # ── Devisso Sıralama paneli (sağ tabified) ────────────────────────
         self._deviso_panel = DevisoPanel(self)
         deviso_dock = QDockWidget("Devisso Sırala", self)
@@ -313,6 +338,7 @@ class MainWindow(QMainWindow):
         # ── Paper Trade paneli (alt, tabified) ────────────────────────────
         self._paper_trade_panel = PaperTradePanel(db_cfg, redis_url, self)
         self._paper_trade_panel.symbol_selected.connect(self._chart_panel.load_symbol)
+        self._paper_trade_panel.signal_data_selected.connect(self._chart_panel.set_signal_marker)
         paper_dock = QDockWidget("★ Paper Trade", self)
         paper_dock.setObjectName("dock_paper_trade")
         paper_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
@@ -446,6 +472,18 @@ class MainWindow(QMainWindow):
         self._signal_worker.new_signal.connect(self._vpmv_worker.add_symbol)
         self._vpmv_worker.start()
         self._workers.append(self._vpmv_worker)
+
+        # Canlı metrikler (Güç Sıralaması, VPMV/Z Ayrışması, TF Hizalanma,
+        # Verimlilik) — Aktif Sinyaller tablosunun yeni sütunları (27 Tem 2026)
+        self._live_metrics_worker = LiveMetricsWorker(redis_url, parent=self)
+        self._live_metrics_worker.metrics_updated.connect(
+            self._active_signals_panel.on_live_metrics_updated
+        )
+        self._signal_worker.signals_loaded.connect(self._live_metrics_worker.set_active_signals)
+        self._signal_worker.new_signal.connect(self._live_metrics_worker.add_signal)
+        self._signal_worker.signals_closed.connect(self._live_metrics_worker.remove_signals)
+        self._live_metrics_worker.start()
+        self._workers.append(self._live_metrics_worker)
 
         # Deviso panel — signals_loaded/new_signal/signals_closed ile beslenir
         self._signal_worker.signals_loaded.connect(self._deviso_panel.on_signals_loaded)

@@ -35,13 +35,27 @@ _FEE_RATE = 0.0005
 
 class ManualTradeDialog(QDialog):
 
-    def __init__(self, db_config: dict[str, Any], redis_url: str, parent=None):
+    def __init__(
+        self,
+        db_config: dict[str, Any],
+        redis_url: str,
+        parent=None,
+        prefill_symbol: str = "",
+        prefill_direction: str = "Long",
+        prefill_interval: str = "",
+        prefill_price: float = 0.0,
+        strategy: str = "tf_alignment_live",
+    ):
         super().__init__(parent)
         self._db_config = db_config
         self._redis_url = redis_url
+        self._strategy = strategy
         self.setWindowTitle("Manuel Paper Trade Aç")
         self.setMinimumWidth(340)
-        self._direction = "Long"
+        self._direction = prefill_direction if prefill_direction in ("Long", "Short") else "Long"
+        self._prefill_symbol = prefill_symbol
+        self._prefill_interval = prefill_interval
+        self._prefill_price = prefill_price
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -56,6 +70,8 @@ class ManualTradeDialog(QDialog):
         self._sym = QLineEdit()
         self._sym.setPlaceholderText("örn. BTCUSDT")
         self._sym.textChanged.connect(lambda t: self._sym.setText(t.upper()))
+        if self._prefill_symbol:
+            self._sym.setText(self._prefill_symbol.upper())
         form.addRow("Sembol:", self._sym)
 
         # Yön
@@ -76,7 +92,7 @@ class ManualTradeDialog(QDialog):
         # TF
         self._tf = QComboBox()
         self._tf.addItems(_TFS)
-        self._tf.setCurrentText("15m")
+        self._tf.setCurrentText(self._prefill_interval if self._prefill_interval in _TFS else "15m")
         form.addRow("TF:", self._tf)
 
         # Giriş fiyatı
@@ -84,7 +100,7 @@ class ManualTradeDialog(QDialog):
         self._entry.setDecimals(6)
         self._entry.setRange(0.0, 9_999_999.0)
         self._entry.setSpecialValueText("Auto (güncel fiyat)")
-        self._entry.setValue(0.0)
+        self._entry.setValue(self._prefill_price or 0.0)
         form.addRow("Giriş $:", self._entry)
 
         # SL
@@ -188,11 +204,11 @@ class ManualTradeDialog(QDialog):
                          position_usd, entry_price, stop_loss_price, take_profit_price,
                          status, opened_at)
                     VALUES
-                        ('manual', 'manual', %s, %s, %s,
+                        (%s, 'manual', %s, %s, %s,
                          %s, %s, %s, %s,
                          'open', %s)
                 """,
-                    (symbol, self._direction, tf, _POSITION_USD, entry, sl, tp, now),
+                    (self._strategy, symbol, self._direction, tf, _POSITION_USD, entry, sl, tp, now),
                 )
             conn.commit()
         except Exception as exc:

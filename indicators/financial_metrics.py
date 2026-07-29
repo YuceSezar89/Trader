@@ -11,18 +11,45 @@ SMOOTH_PERIOD_COMMON = 3
 MOMENTUM_LENGTH = 14
 RSI_LENGTH = 14
 
-# Interval bazında lookback ve yıllık bar sayısı
-_LOOKBACK_BY_TF: dict[str, int] = {
-    "1m": 500,
-    "5m": 288,
-    "15m": 200,
-    "30m": 192,
-    "1h": 168,
-    "4h": 180,
-    "6h": 120,
-    "8h": 90,
-    "12h": 60,
-    "1d": 250,
+# 20 Tem 2026: tek bir paylaşılan "lookback" iki farklı ihtiyacı karşılamaya
+# çalışıyordu — Sharpe/Sortino/Omega/Calmar "piyasa rejimi" (sinyalden bağımsız,
+# ~30 gün gibi genel bir yakın-geçmiş) isterken, Beta/Alpha "sinyal ömrü"
+# (bu sinyal AÇIKKEN piyasaya göre nasıl davrandı, gerçek tutulma süresine
+# yakın) istiyor. İkisi çelişiyordu: Calmar için pencere çok kısaydı (payda
+# sürekli sıfıra yakın çıkıp oranı patlatıyordu), Beta/Alpha için ise çok
+# uzundu (5m sinyal birkaç saatte kapanırken beta "son 1 ay" soruyordu).
+# Ayrıştırıldı — bkz. sohbet, gerçek medyan sinyal tutulma süresi ölçüldü.
+
+# Piyasa-rejimi penceresi: Sharpe/Sortino/Omega/Calmar için, ~30 gün hedefi
+# (1m/5m hesaplama maliyeti için kısaltıldı, 4h+ zaten ~30 gün civarındaydı)
+_LOOKBACK_REGIME_BY_TF: dict[str, int] = {
+    "1m": 10080,  # 7 gün (tam 30 gün çok ağır olurdu)
+    "5m": 4032,  # 14 gün
+    "15m": 2880,  # 30 gün
+    "30m": 1440,  # 30 gün
+    "1h": 720,  # 30 gün
+    "4h": 180,  # 30 gün (değişmedi)
+    "6h": 120,  # 30 gün (değişmedi)
+    "8h": 90,  # 30 gün (değişmedi)
+    "12h": 60,  # 30 gün (değişmedi)
+    "1d": 250,  # ~8 ay (değişmedi, sorunlu değildi)
+}
+
+# Sinyal-ömrü penceresi: Beta/Alpha için, gerçek medyan sinyal tutulma
+# süresinin ~3 katı (signals tablosundan ölçüldü — 1m/5m/15m/1h gerçek veri,
+# 4h çok az örnekli (n=3) tahmin, 30m/6h/8h/12h/1d hiç işlem görmediği için
+# makul ekstrapolasyon)
+_LOOKBACK_SIGNAL_BY_TF: dict[str, int] = {
+    "1m": 64,  # ~1 saat (medyan 21dk × 3)
+    "5m": 85,  # ~7 saat (medyan 141dk × 3)
+    "15m": 81,  # ~20 saat (medyan 405dk × 3)
+    "30m": 48,  # ~24 saat (veri yok, ekstrapolasyon)
+    "1h": 92,  # ~3.8 gün (medyan 1841.7dk × 3)
+    "4h": 60,  # ~10 gün (n=3, güvenilmez)
+    "6h": 40,  # veri yok, ekstrapolasyon
+    "8h": 30,  # veri yok, ekstrapolasyon
+    "12h": 30,  # veri yok, ekstrapolasyon
+    "1d": 30,  # veri yok, ekstrapolasyon
 }
 _BARS_PER_YEAR: dict[str, int] = {
     "1m": 525600,
@@ -47,9 +74,12 @@ def calculate_metrics(df, ref_df=None, beta_window=50, alpha_window=20, interval
     # SettingWithCopyWarning uyarılarını önlemek için olası dilimleri kopyaya çevir
     df = df.copy()
 
-    lookback = _LOOKBACK_BY_TF.get(interval, LOOKBACK_COMMON)
+    lookback = _LOOKBACK_REGIME_BY_TF.get(interval, LOOKBACK_COMMON)
     ann_sqrt = _BARS_PER_YEAR.get(interval, 8760) ** 0.5
-    beta_window = lookback
+    # Beta/Alpha "sinyal ömrü" penceresi kullanır — Sharpe/Sortino/Omega/Calmar'ın
+    # "piyasa rejimi" penceresinden (lookback) kasıtlı olarak farklı, bkz. yukarıdaki not
+    beta_window = _LOOKBACK_SIGNAL_BY_TF.get(interval, beta_window)
+    alpha_window = _LOOKBACK_SIGNAL_BY_TF.get(interval, alpha_window)
 
     if not isinstance(df, pd.DataFrame):
         logger.error(f"Expected pandas.DataFrame, got {type(df)}")
@@ -260,11 +290,16 @@ def calculate_metrics(df, ref_df=None, beta_window=50, alpha_window=20, interval
     )
     df["sortino_ratio"] = df["sortino_ratio"].fillna(0)
 
-    # Calmar: annualized return / max drawdown (peak-to-current, tek geçiş)
+    # Calmar: yıllıklandırılmış getiri / pencere-içi EN KÖTÜ drawdown (standart
+    # tanım — 20 Tem 2026 düzeltmesi: eskiden "o anki" tepe-mesafesi kullanılıyordu,
+    # bu neredeyse hep sıfıra yakın olduğu için oran patlıyor, clip(-50,50) sürekli
+    # ±50'ye yapışıyordu. Artık pencere boyunca görülen en kötü drawdown kullanılıyor
+    # (tepeye yakınken bile pencerede geçmiş bir düşüş varsa payda stabil kalır).
     rolling_peak = df["price"].rolling(window=lookback, min_periods=1).max()
-    current_dd = ((df["price"] - rolling_peak) / rolling_peak.replace(0, np.nan)).abs().add(1e-6)
+    drawdown = (df["price"] - rolling_peak) / rolling_peak.replace(0, np.nan)
+    max_dd = drawdown.rolling(window=lookback, min_periods=1).min().abs().add(1e-6)
     ann_return = df["avg_return"] * _BARS_PER_YEAR.get(interval, 8760)
-    df.loc[:, "calmar_ratio"] = ann_return / current_dd
+    df.loc[:, "calmar_ratio"] = ann_return / max_dd
     df["calmar_ratio"] = df["calmar_ratio"].fillna(0).clip(-50, 50)
 
     df.loc[:, "positive_returns"] = np.where(df["returns"] > 0, df["returns"], 0)

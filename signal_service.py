@@ -10,11 +10,21 @@ import asyncio
 import functools
 import json
 import os
+import resource
 import signal
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 
 import pandas as pd
+
+# macOS varsayılan fd limiti (256) ağır importlarla (scipy/sqlalchemy vb.) tek
+# başına doluyor, Binance bağlantıları için yer kalmıyor ve bu "DNS'e
+# ulaşılamıyor" hatası olarak görünüyor (17 Tem 2026). Sistem geneli LaunchDaemon
+# ile de yükseltildi, bu satır süreç bu ayardan bağımsız başlarsa yedek güvence.
+try:
+    resource.setrlimit(resource.RLIMIT_NOFILE, (4096, 8192))
+except (ValueError, OSError):
+    pass
 
 from config import Config
 from indicators.financial_metrics import calculate_metrics
@@ -28,9 +38,13 @@ from signals.paper_trade_manager import (
     paper_trade_manager,
     rsi_15m_manager,
     rsi_cross_live_manager,
+    ta_kovalama_live_manager,
+    tf_alignment_live_manager,
 )
 from signals.risk_manager import risk_manager
 from signals.signal_processor import process_and_enrich_signals, trim_to_closed_bar
+from signals.tf_alignment_gate import load_pending_from_db, tf_alignment_eval_loop
+from signals.trade_snapshot import trade_snapshot_loop
 from utils.heartbeat import beat, record_activity, throughput_watchdog_loop, watchdog_loop
 from utils.logger import get_logger
 from utils.redis_client import SAFE_EXTERNAL_TIMEOUT, RedisClient
@@ -280,7 +294,21 @@ async def _check_do_open_streak(symbol: str, df_15m: pd.DataFrame) -> None:
         sl_dist = entry["price"] - entry["sl_price"]
         if sl_dist <= 0:
             return
-        position_usd = cfg["TARGET_RISK_USD"] * entry["price"] / sl_dist
+
+        if "volume" in df_15m.columns:
+            recent = df_15m.tail(96)  # ~1 gün, 15m
+            avg_liquidity_usd = float((recent["volume"].astype(float) * recent["close"].astype(float)).mean())
+            if avg_liquidity_usd < cfg["MIN_LIQUIDITY_USD"]:
+                logger.info(
+                    "[%s] do_open_streak elendi: likidite $%.0f < eşik $%.0f",
+                    symbol, avg_liquidity_usd, cfg["MIN_LIQUIDITY_USD"],
+                )
+                return
+
+        position_usd = min(
+            cfg["TARGET_RISK_USD"] * entry["price"] / sl_dist,
+            cfg["MAX_POSITION_USD"],
+        )
 
         await do_open_streak_manager.open_direct(
             symbol=symbol,
@@ -326,6 +354,8 @@ async def _risk_check_loop() -> None:
         await do_kirilimi_manager.check_all_prices(prices)
         await do_open_streak_manager.check_all_prices(prices)
         await rsi_cross_live_manager.check_all_prices(prices)
+        await tf_alignment_live_manager.check_all_prices(prices)
+        await ta_kovalama_live_manager.check_all_prices(prices)
         await beat("paper_trading_risk_check")
 
 
@@ -344,13 +374,31 @@ async def _ha_cross_evol_exit_loop() -> None:
         await beat("ha_cross_evol_exit")
 
 
+_PROCESS_EVENT_TIMEOUT = 30  # saniye — normal işleme <100ms, bu sadece takılma koruması
+
+
 async def _handle_message(client, msg_id: str, fields: dict) -> None:
     """Tek bir event'i semaphore ile sınırlı eşzamanlılıkta işler, sonunda ack eder.
     xack'in kendisi başarısız olursa mesaj PEL'de kalır — _reclaim_stale_loop onu
-    daha sonra geri alıp yeniden dener (idempotency zaten çift-işlemeyi önlüyor)."""
+    daha sonra geri alıp yeniden dener (idempotency zaten çift-işlemeyi önlüyor).
+
+    `_process_event`'in ÖNCEDEN dış zaman aşımı yoktu — 15 Tem 2026'da canlıda iki
+    kez yakalandı: tek bir event içeride (DB/Redis bağlantı havuzu beklemesi vb.)
+    takılınca `_consume_loop`'taki `asyncio.gather` de onunla birlikte donuyor,
+    `beat()` hiç çağrılmıyor, 180s sonra throughput izleyici SÜRECİ ÖLDÜRÜYOR
+    (launchd olmadan hiçbir şey yeniden başlatmıyor). `asyncio.wait_for` ile artık
+    tek bir yavaş event sadece kendi mesajını timeout'a düşürüyor, tüm süreci
+    değil — mesaj xack edilmeden PEL'de kalır, _reclaim_stale_loop sonra yeniden
+    dener."""
     async with _process_semaphore:
         try:
-            await _process_event(fields)
+            await asyncio.wait_for(_process_event(fields), timeout=_PROCESS_EVENT_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.error(
+                "[%s] event işleme %ds'yi aştı, atlanıyor (PEL'de kalıp reclaim'e düşecek)",
+                fields,
+                _PROCESS_EVENT_TIMEOUT,
+            )
         except Exception as e:  # pylint: disable=broad-exception-caught
             logger.error("[%s] event işleme hatası: %s", fields, e, exc_info=True)
         finally:
@@ -477,6 +525,9 @@ async def run_all() -> None:
     await do_kirilimi_manager.load_open_symbols()
     await do_open_streak_manager.load_open_symbols()
     await rsi_cross_live_manager.load_open_symbols()
+    await tf_alignment_live_manager.load_open_symbols()
+    await ta_kovalama_live_manager.load_open_symbols()
+    await load_pending_from_db()
 
     consume_task = asyncio.create_task(
         _supervised(_consume_loop(), "signal_service_consume"), name="signal_service_consume"
@@ -514,6 +565,12 @@ async def run_all() -> None:
         ),
         name="signal_service_throughput",
     )
+    tf_alignment_task = asyncio.create_task(
+        _supervised(tf_alignment_eval_loop(), "tf_alignment_eval"), name="tf_alignment_eval"
+    )
+    trade_snapshot_task = asyncio.create_task(
+        _supervised(trade_snapshot_loop(), "trade_snapshot"), name="trade_snapshot"
+    )
     tasks = {
         consume_task,
         risk_check_task,
@@ -522,6 +579,8 @@ async def run_all() -> None:
         queue_lag_task,
         reclaim_task,
         throughput_task,
+        tf_alignment_task,
+        trade_snapshot_task,
     }
 
     def _handler(sig_name: str) -> None:

@@ -1,4 +1,5 @@
 import asyncio
+import json
 import time
 from typing import Awaitable, Callable, Optional
 
@@ -11,6 +12,12 @@ from database.engine import get_session, run_with_db_timeout
 from database.models import Signal
 from indicators.core import calculate_adx, calculate_atr, calculate_rsi, truncate_after_gap
 from indicators.financial_metrics import calculate_metrics
+from signals import ta_kovalama_gate, tf_alignment_gate
+from signals.market_context import (
+    compute_cvd_slope,
+    compute_smc_market_structure,
+    compute_vp_score,
+)
 from signals.paper_trade_manager import (
     ha_cross_manager,
     paper_trade_manager,
@@ -109,6 +116,84 @@ async def _get_pt_flag() -> str:
     except Exception as exc:
         logger.warning("paper_trade_enabled bayrağı okunamadı, önbellek kullanılıyor: %s", exc)
     return _PT_FLAG_CACHE["value"]
+
+
+# 18 Tem 2026: research/pattern_lab/rsi_cross_combined_score_bt.py üst tercile
+# (top %33) 4 kapılı doğrulandı (korelasyon+gerçek $+placebo+split-period,
+# bkz. [[project_rsi_cross_combined_score]]) — ama backtest'in SABİT eşiği
+# (66.28) canlı evrenin o anki dağılımına göre kalibre değil: piyasa durgunken
+# evren ortalaması düşüyor, sabit sayı neredeyse hiçbir sinyali geçirmiyordu
+# (canlıda ölçüldü: %12.7 geçiş, beklenen %33). Bunun yerine DİNAMİK yüzdelik
+# dilim kullanılıyor — panelin rank_score'unun zaten yaptığı gibi, o anki
+# CANLI evrene göre üst tercile mi diye bakılıyor, piyasa rejimine göre
+# kendini otomatik ayarlıyor.
+_RSI_CROSS_GATE_PERCENTILE = 0.667
+_RSI_CROSS_GATE_MIN_UNIVERSE = 30
+_RSI_CROSS_SNAPSHOT_CACHE: dict = {"data": None, "ts": 0.0}
+_RSI_CROSS_SNAPSHOT_TTL = 30.0
+
+
+async def _get_ranking_snapshot() -> Optional[dict]:
+    """ranking:snapshot'ı (symbol -> row) sözlüğe çevirip 30sn cache'ler —
+    backend (live_data_manager.py::_ranking_publish_loop) zaten ~90sn'de bir
+    yeniliyor, her sinyalde ayrı Redis GET+json.loads gereksiz."""
+    now = time.monotonic()
+    if (
+        _RSI_CROSS_SNAPSHOT_CACHE["data"] is not None
+        and now - _RSI_CROSS_SNAPSHOT_CACHE["ts"] < _RSI_CROSS_SNAPSHOT_TTL
+    ):
+        return _RSI_CROSS_SNAPSHOT_CACHE["data"]
+    try:
+        raw = await asyncio.wait_for(
+            RedisClient.get_client().get("ranking:snapshot"),
+            timeout=SAFE_EXTERNAL_TIMEOUT,
+        )
+        if not raw:
+            return _RSI_CROSS_SNAPSHOT_CACHE["data"]
+        rows = json.loads(raw)
+        by_symbol = {row["symbol"]: row for row in rows if "symbol" in row}
+        _RSI_CROSS_SNAPSHOT_CACHE["data"] = by_symbol
+        _RSI_CROSS_SNAPSHOT_CACHE["ts"] = now
+        return by_symbol
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.debug("ranking:snapshot okunamadı, önbellek kullanılıyor: %s", exc)
+        return _RSI_CROSS_SNAPSHOT_CACHE["data"]
+
+
+async def _rsi_cross_gate_passed(symbol: str, signal_type: str) -> bool:
+    """RSI Cross combined skorunun, O ANKİ CANLI EVRENE göre üst tercile'de
+    olup olmadığını kontrol eder — SADECE rsi_cross_live stratejisi için
+    (diğer paper trade yöneticileri etkilenmez). Yön-ayarlama (adj = raw
+    Long için, 100-raw Short için) TÜM evrene aynı sinyalin yönüymüş gibi
+    uygulanıp yüzdelik dilim hesaplanıyor — böylece Long ve Short için ayrı
+    ama tutarlı, simetrik bir karşılaştırma evreni oluşuyor. Veri yoksa/
+    sembol snapshot'ta yoksa/evren çok küçükse FAIL-OPEN: gate atlanır,
+    sinyal normal açılır — Redis/ranking aksaklığı stratejiyi sessizce
+    tamamen durdurmasın (kullanıcı kararı, 18 Tem 2026)."""
+    snapshot = await _get_ranking_snapshot()
+    if not snapshot or symbol not in snapshot:
+        return True
+    raw = snapshot[symbol].get("rsi_cross_combined")
+    if raw is None:
+        return True
+
+    universe = [
+        row["rsi_cross_combined"]
+        for row in snapshot.values()
+        if row.get("rsi_cross_combined") is not None
+    ]
+    if len(universe) < _RSI_CROSS_GATE_MIN_UNIVERSE:
+        return True
+
+    if signal_type == "Long":
+        my_adj = raw
+        universe_adj = universe
+    else:
+        my_adj = 100.0 - raw
+        universe_adj = [100.0 - v for v in universe]
+
+    percentile = sum(1 for v in universe_adj if v < my_adj) / len(universe_adj)
+    return percentile >= _RSI_CROSS_GATE_PERCENTILE
 
 
 _MIN_BARS: dict[str, int] = {
@@ -280,70 +365,6 @@ def _compute_devisso_score(df: pd.DataFrame) -> Optional[float]:
         return None
 
 
-def _compute_smc(
-    df: pd.DataFrame, sig_type: str, lookback: int = 50
-) -> tuple[Optional[float], str]:
-    """
-    Premium/Discount zone + Market Structure (BOS/CHoCH).
-
-    pd_zone: (close - low_N) / (high_N - low_N) * 100
-      0-25  → Deep Discount | 25-50 → Discount | 50-75 → Premium | 75-100 → Deep Premium
-
-    market_structure: sinyal-yapı uyumu (son yapısal olayın YÖNÜ baz alınır;
-    kütüphanenin BOS/CHoCH olay ayrımı kullanılmaz — ok sinyal yönünü gösterir).
-      Uyum↑  / Uyum↓  — sinyal mevcut yapıyla aynı yönde (trend devamı)
-      Karşı↑ / Karşı↓ — sinyal yapıya karşı (dönüş denemesi)
-      -               — yapı belirlenemedi
-    """
-    try:
-        if len(df) < lookback + 5:
-            return None, "-"
-
-        from smartmoneyconcepts import smc as _smc_lib  # pylint: disable=import-outside-toplevel
-
-        df_use = df.tail(lookback).copy().reset_index(drop=True)
-        high = df_use["high"].astype(float)
-        low = df_use["low"].astype(float)
-        close = df_use["close"].astype(float)
-
-        rng_high = float(high.max())
-        rng_low = float(low.min())
-        pd_zone: Optional[float] = None
-        if rng_high > rng_low:
-            pd_zone = round(((float(close.iloc[-1]) - rng_low) / (rng_high - rng_low)) * 100, 1)
-
-        df_smc = df_use[["open", "high", "low", "close", "volume"]].copy()
-        for col in df_smc.columns:
-            df_smc[col] = df_smc[col].astype(float)
-
-        swing_df = _smc_lib.swing_highs_lows(df_smc, swing_length=5)
-        bos_df = _smc_lib.bos_choch(df_smc, swing_df, close_break=True)
-
-        structure_dir = 0
-        for i in range(len(bos_df) - 1, -1, -1):
-            bos_val = bos_df["BOS"].iloc[i]
-            choch_val = bos_df["CHOCH"].iloc[i]
-            if not np.isnan(bos_val):
-                structure_dir = int(bos_val)
-                break
-            if not np.isnan(choch_val):
-                structure_dir = int(choch_val)
-                break
-
-        if structure_dir == 0:
-            return pd_zone, "-"
-
-        structure = "-"
-        if structure_dir == 1:
-            structure = "Uyum↑" if sig_type == "Long" else "Karşı↓"
-        elif structure_dir == -1:
-            structure = "Uyum↓" if sig_type == "Short" else "Karşı↑"
-
-        return pd_zone, structure
-    except Exception:  # pylint: disable=broad-exception-caught
-        return None, "-"
-
-
 def _compute_candle_pattern(df: pd.DataFrame) -> str:
     """
     Son mumda tespit edilen candlestick pattern(ler)i döner.
@@ -447,57 +468,6 @@ async def _compute_fvg(symbol: str, sig_type: str, entry_price: float) -> str:
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.debug("FVG hesabı [%s] atlandı: %s", symbol, exc)
     return ",".join(matched) if matched else "-"
-
-
-def _compute_vp_score(
-    df: pd.DataFrame, lookback: int = 500, use_real_volume: bool = False
-) -> tuple[float, float]:
-    """
-    %VP Normalized Lines — PineScript birebir çeviri.
-
-    PineScript ta.cum() → Python cumsum() (DataFrame başından itibaren)
-    Normalize: rolling(lookback).min/max — PineScript ta.lowest/highest(lookback)
-
-    use_real_volume=True: bv/sv vekil formül yerine gerçek taker verisinden
-    (buy_volume/sell_volume); kolonlar yoksa (nan, nan) döner.
-
-    Returns: (buy_positive_avg, sell_negative_avg) — her ikisi 0-100 arası
-    vp_score = buy_positive_avg - sell_negative_avg  →  pozitif: alıcı baskısı
-    """
-    try:
-        price_change = df["close"].diff().fillna(0.0)
-        cum_positive = price_change.clip(lower=0.0).cumsum()
-        cum_negative = (-price_change).clip(lower=0.0).cumsum()
-        total_move = (cum_positive + cum_negative).replace(0, np.nan)
-        positive_pct = (cum_positive / total_move * 100).fillna(50.0)
-        negative_pct = (cum_negative / total_move * 100).fillna(50.0)
-
-        if use_real_volume:
-            if "buy_volume" not in df.columns or not df["buy_volume"].notna().any():
-                return float("nan"), float("nan")
-            bv = df["buy_volume"].fillna(0.0)
-            sv = df["sell_volume"].fillna(0.0)
-        else:
-            hl_range = (df["high"] - df["low"]).clip(lower=1e-8)
-            bv = df["volume"] * (df["close"] - df["low"]) / hl_range
-            sv = df["volume"] * (df["high"] - df["close"]) / hl_range
-        cum_buy = bv.cumsum()
-        cum_sell = sv.cumsum()
-        total_vol = (cum_buy + cum_sell).replace(0, np.nan)
-        buy_pct = (cum_buy / total_vol * 100).fillna(50.0)
-        sell_pct = (cum_sell / total_vol * 100).fillna(50.0)
-
-        def _norm(s: pd.Series) -> pd.Series:
-            lo = s.rolling(lookback, min_periods=1).min()
-            hi = s.rolling(lookback, min_periods=1).max()
-            return ((s - lo) / (hi - lo + 1e-10) * 100).fillna(50.0)
-
-        buy_pos_avg = (_norm(buy_pct) + _norm(positive_pct)) / 2
-        sell_neg_avg = (_norm(sell_pct) + _norm(negative_pct)) / 2
-
-        return round(float(buy_pos_avg.iloc[-1]), 2), round(float(sell_neg_avg.iloc[-1]), 2)
-    except Exception:
-        return 50.0, 50.0
 
 
 async def process_and_enrich_signals(
@@ -665,32 +635,11 @@ async def process_and_enrich_signals(
                     pass
 
                 # CVD slope (normalize, -1..+1)
-                _cvd_slope: Optional[float] = None
-                try:
-                    df_g = truncate_after_gap(df)
-                    if "buy_volume" in df_g.columns and df_g["buy_volume"].notna().any():
-                        _bv = df_g["buy_volume"].fillna(
-                            df_g["volume"]
-                            * (df_g["close"] - df_g["low"])
-                            / (df_g["high"] - df_g["low"]).clip(lower=1e-8)
-                        )
-                    else:
-                        _cvd_hl = (df_g["high"] - df_g["low"]).clip(lower=1e-8)
-                        _bv = df_g["volume"] * (df_g["close"] - df_g["low"]) / _cvd_hl
-                    _cvd = (2 * _bv - df_g["volume"]).cumsum()
-                    _avg_vol = df_g["volume"].rolling(10).mean().clip(lower=1e-8)
-                    _cvd_slope = round(
-                        float((_cvd.diff().rolling(10).mean() / _avg_vol).iloc[-1]), 4
-                    )
+                _cvd_slope = compute_cvd_slope(df)
+                if _cvd_slope is not None:
                     logger.info(
-                        "CVD | %s | %s | %s | slope=%.4f",
-                        symbol,
-                        sig_type,
-                        interval,
-                        _cvd_slope,
+                        "CVD | %s | %s | %s | slope=%.4f", symbol, sig_type, interval, _cvd_slope
                     )
-                except Exception:  # pylint: disable=broad-exception-caught
-                    pass
 
                 # 4. Minimum skor filtresi (B kapısı)
                 if vpms_score is not None and vpms_score < min_vpmv:
@@ -901,13 +850,13 @@ async def process_and_enrich_signals(
                     _deviso,
                 )
 
-                _vp_buy, _vp_sell = _compute_vp_score(df)
+                _vp_buy, _vp_sell = compute_vp_score(df)
                 _vp_score = round(_vp_buy - _vp_sell, 2)
                 enriched_signal["vp_buy_avg"] = _vp_buy
                 enriched_signal["vp_sell_avg"] = _vp_sell
                 enriched_signal["vp_score"] = _vp_score
 
-                _vpr_buy, _vpr_sell = _compute_vp_score(df, use_real_volume=True)
+                _vpr_buy, _vpr_sell = compute_vp_score(df, use_real_volume=True)
                 _vp_score_real = None if np.isnan(_vpr_buy) else round(_vpr_buy - _vpr_sell, 2)
                 enriched_signal["vp_score_real"] = _vp_score_real
                 logger.info(
@@ -920,16 +869,12 @@ async def process_and_enrich_signals(
                     _vp_score,
                 )
 
-                _pd_zone, _mkt_structure = _compute_smc(df, sig_type)
-                enriched_signal["pd_zone"] = _pd_zone
+                # Premium/Discount zone KASITLI OLARAK kaldırıldı (19 Tem 2026,
+                # kullanıcı kararı — işe yaramıyordu). Sadece market_structure kaldı.
+                _mkt_structure = compute_smc_market_structure(df, sig_type)
                 enriched_signal["market_structure"] = _mkt_structure
                 logger.info(
-                    "SMC | %s | %s | %s | pd=%.1f struct=%s",
-                    symbol,
-                    sig_type,
-                    interval,
-                    _pd_zone or -1,
-                    _mkt_structure,
+                    "SMC | %s | %s | %s | struct=%s", symbol, sig_type, interval, _mkt_structure
                 )
 
                 _fvg_tfs = await _compute_fvg(
@@ -998,7 +943,26 @@ async def process_and_enrich_signals(
                             await paper_trade_manager.on_new_signal(**_pt_kwargs)
                         await ha_cross_manager.on_new_signal(**_pt_kwargs)
                         await rsi_15m_manager.on_new_signal(**_pt_kwargs)
-                        await rsi_cross_live_manager.on_new_signal(**_pt_kwargs)
+                        if enriched_signal.get("indicators") != "RSI_Cross(9,24)" or (
+                            await _rsi_cross_gate_passed(symbol, enriched_signal["signal_type"])
+                        ):
+                            await rsi_cross_live_manager.on_new_signal(**_pt_kwargs)
+                        else:
+                            logger.info(
+                                "[%s] RSI Cross gate reddetti (combined skor üst tercile altında)",
+                                symbol,
+                            )
+                        await tf_alignment_gate.register_candidate(enriched_signal, signal_id)
+                        await ta_kovalama_gate.evaluate_and_open(
+                            enriched_signal,
+                            signal_id,
+                            current_price,
+                            btc_z_score=btc_z,
+                            btc_trend=btc_trend_str,
+                            funding_rate=funding,
+                            regime_trend=regime_trend,
+                            volatility_regime=volatility_regime,
+                        )
 
             except Exception as e:
                 logger.error(f"[{symbol}] Sinyal kayıt hatası: {e}", exc_info=True)

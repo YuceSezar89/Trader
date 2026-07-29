@@ -222,6 +222,15 @@ class WatchlistProxyModel(QSortFilterProxyModel):
         self.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self.setFilterKeyColumn(COL_SYMBOL)
         self.setSortRole(Qt.ItemDataRole.UserRole + 1)
+        # 27 Tem 2026: market_worker.py her 20sn'de ~600 izlenen sembolün
+        # HER BİRİ için AYRI dataChanged tetikliyor (price_updated, sembol
+        # başına) — dynamicSortFilter=True (varsayılan) iken bu, 20 saniyede
+        # bir art arda ~600 kez TÜM tabloyu yeniden sıralatıyordu (Aktif
+        # Sinyaller'de bulunan aynı anti-desen, bkz.
+        # active_signals_panel.py::_setup_resort_timer). Arama filtresi
+        # (setFilterFixedString) ve header-tıklama sıralaması bundan
+        # etkilenmiyor — ikisi de dynamicSortFilter'dan bağımsız çalışır.
+        self.setDynamicSortFilter(False)
 
     def lessThan(self, left: QModelIndex, right: QModelIndex) -> bool:
         src = self.sourceModel()

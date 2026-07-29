@@ -21,7 +21,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.engine import get_session, run_with_db_timeout
 from database.models import Signal
-from signals.risk_policy import default_policy
 from utils.redis_client import SAFE_EXTERNAL_TIMEOUT, RedisClient
 
 logger = logging.getLogger(__name__)
@@ -99,22 +98,10 @@ class SignalLifecycleManager:
                             sig_type,
                         )
 
-                    atr_val = signal_data.get("atr") or 0.0
-                    if atr_val > 0:
-                        features = {
-                            "vpms_score": signal_data.get("vpms_score"),
-                            "mtf_score": signal_data.get("mtf_score"),
-                            "interval": interval,
-                        }
-                        levels = default_policy.calculate_levels(
-                            sig_type, open_price, float(atr_val), features
-                        )
-                        sl_price = levels.sl_price
-                        tp_price = levels.tp_price
-                        sl_mult = levels.sl_multiplier
-                        tp_mult = levels.tp_multiplier
-                    else:
-                        sl_price = tp_price = sl_mult = tp_mult = None
+                    # 27 Tem 2026: sinyaller henüz aday aşamasında — SL/TP
+                    # hesabı gerçek pozisyon açılana kadar (paper trade
+                    # tarafı) gereksiz, kaldırıldı (kullanıcı kararı).
+                    sl_price = tp_price = sl_mult = tp_mult = None
 
                     new_deviso = signal_data.get("devisso_score")
                     prev_deviso = await self._get_prev_devisso(
@@ -133,6 +120,12 @@ class SignalLifecycleManager:
 
                     rank_score_val: Optional[float] = None
                     vs_btc_val: Optional[float] = None
+                    rank_combined_val: Optional[float] = None
+                    rank_rsi_cross_val: Optional[float] = None
+                    rank_z_confluence_val: Optional[float] = None
+                    rank_r_score_val: Optional[float] = None
+                    rank_aligned_val: Optional[bool] = None
+                    rank_alignment_count_val: Optional[int] = None
                     try:
                         raw_rank = await asyncio.wait_for(
                             RedisClient.get_client().get("ranking:snapshot"),
@@ -146,6 +139,16 @@ class SignalLifecycleManager:
                             if entry:
                                 rank_score_val = entry.get("rank_score")
                                 vs_btc_val = entry.get("vs_btc")
+                                # 20 Tem 2026 (Faz 1, bkz. docs/plan_radar_data_persistence.md):
+                                # Ranking panelinin geri kalan alanları da aynı okumadan
+                                # bilgi/izleme amaçlı yakalanıyor — filtre değil, henüz test
+                                # edilmemiş ham veri.
+                                rank_combined_val = entry.get("combined")
+                                rank_rsi_cross_val = entry.get("rsi_cross_combined")
+                                rank_z_confluence_val = entry.get("z_confluence")
+                                rank_r_score_val = entry.get("r_score")
+                                rank_aligned_val = entry.get("aligned")
+                                rank_alignment_count_val = entry.get("alignment_count")
                     except Exception as exc:  # pylint: disable=broad-exception-caught
                         logger.debug("[%s] ranking snapshot okunamadı: %s", symbol, exc)
 
@@ -196,6 +199,12 @@ class SignalLifecycleManager:
                         candle_pattern=signal_data.get("candle_pattern"),
                         rank_score=rank_score_val,
                         vs_btc=vs_btc_val,
+                        rank_combined=rank_combined_val,
+                        rank_rsi_cross=rank_rsi_cross_val,
+                        rank_z_confluence=rank_z_confluence_val,
+                        rank_r_score=rank_r_score_val,
+                        rank_aligned=rank_aligned_val,
+                        rank_alignment_count=rank_alignment_count_val,
                         vol_score=signal_data.get("vol_score"),
                         mom_score=signal_data.get("mom_score"),
                         volat_score=signal_data.get("volat_score"),
@@ -254,7 +263,8 @@ class SignalLifecycleManager:
                         if isinstance(opened, datetime) and opened.tzinfo is not None:
                             opened = opened.replace(tzinfo=None)
                         if now - opened > timedelta(hours=hours):
-                            await self._close(session, sig, float(sig.open_price), "timeout")
+                            close_price = await self._current_price(sig.symbol, float(sig.open_price))
+                            await self._close(session, sig, close_price, "timeout")
                             closed_holder["n"] += 1
 
                     if closed_holder["n"]:
@@ -380,6 +390,27 @@ class SignalLifecycleManager:
                 len(actives) - 1,
             )
         return actives[0]
+
+    @staticmethod
+    async def _current_price(symbol: str, fallback: float) -> float:
+        """Canlı fiyatı `ticker:{symbol}` Redis key'inden okur — timeout kapanışı
+        20 Tem 2026'ya kadar sig.open_price'ı kullanıyordu, bu da HER timeout
+        kapanışını sahte %0.000 PnL ile kaydediyordu (gerçek fiyat hareketi
+        hiç ölçülmüyordu). Redis okunamazsa fallback (open_price) kullanılır —
+        bu durumda da PnL 0 çıkar ama en azından istisnai/loglu bir durum olur."""
+        try:
+            raw = await asyncio.wait_for(
+                RedisClient.get_client().get(f"ticker:{symbol}"),
+                timeout=SAFE_EXTERNAL_TIMEOUT,
+            )
+            if raw:
+                price = float(json.loads(raw).get("price", 0) or 0)
+                if price > 0:
+                    return price
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.debug("[%s] timeout kapanışı için canlı fiyat okunamadı: %s", symbol, exc)
+        logger.warning("[%s] canlı fiyat bulunamadı, open_price'a düşülüyor (PnL 0 çıkacak)", symbol)
+        return fallback
 
     async def _close(
         self,

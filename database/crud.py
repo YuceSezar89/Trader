@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -18,24 +18,43 @@ _CAGG_MAP = {
     "15m": "cagg_15m",
     "1h": "cagg_1h",
     "4h": "cagg_4h",
+    "6h": "cagg_6h",
+    "8h": "cagg_8h",
+    "12h": "cagg_12h",
 }
 
+_INTERVAL_MINUTES = {"5m": 5, "15m": 15, "1h": 60, "4h": 240, "6h": 360, "8h": 480, "12h": 720}
 
-async def get_cagg_klines(symbol: str, interval: str, limit: int) -> pd.DataFrame:
-    """CA view'larından (cagg_5m/15m/1h/4h) son N bar'ı Binance formatında döndürür."""
+
+async def get_cagg_klines(
+    symbol: str, interval: str, limit: int, closed_only: bool = False
+) -> pd.DataFrame:
+    """CA view'larından (cagg_5m/15m/1h/4h) son N bar'ı Binance formatında döndürür.
+
+    closed_only=True: CA'lar materialized_only=false ile tanımlı (migration
+    021) — yani real-time agregasyon, sorgu anında henüz kapanmamış son bar'ı
+    da o ana kadarki kısmi veriden hesaplayıp döndürür. 24 Tem 2026'da
+    ta_kovalama_gate.py/tf_alignment_gate.py'nin bu kısmi bar'ı kapanmış
+    sanıp percentile/eğim/HA-rengi hesapladığı, canlı sonuçların backtest'ten
+    ciddi saptığı doğrulandı (bkz. memory: project_rsi_cross_ta_triple_combo_24tem).
+    Bu bayrak açıksa, bucket'ı henüz tamamlanmamış son satır atılır — eşiğe
+    dayalı/gating kararları için varsayılan olmalı. Sadece "şu anki canlı
+    fiyat" isteyen çağıranlar (trade_snapshot.py, grafik/fiyat besleme) bunu
+    açmamalı."""
     view = _CAGG_MAP[interval]
+    fetch_limit = limit + 1 if closed_only else limit
     async with get_session() as session:
         result = await session.execute(
             text(
                 f"""
-                SELECT bucket, open, high, low, close, volume
+                SELECT bucket, open, high, low, close, volume, buy_volume, sell_volume
                 FROM {view}
                 WHERE symbol = :sym
                 ORDER BY bucket DESC
                 LIMIT :lim
             """
             ),
-            {"sym": symbol, "lim": limit},
+            {"sym": symbol, "lim": fetch_limit},
         )
         rows = result.fetchall()
 
@@ -43,6 +62,14 @@ async def get_cagg_klines(symbol: str, interval: str, limit: int) -> pd.DataFram
         return pd.DataFrame()
 
     rows = sorted(rows, key=lambda r: r[0])
+
+    if closed_only:
+        bar_minutes = _INTERVAL_MINUTES[interval]
+        if rows[-1][0] + timedelta(minutes=bar_minutes) > datetime.now():
+            rows = rows[:-1]
+        rows = rows[-limit:]
+        if not rows:
+            return pd.DataFrame()
     df = pd.DataFrame(
         {
             "open_time": [int(r[0].timestamp() * 1000) for r in rows],
@@ -51,10 +78,11 @@ async def get_cagg_klines(symbol: str, interval: str, limit: int) -> pd.DataFram
             "low": [r[3] for r in rows],
             "close": [r[4] for r in rows],
             "volume": [r[5] for r in rows],
+            "buy_volume": [r[6] for r in rows],
+            "sell_volume": [r[7] for r in rows],
         }
     )
-    # CA view'ları yönlü hacim taşımıyor (bilinen sınır — 1h/4h'yi WS doldurur)
-    return check_kline_schema(df, "CA.get_cagg_klines", expect_directional=False)
+    return check_kline_schema(df, "CA.get_cagg_klines")
 
 
 async def initialize_database():

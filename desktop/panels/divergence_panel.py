@@ -312,6 +312,15 @@ class DivergencePanel(QWidget):
 
         # Çizgileri güncelle / oluştur
         for sym, z_arr in series.items():
+            # Boş (0 noktalı) seri pyqtgraph'ta dataBounds() içinde
+            # "'<=' not supported between NoneType" hatasına yol açıyor
+            # (ViewBox auto-range boş eğrinin sınırını None döndürüyor,
+            # 26 Tem 2026 — sürekli tekrarlayan bu hata masaüstü
+            # donma/bellek sızıntısına neden oluyordu).
+            if len(z_arr) == 0:
+                if sym in self._curves:
+                    self._chart.removeItem(self._curves.pop(sym))
+                continue
             color = self._sym_colors[sym]
             x_data = np.arange(len(z_arr), dtype=np.float32)
             y_data = z_arr.astype(np.float32)

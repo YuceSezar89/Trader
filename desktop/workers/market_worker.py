@@ -21,6 +21,11 @@ logger = logging.getLogger(__name__)
 _ARROW_MAGIC = b"ARDF"
 _FALLBACK_MS = 1_000  # prices:live + aktif grafik pollingi — backend 1sn'de bir yazıyor
 _TICKER_POLL_INTERVAL = 20  # saniye — backend ticker:* verisini 60sn'de bir güncelliyor
+_CHART_POLL_INTERVAL = 10  # saniye — gerçek yeni bar _handle_update (pub/sub) ile ANINDA
+# geliyor zaten; bu sadece kaçırılan mesajlara karşı yedek. Önceden her 1sn'de
+# bir TÜM kline buffer'ını Arrow'dan pandas'a yeniden çözüyordu (saatte 3600
+# kez) — sürekli CPU + saatler süren bellek sızıntısının kaynaklarından biri
+# olarak `sample` ile tespit edildi (27 Tem 2026).
 _SYMBOL_DISCOVERY_INTERVAL = (
     60  # saniye — sembol evreni (yeni listing/delisting) bu kadar seyrek değişir
 )
@@ -52,6 +57,7 @@ class MarketWorker(QThread):  # pylint: disable=too-many-instance-attributes
         self._chart_tf: str = ""
         self._last_symbol_discovery: float = 0.0
         self._last_ticker_poll: float = 0.0
+        self._last_chart_poll: float = 0.0
         self._vpmv_symbol: str = ""
         self._vpmv_interval: str = ""
         self._vpmv_signal_type: str = ""
@@ -246,7 +252,8 @@ class MarketWorker(QThread):  # pylint: disable=too-many-instance-attributes
                         float(ticker.get("funding_rate", 0.0)),
                     )
 
-        if chart_sym:
+        if chart_sym and now - self._last_chart_poll >= _CHART_POLL_INTERVAL:
+            self._last_chart_poll = now
             df = self._fetch_klines(chart_sym, chart_tf)
             if df is not None and not df.empty:
                 self.klines_updated.emit(chart_sym, chart_tf, df)

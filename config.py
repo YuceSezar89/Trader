@@ -171,10 +171,14 @@ class Config:
     # Paper Trading stratejileri
     PAPER = {
         "ENABLED_STRATEGIES": [
-            "rsi_cross_live",
-        ],  # otomatik pozisyon açabilen stratejiler — do_kirilimi ve do_open_streak
-        # BİLİNÇLİ OLARAK çıkarıldı (14 Tem 2026): sadece rsi_cross_live performansı
-        # izlenecek. do_kirilimi'nin Telegram bildirimi buna bağlı değil, devam ediyor.
+            "ta_kovalama_live",
+        ],  # 24 Tem 2026: "didik didik" serisinin canlıya alınması (kullanıcı onayı) —
+        # RSI_Cross(9,24)+HA_Cross, Long+Short, all_up+TA-percentile/kovalama+HA
+        # (Long'da), scale-in açık. Detay: signals/ta_kovalama_gate.py,
+        # [[project_rsi_cross_ta_triple_combo_24tem]]. Diğer tüm stratejiler
+        # (tf_alignment_live, rsi_cross_live, do_kirilimi, do_open_streak) 14-22 Tem
+        # arasında BİLİNÇLİ OLARAK durduruldu, mevcut açık pozisyonlar varsa
+        # check_all_prices ile SL/TP/trailing takibine devam eder, yeni giriş yok.
         "DO_KIRILIMI": {
             "SL_ATR": 3.0,  # backtest: 1.5 verimsiz, 3.0 en iyi (PF 1.75)
             "TP_ATR": 6.0,  # R:R 1:2 korunur, TP'de trailing devralır
@@ -184,6 +188,12 @@ class Config:
             # asıl kazandıran büyük hareketi erken kesiyordu — TP YOK, sadece geniş SL.
             "SL_ATR": 3.0,
             "TARGET_RISK_USD": 100.0,  # volatilite-ayarlı boyutlandırma: SL'e değince kaybedilecek hedef $ tutar
+            # 22 Tem 2026 — kök neden analizi: tavansız TARGET_RISK_USD formülü dar
+            # ATR'li sembollerde pozisyonu $6000+'a şişiriyordu, bu semboller aynı
+            # zamanda en ince likiditeliydi (BTC'nin 1000-16000'de biri) → SL kayması
+            # dolar bazında büyüyordu. Kâr garantisi değil, kuyruk-riski sınırı.
+            "MAX_POSITION_USD": 1000.0,
+            "MIN_LIQUIDITY_USD": 50_000.0,  # son 1 günün ort. 15m USD hacmi (volume*close)
         },
     }
 

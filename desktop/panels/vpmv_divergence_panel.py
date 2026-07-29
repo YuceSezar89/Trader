@@ -294,6 +294,13 @@ class VpmvDivergencePanel(QWidget):
                 self._sym_colors[sym] = _PALETTE[i % len(_PALETTE)]
 
         for sym, vpmv_arr in series.items():
+            # Boş (0 noktalı) seri pyqtgraph'ta dataBounds() içinde
+            # "'<=' not supported between NoneType" hatasına yol açıyor
+            # (bkz. divergence_panel.py::_update_chart aynı fix, 26 Tem 2026).
+            if len(vpmv_arr) == 0:
+                if sym in self._curves:
+                    self._chart.removeItem(self._curves.pop(sym))
+                continue
             color = self._sym_colors[sym]
             x_data = np.arange(len(vpmv_arr), dtype=np.float32)
             y_data = vpmv_arr.astype(np.float32)
@@ -303,9 +310,6 @@ class VpmvDivergencePanel(QWidget):
             else:
                 pen = pg.mkPen(color=color, width=1.5)
                 self._curves[sym] = self._chart.plot(x_data, y_data, pen=pen)
-
-            if len(vpmv_arr) == 0:
-                continue
             label_text = sym.replace("USDT", "")
             if sym in self._labels:
                 self._labels[sym].setPos(float(x_data[-1]), float(y_data[-1]))

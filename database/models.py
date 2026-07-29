@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     Column,
     DateTime,
@@ -12,6 +13,7 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, relationship
 
 
@@ -116,6 +118,12 @@ class Signal(Base):
     candle_pattern = Column(String(100), nullable=True)
     rank_score = Column(Float, nullable=True)
     vs_btc = Column(Float, nullable=True)
+    rank_combined = Column(Float, nullable=True)
+    rank_rsi_cross = Column(Float, nullable=True)
+    rank_z_confluence = Column(Float, nullable=True)
+    rank_r_score = Column(Float, nullable=True)
+    rank_aligned = Column(Boolean, nullable=True)
+    rank_alignment_count = Column(Integer, nullable=True)
     ha_ultra_confirm = Column(SmallInteger, nullable=True)
     cross_indicator_close = Column(Boolean, nullable=True)
     vol_score = Column(Float, nullable=True)
@@ -183,7 +191,48 @@ class PaperTrade(Base):
     vp_sell_avg = Column(Float, nullable=True)
     vp_score = Column(Float, nullable=True)
 
+    # 20 Tem 2026: "kolaylık" — ERSI (ΔFiyat%/ΔRSI) skoru + bir önceki aynı
+    # sembol/TF/yön sinyaline göre fark/oran. Bilgi/izleme amaçlı (bkz.
+    # memory/project_devisso_ersi.md — PnL ile korelasyonu yok, filtre değil).
+    devisso_score = Column(Float, nullable=True)
+    devisso_delta = Column(Float, nullable=True)
+    devisso_ratio = Column(Float, nullable=True)
+
+    # 19 Tem 2026: giriş anındaki TÜM enriched_signal dict'i (VPMV bileşenleri,
+    # SMC, finansal oranlar, all_up, vb. — yukarıdaki kolonlarda yer almayan
+    # her şey) — yeni metrik eklemek artık migration gerektirmiyor.
+    entry_features = Column(JSONB, nullable=True)
+
     signal = relationship("Signal", back_populates="paper_trades", lazy="noload")
+
+
+class TradeSnapshot(Base):
+    """Açık bir paper trade'in ömrü boyunca periyodik (5dk) alınan CVD/VP/
+    VPMV/SMC anlık görüntüsü — 19 Tem 2026, bkz. migration 022. signals
+    tablosuyla aynı desende bir TimescaleDB hypertable (taken_at partition
+    key)."""
+
+    __tablename__ = "trade_snapshots"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    trade_id = Column(
+        Integer, ForeignKey("paper_trades.id", ondelete="CASCADE"), nullable=False
+    )
+    symbol = Column(String(30), nullable=False)
+    taken_at = Column(DateTime, primary_key=True, nullable=False, default=datetime.now)
+    price = Column(Float, nullable=True)
+    cvd_slope = Column(Float, nullable=True)
+    vp_buy = Column(Float, nullable=True)
+    vp_sell = Column(Float, nullable=True)
+    vp_score = Column(Float, nullable=True)
+    vp_score_real = Column(Float, nullable=True)
+    vol_score = Column(Float, nullable=True)
+    mom_score = Column(Float, nullable=True)
+    vlt_score = Column(Float, nullable=True)
+    price_score = Column(Float, nullable=True)
+    price_since_entry_pct = Column(Float, nullable=True)
+    vpmv_combined = Column(Float, nullable=True)
+    smc_market_structure = Column(String(20), nullable=True)
 
 
 class PaperPortfolio(Base):

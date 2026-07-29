@@ -47,10 +47,19 @@ class ActiveSignalsPanel(QWidget):
         self._model = SignalsModel(self)
         self._proxy = SignalsProxyModel(self)
         self._proxy.setSourceModel(self._model)
+        # 27 Tem 2026: dynamicSortFilter=True (varsayılan) kaynak modelde
+        # HANGİ sütun değişirse değişsin (P&L gibi sıralama sütunuyla
+        # ilgisiz olsa bile) TÜM satırları yeniden sıralıyordu — ~2000
+        # aktif sinyalle, saniyede bir gelen fiyat güncellemesinde
+        # lessThan() ana thread'i ~500ms kilitleyip arayüzü donduruyordu
+        # (sample ile doğrulandı). Filtreler zaten invalidateFilter()'ı
+        # elle çağırıyor, bundan etkilenmiyor — bkz. _setup_resort_timer.
+        self._proxy.setDynamicSortFilter(False)
         self._vpmv_pending: Optional[tuple[str, str]] = None
 
         self._setup_ui()
         self._setup_age_timer()
+        self._setup_resort_timer()
 
     # ── UI ────────────────────────────────────────────────────────────────────
 
@@ -337,6 +346,16 @@ class ActiveSignalsPanel(QWidget):
         timer.timeout.connect(self._refresh_age_column)
         timer.start()
 
+    def _setup_resort_timer(self) -> None:
+        """dynamicSortFilter=False olduğu için sıralama artık otomatik
+        tazelenmiyor — bu, sort sırasını 5 saniyede bir (saniyelik fiyat
+        tick'inden bağımsız) tazeler. Hücre değerleri (dataChanged) hâlâ
+        anlık; sadece satırların YERİ bu kadar gecikebilir."""
+        timer = QTimer(self)
+        timer.setInterval(5_000)
+        timer.timeout.connect(self._proxy.invalidate)
+        timer.start()
+
     def _refresh_age_column(self) -> None:
         if self._model.rowCount() == 0:
             return
@@ -384,6 +403,10 @@ class ActiveSignalsPanel(QWidget):
     def on_signals_closed(self, signal_ids: list) -> None:
         self._model.remove_signals(signal_ids)
         self._update_stats()
+
+    @pyqtSlot(dict)
+    def on_live_metrics_updated(self, payload: dict) -> None:
+        self._model.apply_live_metrics(payload)
 
     @pyqtSlot(str, float, float, float, float)
     def on_price_updated(

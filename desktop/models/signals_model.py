@@ -34,12 +34,13 @@ COLUMNS = [
     "β",
     "Z",
     "P&L%",
-    "SL",
-    "TP",
-    "P/D",
-    "Yapı",
-    "FVG",
-    "Pattern",
+    "Sıra",
+    "VPMV Δ",
+    "Z Δ",
+    "TF Hiz.",
+    "Verim",
+    "Verim Δ",
+    "Verim Δ(önc)",
     "Süre",
     "Güv",
 ]
@@ -54,14 +55,55 @@ COL_ALPHA = 6
 COL_BETA = 7
 COL_ZSCORE = 8
 COL_PNL = 9
-COL_SL = 10
-COL_TP = 11
-COL_PD = 12
-COL_STRUCT = 13
-COL_FVG = 14
-COL_PATTERN = 15
-COL_AGE = 16
-COL_GUV = 17
+COL_RANK = 10
+COL_VPM_DELTA = 11
+COL_Z_DELTA = 12
+COL_TF_ALIGN = 13
+COL_VERIM = 14
+COL_VERIM_DELTA = 15
+COL_VERIM_DELTA_PREV = 16
+COL_AGE = 17
+COL_GUV = 18
+
+# 28 Tem 2026: yeni sütunların başlıkları kısaltma olduğu için kullanıcı
+# geri bildirimiyle (anlaşılır değil) her birine açıklayıcı hover-tooltip
+# eklendi — ne olduğu VE yüksek/pozitifin ne anlama geldiği net yazılıyor.
+_COLUMN_TOOLTIPS: dict[int, str] = {
+    COL_RANK: (
+        "Güç Sıralaması — tüm izlenen evrende VPMV skoruna göre canlı\n"
+        "percentile (0-100), ~90sn'de bir güncellenir.\n"
+        "Yüksek (yeşil): göreceli güçlü.  Düşük: göreceli zayıf."
+    ),
+    COL_VPM_DELTA: (
+        "VPMV Ayrışması — canlı VPMV, sinyal AÇILMADAN ÖNCEki ortalamaya\n"
+        "(VPMV sütunu) göre ne kadar değişti.\n"
+        "Pozitif (yeşil): momentum güçleniyor.  Negatif (kırmızı): zayıflıyor."
+    ),
+    COL_Z_DELTA: (
+        "Ayrışma Z-score değişimi — canlı Z-score, sinyal açılış anındaki\n"
+        "Z'ye (Z sütunu) göre ne kadar değişti.\n"
+        "Pozitif: ortalamadan uzaklaşma artıyor.  Negatif: ortalamaya dönüyor."
+    ),
+    COL_TF_ALIGN: (
+        "TF Hizalanma — 4h/6h/8h/12h Heikin-Ashi renginden kaçı sinyalin\n"
+        "yönüyle (Long→boğa, Short→ayı) aynı (0-4).\n"
+        "4/4 (yeşil): tam hizalı.  Detay için üzerine gelin."
+    ),
+    COL_VERIM: (
+        "Verimlilik (ERSI) — fiyatın birim RSI değişimi başına ne kadar\n"
+        "hareket ettiği, kendi son 100 barına göre canlı percentile (0-100).\n"
+        "Yüksek (yeşil): verimli/sağlıklı trend.  Düşük: RSI çok yoruluyor."
+    ),
+    COL_VERIM_DELTA: (
+        "Verimlilik değişimi — canlı Verimlilik, sinyal AÇILIŞ ANINDAKİNE\n"
+        "göre ne kadar değişti.\n"
+        "Pozitif (yeşil): trend sinyalden beri sağlıklılaşıyor."
+    ),
+    COL_VERIM_DELTA_PREV: (
+        "Verimlilik, bir ÖNCEKİ aynı-yön sinyale göre (statik, değişmez).\n"
+        "Pozitif (yeşil): bu sinyal öncekinden daha verimli başladı."
+    ),
+}
 
 
 def _fmt_score(v: Optional[float]) -> str:
@@ -79,16 +121,11 @@ def _fmt_pnl(v: Optional[float]) -> str:
     return f"{sign}{v:.2f}%"
 
 
-def _fmt_price(v: Optional[float]) -> str:
+def _fmt_delta(v: Optional[float]) -> str:
     if v is None:
         return "—"
-    if v >= 1000:
-        return f"{v:.2f}"
-    if v >= 1:
-        return f"{v:.4f}"
-    if v >= 0.01:
-        return f"{v:.6f}"
-    return f"{v:.8f}"
+    sign = "+" if v > 0 else ""
+    return f"{sign}{v:.1f}"
 
 
 _INTERVAL_MINUTES: dict[str, int] = Config.INTERVAL_MINUTES
@@ -131,11 +168,8 @@ class SignalRow:
     st_confirmed: Optional[bool] = None
     sharpe: Optional[float] = None
     oi_data: Optional[str] = None
-    stop_loss_price: Optional[float] = None
-    take_profit_price: Optional[float] = None
     z_score_entry: Optional[float] = None
     is_confluence: bool = False
-    trailing_stop_price: Optional[float] = None
     sortino: Optional[float] = None
     calmar: Optional[float] = None
     vpmv_pre_avg: Optional[float] = None
@@ -150,7 +184,19 @@ class SignalRow:
     fvg_tfs: str = "-"
     candle_pattern: str = "-"
     atr: Optional[float] = None
+    devisso_score: Optional[float] = None  # sinyal açılış anı (statik)
+    devisso_delta: Optional[float] = None  # önceki aynı-tip sinyale göre (statik)
     pnl_pct: Optional[float] = field(default=None, init=False)
+    # 27 Tem 2026: canlı metrikler — LiveMetricsWorker tarafından periyodik
+    # doldurulur, DB'den GELMEZ (init=False, sinyal DB'den yüklenirken boş).
+    rank_score_live: Optional[float] = field(default=None, init=False)
+    vpmv_live_val: Optional[float] = field(default=None, init=False)
+    z_live_val: Optional[float] = field(default=None, init=False)
+    verim_live: Optional[float] = field(default=None, init=False)
+    ha_4h: Optional[bool] = field(default=None, init=False)
+    ha_6h: Optional[bool] = field(default=None, init=False)
+    ha_8h: Optional[bool] = field(default=None, init=False)
+    ha_12h: Optional[bool] = field(default=None, init=False)
 
     @property
     def mae_atr_now(self) -> Optional[float]:
@@ -159,6 +205,36 @@ class SignalRow:
         if self.signal_type == "LONG":
             return (self.current_price - self.entry_price) / self.atr
         return (self.entry_price - self.current_price) / self.atr
+
+    @property
+    def vpmv_delta_live(self) -> Optional[float]:
+        """Canlı VPMV − sinyal-öncesi ortalama (vpmv_pre_avg, statik snapshot)."""
+        if self.vpmv_live_val is None or self.vpmv_pre_avg is None:
+            return None
+        return self.vpmv_live_val - self.vpmv_pre_avg
+
+    @property
+    def z_delta_live(self) -> Optional[float]:
+        """Canlı Z-score − sinyal açılış anındaki Z (z_score_entry, statik)."""
+        if self.z_live_val is None or self.z_score_entry is None:
+            return None
+        return self.z_live_val - self.z_score_entry
+
+    @property
+    def verim_delta_live(self) -> Optional[float]:
+        """Canlı Verimlilik − sinyal açılış anındaki Verimlilik (devisso_score, statik)."""
+        if self.verim_live is None or self.devisso_score is None:
+            return None
+        return self.verim_live - self.devisso_score
+
+    @property
+    def tf_align_count(self) -> Optional[int]:
+        """4h/6h/8h/12h'den kaçı sinyalin KENDİ yönüyle hizalı (0-4)."""
+        vals = (self.ha_4h, self.ha_6h, self.ha_8h, self.ha_12h)
+        if any(v is None for v in vals):
+            return None
+        want_bull = self.signal_type == "LONG"
+        return sum(1 for v in vals if v == want_bull)
 
     def update_price(self, price: float) -> None:
         self.current_price = price
@@ -193,6 +269,8 @@ class SignalsModel(QAbstractTableModel):
             return COLUMNS[section]
         if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.TextAlignmentRole:
             return int(Qt.AlignmentFlag.AlignCenter)
+        if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.ToolTipRole:
+            return _COLUMN_TOOLTIPS.get(section)
         return None
 
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
@@ -204,6 +282,8 @@ class SignalsModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.DisplayRole:
             return self._display(row, col)
         if role == Qt.ItemDataRole.ToolTipRole:
+            if col == COL_TF_ALIGN:
+                return self._tf_align_tooltip(row)
             return self._tooltip(row)
         if role == Qt.ItemDataRole.ForegroundRole:
             return self._foreground(row, col)
@@ -237,18 +317,21 @@ class SignalsModel(QAbstractTableModel):
                 return f"{row.zscore:+.2f}" if row.zscore is not None else "—"
             case _ if col == COL_PNL:
                 return _fmt_pnl(row.pnl_pct)
-            case _ if col == COL_SL:
-                return _fmt_price(row.stop_loss_price)
-            case _ if col == COL_TP:
-                return _fmt_price(row.take_profit_price)
-            case _ if col == COL_PD:
-                return f"{row.pd_zone:.0f}" if row.pd_zone is not None else "—"
-            case _ if col == COL_STRUCT:
-                return row.market_structure or "-"
-            case _ if col == COL_FVG:
-                return row.fvg_tfs or "-"
-            case _ if col == COL_PATTERN:
-                return row.candle_pattern or "-"
+            case _ if col == COL_RANK:
+                return _fmt_score(row.rank_score_live)
+            case _ if col == COL_VPM_DELTA:
+                return _fmt_delta(row.vpmv_delta_live)
+            case _ if col == COL_Z_DELTA:
+                return _fmt_delta(row.z_delta_live)
+            case _ if col == COL_TF_ALIGN:
+                n = row.tf_align_count
+                return f"{n}/4" if n is not None else "—"
+            case _ if col == COL_VERIM:
+                return _fmt_score(row.verim_live)
+            case _ if col == COL_VERIM_DELTA:
+                return _fmt_delta(row.verim_delta_live)
+            case _ if col == COL_VERIM_DELTA_PREV:
+                return _fmt_delta(row.devisso_delta)
             case _ if col == COL_AGE:
                 return _fmt_age(row.timestamp, row.interval)
             case _ if col == COL_GUV:
@@ -289,14 +372,6 @@ class SignalsModel(QAbstractTableModel):
         )
         mtf = f"{int(row.mtf)}" if row.mtf is not None else "—"
         cf_line = f"  ★ KONFLUANS  Z={_r(row.z_score_entry, '+.2f')}\n" if row.is_confluence else ""
-        sl_label = "Trail" if row.trailing_stop_price is not None else "SL"
-        sl_val = (
-            row.trailing_stop_price if row.trailing_stop_price is not None else row.stop_loss_price
-        )
-        tp_val = None if row.trailing_stop_price is not None else row.take_profit_price
-        risk_line = f"  {sl_label}: {_r(sl_val, '.4f')}"
-        if tp_val is not None:
-            risk_line += f"   TP: {_r(tp_val, '.4f')}"
         pre = _r(row.vpmv_pre_avg, ".1f")
         slop = _r(row.vpmv_slope, "+.1f")
         rat = _r(row.vpmv_ratio, ".3f")
@@ -310,8 +385,25 @@ class SignalsModel(QAbstractTableModel):
             f"{'─'*52}\n"
             f"  VPMV: {_r(row.vpm, '.1f')}   MTF: {mtf}   ST: {st}\n"
             f"  pre: {pre}   slope: {slop}   ratio: {rat}\n"
-            f"{risk_line}\n"
             f"{self._oi_line(row)}"
+        )
+
+    @staticmethod
+    def _tf_align_tooltip(row: SignalRow) -> str:
+        def _renk(v: Optional[bool]) -> str:
+            if v is None:
+                return "—"
+            return "Boğa" if v else "Ayı"
+
+        n = row.tf_align_count
+        ozet = f"{n}/4 {row.signal_type} yönüyle hizalı" if n is not None else "veri bekleniyor"
+        return (
+            f"TF Hizalanma — {ozet}\n"
+            f"{'─'*30}\n"
+            f"  4h:  {_renk(row.ha_4h)}\n"
+            f"  6h:  {_renk(row.ha_6h)}\n"
+            f"  8h:  {_renk(row.ha_8h)}\n"
+            f"  12h: {_renk(row.ha_12h)}"
         )
 
     def _foreground(self, row: SignalRow, col: int) -> Optional[QColor]:
@@ -344,36 +436,43 @@ class SignalsModel(QAbstractTableModel):
             if abs(row.zscore) >= 2.0:
                 return QColor(COLORS["yellow"])
             return QColor(COLORS["text_muted"])
-        if col == COL_SL:
-            return QColor(COLORS["red"])
-        if col == COL_TP:
-            return QColor(COLORS["green"])
-        if col == COL_PD and row.pd_zone is not None:
-            aligned = (row.signal_type == "LONG" and row.pd_zone <= 50) or (
-                row.signal_type == "SHORT" and row.pd_zone >= 50
-            )
-            return QColor(COLORS["green"] if aligned else COLORS["red"])
-        if col == COL_STRUCT:
-            s = row.market_structure or "-"
-            if s.startswith(("Uyum", "BOS")):
-                return QColor(COLORS["green"])
-            if s.startswith(("Karşı", "CHoCH")):
-                return QColor(COLORS["yellow"])
-            return QColor(COLORS["text_muted"])
-        if col == COL_FVG:
-            return QColor(
-                COLORS["green"] if (row.fvg_tfs and row.fvg_tfs != "-") else COLORS["text_muted"]
-            )
-        if col == COL_PATTERN and row.candle_pattern and row.candle_pattern != "-":
-            has_bull = "+" in row.candle_pattern
-            has_bear = "-" in row.candle_pattern
-            if has_bull and has_bear:
-                return QColor(COLORS["yellow"])
-            if has_bull:
-                return QColor(COLORS["green"])
-            return QColor(COLORS["red"])
         if col == COL_SYMBOL and row.is_confluence:
             return QColor("#FFD700")
+        if col == COL_RANK and row.rank_score_live is not None:
+            if row.rank_score_live >= 70:
+                return QColor(COLORS["green"])
+            if row.rank_score_live >= 50:
+                return QColor(COLORS["yellow"])
+            return QColor(COLORS["text_muted"])
+        if col in (COL_VPM_DELTA, COL_Z_DELTA, COL_VERIM_DELTA, COL_VERIM_DELTA_PREV):
+            v = {
+                COL_VPM_DELTA: row.vpmv_delta_live,
+                COL_Z_DELTA: row.z_delta_live,
+                COL_VERIM_DELTA: row.verim_delta_live,
+                COL_VERIM_DELTA_PREV: row.devisso_delta,
+            }[col]
+            if v is None:
+                return None
+            if v > 0:
+                return QColor(COLORS["green"])
+            if v < 0:
+                return QColor(COLORS["red"])
+            return QColor(COLORS["text_muted"])
+        if col == COL_TF_ALIGN:
+            n = row.tf_align_count
+            if n is None:
+                return None
+            if n == 4:
+                return QColor(COLORS["green"])
+            if n == 3:
+                return QColor(COLORS["yellow"])
+            return QColor(COLORS["text_muted"])
+        if col == COL_VERIM and row.verim_live is not None:
+            if row.verim_live >= 70:
+                return QColor(COLORS["green"])
+            if row.verim_live >= 50:
+                return QColor(COLORS["yellow"])
+            return QColor(COLORS["text_muted"])
         if col == COL_GUV:
             v = row.mae_atr_now
             if v is None:
@@ -441,11 +540,8 @@ class SignalsModel(QAbstractTableModel):
             sortino=s.get("sortino_ratio"),
             calmar=s.get("calmar_ratio"),
             oi_data=s.get("oi_data"),
-            stop_loss_price=s.get("stop_loss_price"),
-            take_profit_price=s.get("take_profit_price"),
             z_score_entry=s.get("z_score_entry"),
             is_confluence=bool(s.get("is_confluence", False)),
-            trailing_stop_price=s.get("trailing_stop_price"),
             vpmv_pre_avg=s.get("vpmv_pre_avg"),
             vpmv_slope=s.get("vpmv_slope"),
             vpmv_ratio=s.get("vpmv_ratio"),
@@ -458,6 +554,8 @@ class SignalsModel(QAbstractTableModel):
             fvg_tfs=s.get("fvg_tfs") or "-",
             candle_pattern=s.get("candle_pattern") or "-",
             atr=s.get("atr"),
+            devisso_score=s.get("devisso_score"),
+            devisso_delta=s.get("devisso_delta"),
         )
         idx = len(self._rows)
         self._rows.append(row)
@@ -517,6 +615,41 @@ class SignalsModel(QAbstractTableModel):
         if 0 <= row < len(self._rows):
             return self._rows[row]
         return None
+
+    def apply_live_metrics(self, payload: dict) -> None:
+        """LiveMetricsWorker.metrics_updated'ten gelen toplu güncelleme —
+        Güç Sıralaması/TF Hizalanma sembol bazlı, VPMV/Verimlilik sinyal-id
+        bazlı, Ayrışma Z-score (symbol, interval) bazlı eşleniyor."""
+        if not self._rows:
+            return
+        ranking = payload.get("ranking") or {}
+        ha = payload.get("ha") or {}
+        devisso = payload.get("devisso") or {}
+        vpmv = payload.get("vpmv") or {}
+        divergence = payload.get("divergence") or {}
+
+        for row in self._rows:
+            if row.symbol in ranking:
+                row.rank_score_live = ranking[row.symbol]
+            ha_row = ha.get(row.symbol)
+            if ha_row:
+                row.ha_4h = ha_row.get("ha_4h")
+                row.ha_6h = ha_row.get("ha_6h")
+                row.ha_8h = ha_row.get("ha_8h")
+                row.ha_12h = ha_row.get("ha_12h")
+            if row.id in devisso:
+                row.verim_live = devisso[row.id]
+            if row.id in vpmv:
+                row.vpmv_live_val = vpmv[row.id]
+            z = divergence.get((row.symbol, row.interval))
+            if z is not None:
+                row.z_live_val = z
+
+        tl = self.index(0, COL_RANK)
+        br = self.index(len(self._rows) - 1, COL_VERIM_DELTA_PREV)
+        self.dataChanged.emit(
+            tl, br, [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ForegroundRole]
+        )
 
 
 _RANGE_FIELDS = ("vpm", "mtf", "alpha", "beta", "zscore")
@@ -617,8 +750,20 @@ class SignalsProxyModel(QSortFilterProxyModel):
                 return _cmp(l_row.zscore, r_row.zscore)
             case _ if col == COL_PNL:
                 return _cmp(l_row.pnl_pct, r_row.pnl_pct)
-            case _ if col == COL_PD:
-                return _cmp(l_row.pd_zone, r_row.pd_zone)
+            case _ if col == COL_RANK:
+                return _cmp(l_row.rank_score_live, r_row.rank_score_live)
+            case _ if col == COL_VPM_DELTA:
+                return _cmp(l_row.vpmv_delta_live, r_row.vpmv_delta_live)
+            case _ if col == COL_Z_DELTA:
+                return _cmp(l_row.z_delta_live, r_row.z_delta_live)
+            case _ if col == COL_TF_ALIGN:
+                return _cmp(l_row.tf_align_count, r_row.tf_align_count)
+            case _ if col == COL_VERIM:
+                return _cmp(l_row.verim_live, r_row.verim_live)
+            case _ if col == COL_VERIM_DELTA:
+                return _cmp(l_row.verim_delta_live, r_row.verim_delta_live)
+            case _ if col == COL_VERIM_DELTA_PREV:
+                return _cmp(l_row.devisso_delta, r_row.devisso_delta)
             case _ if col == COL_AGE:
 
                 def _ts(t):

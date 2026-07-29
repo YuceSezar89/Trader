@@ -14,10 +14,12 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 from PyQt6.QtCore import QTimer, QUrl, pyqtSlot
+from PyQt6.QtWebEngineCore import QWebEnginePage
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWidgets import QSizePolicy
 
 from desktop.theme import COLORS
+from indicators.core import calculate_supertrend
 
 _ASSETS_DIR = Path(__file__).parent.parent / "assets"
 _JS_PATH = _ASSETS_DIR / "lightweight-charts.js"
@@ -56,7 +58,12 @@ const COLORS = {{
 
 const container = document.getElementById('chart');
 let chart, candleSeries, emaSeries, volSeries, rsiSeries, rsi70, rsi30;
-let stUpSeries, stDownSeries;
+let _stSeries = [];
+
+function safeApply(series, opts) {{
+  try {{ const ps = series.priceScale(); if (ps) ps.applyOptions(opts); }}
+  catch(e) {{ console.log('priceScale err:', e.message); }}
+}}
 let _priceLines = [];
 let _smcData = null;
 let _smcEnabled = false;
@@ -223,11 +230,6 @@ function initChart() {{
   handleScale: true,
 }});
 
-  function safeApply(series, opts) {{
-    try {{ const ps = series.priceScale(); if (ps) ps.applyOptions(opts); }}
-    catch(e) {{ console.log('priceScale err:', e.message); }}
-  }}
-
   // Candlestick serisi
   candleSeries = chart.addCandlestickSeries({{
     upColor:         COLORS.green,
@@ -287,24 +289,8 @@ function initChart() {{
     crosshairMarkerVisible: false, priceScaleId: 'rsi',
   }});
 
-  // Supertrend — uptrend (yeşil) ve downtrend (kırmızı) serileri
-  stUpSeries = chart.addLineSeries({{
-    color: COLORS.green,
-    lineWidth: 2,
-    priceLineVisible: false,
-    lastValueVisible: false,
-    crosshairMarkerVisible: false,
-  }});
-  safeApply(stUpSeries, {{ scaleMargins: {{ top: 0.05, bottom: 0.35 }} }});
-
-  stDownSeries = chart.addLineSeries({{
-    color: COLORS.red,
-    lineWidth: 2,
-    priceLineVisible: false,
-    lastValueVisible: false,
-    crosshairMarkerVisible: false,
-  }});
-  safeApply(stDownSeries, {{ scaleMargins: {{ top: 0.05, bottom: 0.35 }} }});
+  // Supertrend serileri loadSupertrend() icinde DINAMIK olarak (her renk
+  // bloğu icin ayri bir seri) olusturuluyor - bkz. o fonksiyonun docstring'i.
 
   window._chartReady = true;
   }} catch(e) {{ console.log('initChart HATA:', e.message, e.stack); }}
@@ -355,11 +341,33 @@ function loadData(candlesJson, emaJson, volJson, rsiJson, attempt) {{
   }}
 }}
 
-function loadSupertrend(stUpJson, stDownJson) {{
-  if (!stUpSeries || !stDownSeries) return;
+function loadSupertrend(segmentsJson) {{
+  // Her renk bloğu (ardisik ayni-yonlu barlar) AYRI bir line series olarak
+  // cizilir - segmentler arasinda hicbir nokta paylasilmadigi icin uzak iki
+  // noktayi birlestiren capraz cizgi FIZIKSEL OLARAK olusamaz. Onceki "iki
+  // sabit seri + whitespace nokta" yontemi bu kutuphane paketinde guvenilir
+  // calismiyordu (19 Tem 2026 bug'i - "whitespace" kelimesi bu js dosyasinda
+  // hic gecmiyor).
+  if (!chart) return;
   try {{
-    stUpSeries.setData(JSON.parse(stUpJson));
-    stDownSeries.setData(JSON.parse(stDownJson));
+    let _removeFail = 0;
+    _stSeries.forEach(s => {{ try {{ chart.removeSeries(s); }} catch(e) {{ _removeFail++; }} }});
+    if (_removeFail > 0) console.log('SIZINTI-DEBUG removeSeries basarisiz:', _removeFail, '/', _stSeries.length);
+    _stSeries = [];
+    const segments = JSON.parse(segmentsJson);
+    segments.forEach(seg => {{
+      const s = chart.addLineSeries({{
+        color: seg.up ? COLORS.green : COLORS.red,
+        lineWidth: 2,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+      }});
+      safeApply(s, {{ scaleMargins: {{ top: 0.05, bottom: 0.35 }} }});
+      s.setData(seg.points);
+      _stSeries.push(s);
+    }});
+    console.log('SIZINTI-DEBUG loadSupertrend: yeni-segment=' + segments.length + ' _stSeries.length=' + _stSeries.length);
   }} catch(e) {{ console.log('loadSupertrend error:', e.message); }}
 }}
 
@@ -586,6 +594,18 @@ def _build_html() -> str:
     )
 
 
+class _ConsoleLoggingPage(QWebEnginePage):
+    """JS console.log/error mesajlarını Python loguna akıtır — normalde
+    Qt WebEngine'in kendi (görünmeyen) konsoluna gidiyordu, JS hatalarını
+    teşhis edemiyorduk (19 Tem 2026, SuperTrend segment bug'ı sırasında
+    eklendi)."""
+
+    def javaScriptConsoleMessage(self, level, message, lineNumber, sourceID):  # noqa: N802
+        import logging
+
+        logging.getLogger("TVChart.JS").info("[JS L%d] %s", lineNumber, message)
+
+
 class TVChart(QWebEngineView):
     """
     TradingView lightweight-charts tabanlı grafik widget'ı.
@@ -613,6 +633,7 @@ class TVChart(QWebEngineView):
         self._pivot_enabled = False
         self._wmy_enabled = False
 
+        self.setPage(_ConsoleLoggingPage(self))
         self.loadFinished.connect(self._on_load_finished)
         self.setHtml(_build_html(), QUrl("about:blank"))
 
@@ -748,6 +769,9 @@ class TVChart(QWebEngineView):
         sl = signal_data.get("stop_loss_price")
         tp = signal_data.get("take_profit_price")
         trail = signal_data.get("trailing_stop_price")
+        exit_price = signal_data.get("exit_price")
+        closed_at = signal_data.get("closed_at")
+        close_reason = signal_data.get("close_reason")
 
         green = COLORS["green"]
         red = COLORS["red"]
@@ -774,6 +798,37 @@ class TVChart(QWebEngineView):
             except Exception:  # pylint: disable=broad-exception-caught
                 pass
 
+        # Çıkış marker'ı — kapanmış işlemler için (paper_trade_panel'in
+        # Kapalı İşlemler tablosundan tıklanınca) entry marker'ının yanına
+        # ikinci bir işaret. Kazanç/kayıp entry-exit fiyat farkından, entry
+        # marker'ının TERSİ konumda (çıkış = pozisyonu kapatma yönü).
+        if closed_at is not None and exit_price is not None and entry is not None:
+            try:
+                from datetime import datetime  # pylint: disable=import-outside-toplevel
+
+                if isinstance(closed_at, str):
+                    closed_at = datetime.fromisoformat(closed_at)
+                t_exit = int(closed_at.timestamp()) + 3 * 3600
+                is_long = str(sig_type).upper() == "LONG"
+                is_win = (
+                    float(exit_price) > float(entry)
+                    if is_long
+                    else float(exit_price) < float(entry)
+                )
+                reason_txt = f" ({close_reason})" if close_reason else ""
+                markers.append(
+                    {
+                        "time": t_exit,
+                        "position": "aboveBar" if is_long else "belowBar",
+                        "color": green if is_win else red,
+                        "shape": "circle",
+                        "text": f"✕ {float(exit_price):.4f}{reason_txt}",
+                        "size": 1,
+                    }
+                )
+            except Exception:  # pylint: disable=broad-exception-caught
+                pass
+
         price_lines = []
         sl_price = trail if trail is not None else sl
         sl_label = "Trail" if trail is not None else "SL"
@@ -793,7 +848,7 @@ class TVChart(QWebEngineView):
         self, df: pd.DataFrame, _symbol: str, _tf: str, signal: Optional[dict] = None
     ) -> None:
         candles, ema_data, vol_data, rsi_data = self._prepare(df)
-        st_up, st_dn = self._prepare_supertrend(df)
+        st_segments = self._prepare_supertrend(df)
         self._bar_state = self._compute_state(df)
 
         js = (
@@ -805,11 +860,7 @@ class TVChart(QWebEngineView):
         )
         self.page().runJavaScript(js)
 
-        self.page().runJavaScript(
-            f"loadSupertrend("
-            f"{json.dumps(json.dumps(st_up))},"
-            f"{json.dumps(json.dumps(st_dn))})"
-        )
+        self.page().runJavaScript(f"loadSupertrend({json.dumps(json.dumps(st_segments))})")
 
         smc_data = self._prepare_smc(df)
         self.page().runJavaScript(
@@ -856,57 +907,47 @@ class TVChart(QWebEngineView):
             self.page().runJavaScript("clearSignalMarkers()")
 
     @staticmethod
-    def _prepare_supertrend(df: pd.DataFrame) -> tuple[list, list]:
-        """Supertrend(10,3) — uptrend (yeşil, lower band) ve downtrend (kırmızı, upper band)."""
+    def _prepare_supertrend(df: pd.DataFrame) -> list[dict]:
+        """Supertrend(10,3) — indicators.core.calculate_supertrend ile
+        HESAPLANIYOR (projenin tek doğrulanmış implementasyonu,
+        signals/do_kirilimi.py da aynı kaynağı kullanıyor).
+
+        Ardışık aynı-yönlü barlar SEGMENTLERE ayrılır, her segment JS
+        tarafında AYRI bir line series olarak çizilir (19 Tem 2026 fix) —
+        önceki iki-sabit-seri + "whitespace nokta" yöntemi bu projede
+        paketli lightweight-charts sürümünde güvenilir çalışmıyordu ("çapraz
+        çizgi" bug'ı: uzak iki noktanın düz çizgiyle birleşmesi). Segmentler
+        arasında hiçbir nokta paylaşılmadığı için bu artık yapısal olarak
+        imkansız."""
         try:
-            high = df["high"].astype(float).values
-            low = df["low"].astype(float).values
-            close = df["close"].astype(float).values
+            if len(df) < _ST_PERIOD + 5:
+                return []
+            st_line, direction, _, _ = calculate_supertrend(
+                df, atr_length=_ST_PERIOD, factor=_ST_MULT
+            )
             ts = (df["timestamp"].astype("int64") // 10**9 + 3 * 3600).values
-            n = len(close)
-            if n < _ST_PERIOD + 5:
-                return [], []
 
-            # ATR — Wilder's smoothing
-            tr = np.zeros(n)
-            tr[0] = high[0] - low[0]
-            for i in range(1, n):
-                tr[i] = max(
-                    high[i] - low[i], abs(high[i] - close[i - 1]), abs(low[i] - close[i - 1])
+            segments: list[dict] = []
+            current_up: Optional[bool] = None
+            current_points: list[dict] = []
+            for i in range(len(df)):
+                d = direction.iloc[i]
+                if pd.isna(d):
+                    continue
+                is_up = bool(d == -1)  # bullish/uptrend — numpy.bool_ değil, native bool (json.dumps için)
+                if is_up != current_up:
+                    if current_points:
+                        segments.append({"up": current_up, "points": current_points})
+                    current_points = []
+                    current_up = is_up
+                current_points.append(
+                    {"time": int(ts[i]), "value": round(float(st_line.iloc[i]), 8)}
                 )
-            atr = np.zeros(n)
-            atr[_ST_PERIOD - 1] = tr[:_ST_PERIOD].mean()
-            for i in range(_ST_PERIOD, n):
-                atr[i] = (atr[i - 1] * (_ST_PERIOD - 1) + tr[i]) / _ST_PERIOD
-
-            hl2 = (high + low) / 2.0
-            bu = hl2 + _ST_MULT * atr
-            bl = hl2 - _ST_MULT * atr
-
-            fu = bu.copy()
-            fl = bl.copy()
-            for i in range(1, n):
-                fu[i] = bu[i] if bu[i] < fu[i - 1] or close[i - 1] > fu[i - 1] else fu[i - 1]
-                fl[i] = bl[i] if bl[i] > fl[i - 1] or close[i - 1] < fl[i - 1] else fl[i - 1]
-
-            # Supertrend line: fl = uptrend, fu = downtrend
-            st = fu.copy()
-            for i in range(1, n):
-                if abs(st[i - 1] - fu[i - 1]) < 1e-12:  # was downtrend
-                    st[i] = fl[i] if close[i] > fu[i] else fu[i]
-                else:  # was uptrend
-                    st[i] = fu[i] if close[i] < fl[i] else fl[i]
-
-            st_up, st_dn = [], []
-            for i in range(_ST_PERIOD, n):
-                t = int(ts[i])
-                if abs(st[i] - fl[i]) < 1e-12:  # uptrend
-                    st_up.append({"time": t, "value": round(float(fl[i]), 8)})
-                else:  # downtrend
-                    st_dn.append({"time": t, "value": round(float(fu[i]), 8)})
-            return st_up, st_dn
+            if current_points:
+                segments.append({"up": current_up, "points": current_points})
+            return segments
         except Exception:  # pylint: disable=broad-exception-caught
-            return [], []
+            return []
 
     @staticmethod
     def _prepare_fvg(df: pd.DataFrame) -> list[dict]:

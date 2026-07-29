@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(source .venv/bin/activate)",
+      "Bash(redis-cli keys*)",
+      "Bash(launchctl list*)",
+      "Bash(screencapture -x*)"
+    ]
+  }
+}
