@@ -8,10 +8,36 @@ from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from utils.kline_schema import check_kline_schema
 from utils.logger import get_logger
 
-from .engine import get_session, init_db
+from .engine import async_engine, get_session, init_db
 from .models import PriceData, Signal
 
 logger = get_logger(__name__)
+
+# Hiyerarşik zincir sırasıyla (migration 021/023/028): 5m←1m, 15m←5m, 1h←15m,
+# 4h←1h, 6h←1h, 8h/12h←4h. Yanlış sırada refresh edilirse üst seviye kendi
+# (henüz tazelenmemiş) kaynağından eski veri okur — 29 Tem 2026, restart sonrası
+# backfill edilen 1m'in cagg_1h'ye hiç yansımadığı vakada bulundu.
+_CAGG_REFRESH_ORDER = ["cagg_5m", "cagg_15m", "cagg_1h", "cagg_4h", "cagg_6h", "cagg_8h", "cagg_12h"]
+
+
+async def refresh_cagg_chain(start: datetime, end: datetime) -> None:
+    """price_data'ya geriye dönük (backfill) satır eklendiğinde continuous
+    aggregate'ler OTOMATİK yenilenmiyor (TimescaleDB refresh policy'leri sadece
+    kendi start_offset penceresini kapsar) — bu fonksiyon [start, end] aralığını
+    zincirin TAMAMI için (bağımlılık sırasıyla) elle yeniler.
+
+    CALL bir transaction içinde çalışmıyor — autocommit bağlantı gerekiyor
+    (bkz. memory: 13 Tem CA backfill pilotu, Bulgu 4)."""
+    async with async_engine.connect() as conn:
+        await conn.execution_options(isolation_level="AUTOCOMMIT")
+        for view in _CAGG_REFRESH_ORDER:
+            try:
+                await conn.execute(
+                    text("CALL refresh_continuous_aggregate(:view, :start, :end)"),
+                    {"view": view, "start": start, "end": end},
+                )
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.warning("[CAGG-Refresh] %s yenilenemedi: %s", view, exc)
 
 _CAGG_MAP = {
     "5m": "cagg_5m",

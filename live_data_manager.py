@@ -23,6 +23,7 @@ from database.crud import (
     get_oldest_timestamp,
     get_recent_klines,
     initialize_database,
+    refresh_cagg_chain,
 )
 from database.engine import get_session, run_with_db_timeout
 from indicators.core import add_all_indicators, calculate_atr, calculate_rsi, truncate_after_gap
@@ -1158,9 +1159,16 @@ class LiveDataManager:
                 limit = self.mtf_buffer_limits.get(tf, 250)
                 df = await RedisClient.get_mtf_klines(sym, tf, limit=limit)
                 if df is not None and len(df) >= limit * min_bars_ratio:
-                    self.mtf_buffers[sym][tf] = df.tail(limit)
-                else:
-                    all_tf_ok = False
+                    # 29 Tem 2026: bar SAYISI yeterli görünse de içeride kapanma/
+                    # yeniden başlatma kaynaklı bir boşluk olabilir (bkz. ESPUSDT
+                    # 15m/1h vakası) — truncate_after_gap ile boşluk sonrası
+                    # temiz kuyruk yeterli değilse bu TF'i "eksik" say, REST/CA'dan
+                    # taze çekilsin.
+                    clean = truncate_after_gap(df)
+                    if len(clean) >= limit * min_bars_ratio:
+                        self.mtf_buffers[sym][tf] = clean.tail(limit)
+                        continue
+                all_tf_ok = False
             return sym, all_tf_ok
 
         redis_results = await asyncio.gather(*[_load_from_redis(s) for s in self.symbols])
@@ -1273,11 +1281,13 @@ class LiveDataManager:
                 await RedisClient.set_mtf_klines(symbol, "1m", self.mtf_buffers[symbol]["1m"])
                 loaded_count += 1
 
-            # ── 5m/15m/30m/6h/8h/12h: Redis-first (REST sadece ilk kurulumda) ──
-            for ws_tf in ["5m", "15m", "30m", "6h", "8h", "12h"]:
+            # ── 30m: CA karşılığı yok — Redis-first, REST fallback ──────────────
+            for ws_tf in ["30m"]:
                 limit = self.mtf_buffer_limits.get(ws_tf, 250)
                 cached = await RedisClient.get_mtf_klines(symbol, ws_tf, limit=limit)
                 check_kline_schema(cached, f"RedisCache.{ws_tf}")
+                if cached is not None and len(cached) >= limit // 2:
+                    cached = truncate_after_gap(cached)
                 if cached is not None and len(cached) >= limit // 2:
                     df_ind = await loop.run_in_executor(_MTF_EXECUTOR, add_all_indicators, cached)
                     self.mtf_buffers[symbol][ws_tf] = df_ind.tail(limit)
@@ -1298,8 +1308,14 @@ class LiveDataManager:
                         )
                         loaded_count += 1
 
-            # ── 1h / 4h: CA view'larından (boşluksuz, 1m'den otomatik türetilmiş) ──
-            for tf in ["1h", "4h"]:
+            # ── 5m/15m/1h/4h/6h/8h/12h: CA view'larından (boşluksuz, 1m'den otomatik
+            # türetilmiş, hiyerarşik zincir: 5m←1m, 15m←5m, 1h←15m, 4h←1h, 6h←1h,
+            # 8h/12h←4h) — 29 Tem 2026: eskiden 5m/15m/6h/8h/12h ayrı Binance REST
+            # çağrısıyla çekiliyordu; restart sonrası TÜM semboller aynı anda reload'a
+            # düşünce (bkz. truncate_after_gap fix'i) bu REST hacmi IP ban fırtınasına
+            # yol açıyordu. CA'lar zaten var ve sürekli refresh policy'li — REST'e hiç
+            # gerek yok, ban riski kaynağında ortadan kalkıyor.
+            for tf in ["5m", "15m", "1h", "4h", "6h", "8h", "12h"]:
                 limit = self.mtf_buffer_limits.get(tf, 250)
                 ca_df = await get_cagg_klines(symbol, tf, limit)
                 if not ca_df.empty:
@@ -1316,6 +1332,8 @@ class LiveDataManager:
             # ── 1d: Redis cache → yoksa Binance (CA için çok fazla 1m gerekir) ──
             limit_1d = binance_timeframe_limits.get("1d", 250)
             cached_df = await RedisClient.get_mtf_klines(symbol, "1d", limit=limit_1d)
+            if cached_df is not None and len(cached_df) >= limit_1d // 2:
+                cached_df = truncate_after_gap(cached_df)
             if cached_df is not None and len(cached_df) >= limit_1d // 2:
                 self.mtf_buffers[symbol]["1d"] = cached_df.drop_duplicates(
                     subset=["open_time"], keep="last"
@@ -1341,7 +1359,8 @@ class LiveDataManager:
 
             src = "REST" if binance_call_made else "Redis"
             logger.info(
-                f"✅ [{symbol}] {loaded_count} TF yüklendi (1m=DB, 5m-12h={src}, 1h/4h=CA, 1d=cache)"
+                f"✅ [{symbol}] {loaded_count} TF yüklendi (1m=DB, 30m={src}, "
+                "5m/15m/1h/4h/6h/8h/12h=CA, 1d=cache)"
             )
             return not binance_call_made, rest_call_count
 
@@ -1732,6 +1751,23 @@ class LiveDataManager:
                     await asyncio.sleep(wait)
 
             logger.info("[Startup] 1m gap fill tamamlandı: %d bar eklendi", total_filled)
+
+            if total_filled:
+                # 1m'e geriye dönük bar eklendi — cagg zinciri (5m→15m→1h→4h→
+                # 6h/8h/12h) OTOMATİK yenilenmez, elle tetiklemezsek grafik/MTF
+                # buffer'ları backfill'i hiç görmez (bkz. memory: 13 Tem CA
+                # backfill pilotu Bulgu 4, 29 Tem: cagg_1h'de doğrudan doğrulandı).
+                min_gap_start_ms = min(gs for gaps in all_gaps.values() for gs, _ in gaps)
+                refresh_start = datetime.fromtimestamp(min_gap_start_ms / 1000)
+                refresh_end = datetime.fromtimestamp(now_ms / 1000)
+                logger.info(
+                    "[Startup] CAGG zinciri yenileniyor: %s → %s", refresh_start, refresh_end
+                )
+                try:
+                    await refresh_cagg_chain(refresh_start, refresh_end)
+                    logger.info("[Startup] CAGG zinciri yenilendi.")
+                except Exception as exc:  # pylint: disable=broad-exception-caught
+                    logger.warning("[Startup] CAGG zinciri yenileme hatası: %s", exc)
         else:
             logger.info("[Startup] 1m: gap yok.")
 
@@ -2033,6 +2069,13 @@ class LiveDataManager:
 
                 if total_filled:
                     logger.info("[GapHeal] %d bar dolduruldu.", total_filled)
+                    if gap_starts:
+                        refresh_start = datetime.fromtimestamp(min(gap_starts.values()) / 1000)
+                        refresh_end = datetime.fromtimestamp(scan_start_ms / 1000)
+                        try:
+                            await refresh_cagg_chain(refresh_start, refresh_end)
+                        except Exception as exc:  # pylint: disable=broad-exception-caught
+                            logger.warning("[GapHeal] CAGG zinciri yenileme hatası: %s", exc)
                     if self.mtf_enabled:
                         for sym in mtf_refresh_syms:
                             await self._refresh_mtf_redis(sym)
