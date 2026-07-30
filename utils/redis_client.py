@@ -201,14 +201,24 @@ class RedisClient:
         return redis.Redis(connection_pool=pool)
 
     @staticmethod
-    def _dedupe_and_to_arrow_bytes(df: pd.DataFrame) -> bytes:
+    def _dedupe_and_to_arrow_bytes(df: pd.DataFrame, already_owned: bool = False) -> bytes:
+        """already_owned=True: çağıran bu df'nin TEK sahibi olduğunu (başka hiçbir
+        yerde tutulmadığını/eşzamanlı mutasyona uğramayacağını) garanti ediyorsa
+        ikinci kopyayı atlar (30 Tem 2026 CPU profili — forming-tick yolu, tek
+        güvenli çağıran: live_data_manager.py::_handle_tick, _merge_tick_row'un
+        ZATEN kopyaladığı bir sonucu iletiyor). Varsayılan False — set_mtf_klines'ın
+        diğer TÜM çağıranları self.mtf_buffers[...]'ı DOĞRUDAN iletiyor (paylaşılan,
+        canlı buffer) — onlarda kopya ZORUNLU, aksi halde executor thread'i Arrow'a
+        çevirirken event loop aynı objeyi eşzamanlı mutasyona uğratabilir (yarış durumu)."""
         if "open_time" in df.columns and df["open_time"].duplicated().any():
             df = df.drop_duplicates(subset=["open_time"], keep="last")
-        return RedisClient._df_to_arrow_bytes(df)
+        elif not already_owned:
+            df = df.copy()
+        return RedisClient._to_arrow_bytes_raw(df)
 
     @staticmethod
-    def _df_to_arrow_bytes(df: pd.DataFrame) -> bytes:
-        df = df.copy()
+    def _to_arrow_bytes_raw(df: pd.DataFrame) -> bytes:
+        """df ÇAĞIRANA AİT (tek-sahipli) olmalı — yerinde mutasyon yapar, kopyalamaz."""
         for col in df.columns:
             if df[col].dtype == object:
                 converted = pd.to_numeric(df[col], errors="coerce")
@@ -220,6 +230,10 @@ class RedisClient:
         writer.write_table(table)
         writer.close()
         return _ARROW_MAGIC + sink.getvalue().to_pybytes()
+
+    @staticmethod
+    def _df_to_arrow_bytes(df: pd.DataFrame) -> bytes:
+        return RedisClient._to_arrow_bytes_raw(df.copy())
 
     @staticmethod
     def _arrow_bytes_to_df(data: bytes) -> pd.DataFrame:
@@ -357,17 +371,23 @@ class RedisClient:
         return ttl_map.get(timeframe, 3600)  # Default: 1 saat
 
     @classmethod
-    async def set_mtf_klines(cls, symbol: str, timeframe: str, df: pd.DataFrame) -> bool:
+    async def set_mtf_klines(
+        cls, symbol: str, timeframe: str, df: pd.DataFrame, already_owned: bool = False
+    ) -> bool:
         """
         MTF kline'ı pending dict'e ekler — batch flusher Redis'e iter.
         Çağrı başına bağlantı yok, semaphore yok, burst sorunu yok.
+
+        already_owned=True SADECE df'nin bu çağrıdan önce taze üretilmiş
+        (self.mtf_buffers[...] gibi paylaşılan bir buffer'a takılı OLMAYAN) özel
+        bir kopya olduğu kesinse kullanılmalı — bkz. _dedupe_and_to_arrow_bytes.
         """
         try:
             key = cls._get_mtf_key(symbol, timeframe, "live_kline_data")
             ttl = cls._get_ttl_for_timeframe(timeframe)
             loop = asyncio.get_running_loop()
             arrow_bytes = await loop.run_in_executor(
-                _ARROW_EXECUTOR, cls._dedupe_and_to_arrow_bytes, df
+                _ARROW_EXECUTOR, cls._dedupe_and_to_arrow_bytes, df, already_owned
             )
             cls._pending_klines[key] = (arrow_bytes, ttl)
             cls._pending_publishes.add(f"{symbol}:{timeframe}")

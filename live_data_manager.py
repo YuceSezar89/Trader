@@ -78,10 +78,17 @@ _RANKING_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
 )
 _TICK_TF_WHITELIST = {"1m", "5m", "15m", "30m", "1h", "4h", "6h", "8h", "12h", "1d"}
 _TICK_THROTTLE_SECS = {
-    "1m": 2,
-    "5m": 2,
-    "15m": 2,
-    "30m": 2,
+    # 1m sinyal üretimi/VPMV/ATR hep KAPANAN bar yolundan tetikleniyor
+    # (_update_and_process_symbol_mtf) — forming-tick sadece görüntü içindir,
+    # 2sn'den 3sn'ye çekmek sinyal mantığını etkilemez (30 Tem 2026 CPU profili).
+    "1m": 3,
+    # 30 Tem 2026: 5m/15m/30m forming-bar dispatch'i (buf.copy()+Arrow serialize+
+    # Redis set) 548 sembol × 2sn'de bir tek çekirdeği doyuruyordu (bkz. CPU
+    # performans araştırması) — 1h/4h/... TF'lerinde zaten uygulanan kademeli
+    # throttle deseni bu üçüne de uygulandı, 1m dokunulmadı (en hassas görünüm).
+    "5m": 5,
+    "15m": 8,
+    "30m": 10,
     "1h": 30,
     "4h": 60,
     "6h": 60,
@@ -799,7 +806,11 @@ class LiveDataManager:
             merged = await loop.run_in_executor(
                 _MTF_EXECUTOR, _merge_tick_row, buf, tick_row, limit
             )
-            await RedisClient.set_mtf_klines(symbol, interval, merged)
+            # already_owned=True: 'merged' _merge_tick_row'un ürettiği taze/özel
+            # kopya — başka hiçbir yerde (self.mtf_buffers dahil) tutulmuyor, bu
+            # yüzden Arrow'a çevrilirken ikinci bir kopyaya gerek yok (30 Tem 2026
+            # CPU profili). Diğer set_mtf_klines çağrıları bunu KULLANMAMALI.
+            await RedisClient.set_mtf_klines(symbol, interval, merged, already_owned=True)
             logger.debug("[%s] %s tick Redis'e yazıldı", symbol, interval)
 
         except Exception as e:  # pylint: disable=broad-exception-caught
