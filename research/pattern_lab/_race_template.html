@@ -1,0 +1,488 @@
+<title>do_open_streak — {TITLE_SHORT} Yarışı</title>
+<style>
+:root {
+  --bg: #f7f7fa; --bg-elevated: #ffffff; --bg-hover: #eef0f7; --border: #e2e3ea;
+  --text: #1b1c24; --text-muted: #6b6d80; --text-faint: #9a9cb0;
+  --accent: #2a78d6; --accent-dim: #2a78d61a;
+  --green: #1a8f63; --green-dim: #1a8f6314;
+  --red: #c62d38; --red-dim: #c62d3814;
+  --line-idle: #c7c9d6; --shadow: 0 1px 2px rgba(20,20,40,.04), 0 8px 24px rgba(20,20,40,.06);
+}
+:root[data-theme="dark"] {
+  --bg: #0a0b0f; --bg-elevated: #12131a; --bg-hover: #1b1c26; --border: #232430;
+  --text: #e6e7ee; --text-muted: #8a8ca4; --text-faint: #5c5e72;
+  --accent: #3987e5; --accent-dim: #3987e51e;
+  --green: #1f9d6e; --green-dim: #1f9d6e1c;
+  --red: #e8434c; --red-dim: #e8434c1c;
+  --line-idle: #33354a; --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.4);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0a0b0f; --bg-elevated: #12131a; --bg-hover: #1b1c26; --border: #232430;
+    --text: #e6e7ee; --text-muted: #8a8ca4; --text-faint: #5c5e72;
+    --accent: #3987e5; --accent-dim: #3987e51e;
+    --green: #1f9d6e; --green-dim: #1f9d6e1c;
+    --red: #e8434c; --red-dim: #e8434c1c;
+    --line-idle: #33354a; --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.4);
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
+.mono { font-family: ui-monospace, "SF Mono", Consolas, monospace; font-variant-numeric: tabular-nums; }
+.wrap { max-width: 1280px; margin: 0 auto; padding: 28px 22px 70px; }
+.eyebrow { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); font-weight: 600; margin: 0 0 6px; }
+h1 { font-size: 24px; font-weight: 700; margin: 0 0 8px; letter-spacing: -.01em; text-wrap: balance; }
+.sub { color: var(--text-muted); font-size: 13.5px; line-height: 1.6; max-width: 820px; margin: 0 0 22px; }
+.sub code { font-family: ui-monospace, Consolas, monospace; background: var(--bg-hover); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+
+.layout { display: grid; grid-template-columns: 1fr 260px; gap: 16px; align-items: start; }
+@media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+
+.panel { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); }
+.chart-panel { padding: 18px 20px 8px; margin-bottom: 14px; }
+.chart-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 4px; }
+.chart-head h2 { font-size: 13px; font-weight: 600; margin: 0; }
+.metric-tabs { display: flex; gap: 4px; }
+.metric-tabs button {
+  font-size: 11px; padding: 4px 9px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text-muted); cursor: pointer;
+}
+.metric-tabs button.active { background: var(--accent-dim); color: var(--accent); border-color: var(--accent); font-weight: 600; }
+.chart-cap { font-size: 11.5px; color: var(--text-muted); margin: 0 0 10px; }
+svg { display: block; width: 100%; height: auto; overflow: visible; cursor: crosshair; }
+.gridline { stroke: var(--border); stroke-width: 1; }
+.zeroline { stroke: var(--text-faint); stroke-width: 1; stroke-dasharray: 3 3; }
+.axis-label { fill: var(--text-faint); font-size: 10px; font-family: ui-monospace, Consolas, monospace; }
+.race-line { fill: none; stroke-width: 1.6; opacity: .55; transition: opacity .12s, stroke-width .12s; }
+.race-line.hi { stroke-width: 2.6; opacity: 1; }
+.race-line.dim { opacity: .12; }
+.race-dot { transition: opacity .12s, r .12s; }
+.race-dot.dim { opacity: .12; }
+.end-label { font-size: 10.5px; font-family: ui-monospace, Consolas, monospace; font-weight: 600; opacity: 0; transition: opacity .12s; pointer-events: none; }
+.end-label.show { opacity: 1; }
+.crosshair-line { stroke: var(--accent); stroke-width: 1; stroke-dasharray: 2 2; opacity: 0; pointer-events: none; }
+.crosshair-line.show { opacity: .8; }
+
+.leaderboard { padding: 16px 16px 18px; position: sticky; top: 16px; }
+.leaderboard h2 { font-size: 12px; font-weight: 600; margin: 0 0 2px; }
+.leaderboard .cap { font-size: 11px; color: var(--text-muted); margin: 0 0 12px; }
+.lb-hour { font-family: ui-monospace, Consolas, monospace; font-size: 20px; font-weight: 700; color: var(--accent); margin-bottom: 2px; }
+.lb-hint { font-size: 10.5px; color: var(--text-faint); margin-bottom: 12px; }
+.lb-row {
+  padding: 5px 6px; border-radius: 6px; cursor: pointer; transition: background .1s;
+}
+.lb-row:hover, .lb-row.pinned { background: var(--bg-hover); }
+.lb-row-top { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.ha-mini-row { display: flex; gap: 3px; margin: 4px 0 1px 22px; }
+.ha-mini { width: 7px; height: 7px; border-radius: 2px; background: var(--bg-hover); border: 1px solid var(--border); flex-shrink: 0; }
+.ha-mini.on { background: var(--green); border-color: var(--green); }
+.lb-waiting-hdr { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-faint); margin: 10px 0 4px 6px; }
+.lb-waiting { opacity: .55; }
+.lb-waiting .lb-sym { color: var(--text-muted); font-weight: 500; }
+.lb-rank { font-family: ui-monospace, monospace; color: var(--text-faint); font-size: 10.5px; width: 14px; text-align: right; flex-shrink: 0; }
+.lb-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.lb-sym { flex: 1; font-weight: 600; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lb-val { font-family: ui-monospace, monospace; font-size: 11.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.lb-val.pos { color: var(--green); } .lb-val.neg { color: var(--red); }
+
+.legend-note { font-size: 11px; color: var(--text-faint); margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); line-height: 1.6; }
+.legend-note b { color: var(--text-muted); }
+footer { margin-top: 18px; font-size: 11px; color: var(--text-faint); line-height: 1.6; }
+</style>
+
+<div class="wrap">
+  <p class="eyebrow">TRader Panel &middot; Pattern Lab &middot; do_open_streak</p>
+  <h1>{TITLE_LONG}'da tetiklenen {N_SIGNALS} sinyal — girişten +24 saate yarış</h1>
+  <p class="sub">
+    Zaman ekseni artık <strong>gerçek saat</strong> — her sinyal kendi girişinin gerçekleştiği ana denk gelen
+    noktadan (içi boş nokta) başlıyor ve oradan +24h koşuyor, hepsi aynı çizgide 0'dan başlamıyor. Üstteki
+    grafik fiyat, alttaki seçtiğin metrik (EVOL/ERSI dahil). Grafiğin üzerinde gezin: her iki grafik de
+    senkronize kırmızı çizgiyle o ana kilitlenir, sağdaki panel o anki sıralamayı — henüz gelmemiş sinyalleri
+    "henüz gelmedi" olarak ayrı — canlı gösterir. Bir sinyale tıkla / sıralamadan seç → sabitlenir.
+  </p>
+
+  <div class="layout">
+    <div>
+      <div class="panel chart-panel">
+        <div class="chart-head">
+          <h2>Fiyat değişimi (girişe göre %)</h2>
+        </div>
+        <p class="chart-cap">0 = giriş anı fiyatı</p>
+        <svg id="chart-price" viewBox="0 0 860 260" preserveAspectRatio="none"></svg>
+      </div>
+      <div class="panel chart-panel">
+        <div class="chart-head">
+          <h2>Metrik</h2>
+          <div class="metric-tabs" id="metric-tabs">
+            <button data-m="n_aligned" class="active">TF Hizalanma</button>
+            <button data-m="combined">VPMV Combined</button>
+            <button data-m="vol">Vol</button>
+            <button data-m="mom">Mom</button>
+            <button data-m="vlt">Vlt</button>
+            <button data-m="prc">Fiyat-sk</button>
+            <button data-m="cvd">CVD</button>
+            <button data-m="vp">VP</button>
+            <button data-m="evol">EVOL</button>
+            <button data-m="ersi">ERSI</button>
+          </div>
+        </div>
+        <p class="chart-cap" id="metric-cap">0–100 bandı, girişteki mutlak değer (sabit taban yok — kendi seviyesinde takip et)</p>
+        <svg id="chart-metric" viewBox="0 0 860 220" preserveAspectRatio="none"></svg>
+      </div>
+    </div>
+
+    <div class="panel leaderboard">
+      <h2>Sıralama</h2>
+      <p class="cap">grafikte gezin, o andaki durumu gör</p>
+      <div class="lb-hour mono" id="lb-hour">saat 24.0</div>
+      <div class="lb-hint" id="lb-metric-name">fiyat %</div>
+      <div id="lb-rows"></div>
+      <div class="legend-note">
+        <b>Renk</b> = 24h sonundaki sonuç (yeşil kazandı, kırmızı kaybetti) — kimlik değil, akıbet.
+        Bir satıra tıkla veya grafikte bir çizginin üzerine gel: o sinyal kalınlaşır, diğerleri söner.<br />
+        <b>Küçük kareler</b> = o andaki TF hizalanma parmak izi, soldan sağa 5m·15m·1h·4h·6h·8h·12h (dolu=boğa).
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    Kaynak: <code>signals/do_open_streak.py</code> (canlı kod ile doğrulanmış giriş anları) +
+    <code>signals/market_context.py</code> / <code>utils/vpmv.py</code> (canlı sistemle birebir aynı fonksiyonlar),
+    <code>indicators/core.py::calculate_evol</code> / <code>signal_processor.py::_compute_devisso_score</code> (ERSI),
+    30 dakikalık örnekleme, cagg_15m.
+  </footer>
+</div>
+
+<script id="data-json" type="application/json">{DATA_JSON}</script>
+<script>
+(function () {
+  "use strict";
+  var RAW = JSON.parse(document.getElementById("data-json").textContent);
+  var SYMBOLS = [];
+  var BY_SYMBOL = {};
+  RAW.forEach(function (r) {
+    if (!BY_SYMBOL[r.symbol]) { BY_SYMBOL[r.symbol] = []; SYMBOLS.push(r.symbol); }
+    BY_SYMBOL[r.symbol].push(r);
+  });
+  SYMBOLS.forEach(function (s) { BY_SYMBOL[s].sort(function (a, b) { return a.day_hours - b.day_hours; }); });
+
+  var METRIC_LABELS = {
+    n_aligned: "TF Hizalanma (0-7)", combined: "VPMV Combined", vol: "Hacim skoru", mom: "Momentum skoru",
+    vlt: "Volatilite skoru", prc: "Fiyat skoru", cvd: "CVD eğimi", vp: "VP (buy-sell)",
+    evol: "EVOL (Hacim Verimliliği)", ersi: "ERSI (RSI Verimliliği)"
+  };
+  var METRIC_CAPS = {
+    n_aligned: "0–7: 5m/15m/1h/4h/6h/8h/12h Heikin Ashi'sinden kaçı Long yönüyle uyumlu (kapanmış barlarla, her an için ayrı hesaplandı)",
+    combined: "0–100 bandı, girişteki mutlak değer — sabit taban yok, kendi seviyesinde takip et",
+    vol: "0–100 bandı (hacim baskınlığı)", mom: "0–100 bandı (momentum)", vlt: "0–100 bandı (volatilite)",
+    prc: "0–100 bandı (fiyat ivmesi)", cvd: "ham eğim değeri, 0 civarı nötr", vp: "buy-sell delta, 0 civarı nötr",
+    evol: "0–100 percentile — ΔFiyat%/RVOL, yüksek=az hacimle çok hareket (verimli)",
+    ersi: "0–100 percentile — ΔFiyat%/ΔRSI(14), yüksek=trend sağlıklı, düşük=RSI yoruluyor"
+  };
+  var TFS = ["5m", "15m", "1h", "4h", "6h", "8h", "12h"];
+  var DAY_START_HOUR = {DAY_START_HOUR_EXPR}; // ilk sinyal {DAY_START_LABEL}'da geldi
+  var MAX_DAY_HOURS = Math.max.apply(null, RAW.map(function (r) { return r.day_hours; })) + 0.5;
+
+  function outcomeColor(sym) {
+    var arr = BY_SYMBOL[sym];
+    var last = arr[arr.length - 1];
+    return last.price_pct >= 0 ? getVar("--green") : getVar("--red");
+  }
+  function getVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
+  var state = { metric: "n_aligned", pinned: null, hoverHours: MAX_DAY_HOURS };
+
+  // ---------- chart geometry ----------
+  var W = 860, H_PRICE = 260, H_METRIC = 220, PAD_L = 40, PAD_R = 14, PAD_T = 10, PAD_B = 22;
+
+  function xScale(dayHours) { return PAD_L + (dayHours / MAX_DAY_HOURS) * (W - PAD_L - PAD_R); }
+
+  function clockLabel(dayHours) {
+    var abs = DAY_START_HOUR + dayHours;
+    var dayIdx = Math.floor(abs / 24);
+    var h = Math.floor(abs % 24);
+    var mm = Math.round((abs % 24 - h) * 60);
+    if (mm === 60) { mm = 0; h = (h + 1) % 24; }
+    var s = (h < 10 ? "0" : "") + h + ":" + (mm < 10 ? "0" : "") + mm;
+    return dayIdx > 0 ? s + " +" + dayIdx + "g" : s;
+  }
+
+  function clockTicks() {
+    var mod = DAY_START_HOUR % 4;
+    var first = (4 - mod) % 4;
+    var ticks = [];
+    for (var t = first; t <= MAX_DAY_HOURS; t += 4) ticks.push(Math.round(t * 100) / 100);
+    return ticks;
+  }
+  function yScalePrice(v, domain) {
+    var h = H_PRICE - PAD_T - PAD_B;
+    return PAD_T + h - ((v - domain.min) / (domain.max - domain.min)) * h;
+  }
+  function yScaleMetric(v, domain) {
+    var h = H_METRIC - PAD_T - PAD_B;
+    return PAD_T + h - ((v - domain.min) / (domain.max - domain.min)) * h;
+  }
+
+  function niceDomain(values, padFrac) {
+    var min = Math.min.apply(null, values), max = Math.max.apply(null, values);
+    if (min === max) { min -= 1; max += 1; }
+    var span = max - min;
+    return { min: min - span * padFrac, max: max + span * padFrac };
+  }
+
+  function svgEl(tag, attrs) {
+    var el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (var k in attrs) el.setAttribute(k, attrs[k]);
+    return el;
+  }
+
+  function renderPriceChart() {
+    var svg = document.getElementById("chart-price");
+    svg.innerHTML = "";
+    svg.setAttribute("viewBox", "0 0 " + W + " " + H_PRICE);
+
+    var allVals = [];
+    SYMBOLS.forEach(function (s) { BY_SYMBOL[s].forEach(function (p) { allVals.push(p.price_pct); }); });
+    var domain = niceDomain(allVals, 0.08);
+    if (domain.min > 0) domain.min = 0; if (domain.max < 0) domain.max = 0;
+
+    // gridlines
+    [0.25, 0.5, 0.75].forEach(function (f) {
+      var y = PAD_T + (H_PRICE - PAD_T - PAD_B) * f;
+      svg.appendChild(svgEl("line", { class: "gridline", x1: PAD_L, x2: W - PAD_R, y1: y, y2: y }));
+    });
+    var zy = yScalePrice(0, domain);
+    svg.appendChild(svgEl("line", { class: "zeroline", x1: PAD_L, x2: W - PAD_R, y1: zy, y2: zy }));
+
+    // x axis labels (gerçek saat)
+    clockTicks().forEach(function (t) {
+      var x = xScale(t);
+      svg.appendChild(svgEl("text", { class: "axis-label", x: x, y: H_PRICE - 6, "text-anchor": "middle" })).textContent = clockLabel(t);
+    });
+    [domain.max, domain.min].forEach(function (v) {
+      var y = yScalePrice(v, domain);
+      var t = svgEl("text", { class: "axis-label", x: 4, y: y + 3 });
+      t.textContent = (v >= 0 ? "+" : "") + v.toFixed(0) + "%";
+      svg.appendChild(t);
+    });
+
+    var chLine = svgEl("line", { class: "crosshair-line", id: "ch-price", x1: 0, x2: 0, y1: PAD_T, y2: H_PRICE - PAD_B });
+    svg.appendChild(chLine);
+
+    SYMBOLS.forEach(function (sym) {
+      var arr = BY_SYMBOL[sym];
+      var d = arr.map(function (p, i) {
+        return (i === 0 ? "M" : "L") + xScale(p.day_hours).toFixed(1) + "," + yScalePrice(p.price_pct, domain).toFixed(1);
+      }).join(" ");
+      var color = outcomeColor(sym);
+      var path = svgEl("path", { class: "race-line", d: d, stroke: color, "data-sym": sym });
+      svg.appendChild(path);
+      var first = arr[0];
+      svg.appendChild(svgEl("circle", { class: "race-dot start-dot", cx: xScale(first.day_hours), cy: yScalePrice(first.price_pct, domain), r: 2.5, fill: "none", stroke: color, "stroke-width": 1.4, "data-sym": sym }));
+      var last = arr[arr.length - 1];
+      var dot = svgEl("circle", { class: "race-dot", cx: xScale(last.day_hours), cy: yScalePrice(last.price_pct, domain), r: 3, fill: color, "data-sym": sym });
+      svg.appendChild(dot);
+      var label = svgEl("text", { class: "end-label", x: xScale(last.day_hours) + 6, y: yScalePrice(last.price_pct, domain) + 3, fill: color, id: "lbl-price-" + sym });
+      label.textContent = sym.replace("USDT", "").replace("2", "″");
+      svg.appendChild(label);
+    });
+
+    svg.__domain = domain;
+    attachHover(svg, "chart-price");
+  }
+
+  function renderMetricChart() {
+    var svg = document.getElementById("chart-metric");
+    svg.innerHTML = "";
+    svg.setAttribute("viewBox", "0 0 " + W + " " + H_METRIC);
+    var m = state.metric;
+
+    var domain;
+    if (m === "n_aligned") {
+      domain = { min: 0, max: 7 };
+    } else {
+      var allVals = [];
+      SYMBOLS.forEach(function (s) { BY_SYMBOL[s].forEach(function (p) { allVals.push(p[m]); }); });
+      domain = niceDomain(allVals, 0.1);
+    }
+    var showZero = (m === "cvd" || m === "vp");
+    if (showZero) { if (domain.min > 0) domain.min = 0; if (domain.max < 0) domain.max = 0; }
+
+    [0.25, 0.5, 0.75].forEach(function (f) {
+      var y = PAD_T + (H_METRIC - PAD_T - PAD_B) * f;
+      svg.appendChild(svgEl("line", { class: "gridline", x1: PAD_L, x2: W - PAD_R, y1: y, y2: y }));
+    });
+    if (showZero) {
+      var zy = yScaleMetric(0, domain);
+      svg.appendChild(svgEl("line", { class: "zeroline", x1: PAD_L, x2: W - PAD_R, y1: zy, y2: zy }));
+    }
+    clockTicks().forEach(function (t) {
+      var x = xScale(t);
+      svg.appendChild(svgEl("text", { class: "axis-label", x: x, y: H_METRIC - 6, "text-anchor": "middle" })).textContent = clockLabel(t);
+    });
+    [domain.max, domain.min].forEach(function (v) {
+      var y = yScaleMetric(v, domain);
+      var t = svgEl("text", { class: "axis-label", x: 4, y: y + 3 });
+      t.textContent = v.toFixed(m === "cvd" ? 3 : 0);
+      svg.appendChild(t);
+    });
+
+    var chLine = svgEl("line", { class: "crosshair-line", id: "ch-metric", x1: 0, x2: 0, y1: PAD_T, y2: H_METRIC - PAD_B });
+    svg.appendChild(chLine);
+
+    SYMBOLS.forEach(function (sym) {
+      var arr = BY_SYMBOL[sym];
+      var d = arr.map(function (p, i) {
+        return (i === 0 ? "M" : "L") + xScale(p.day_hours).toFixed(1) + "," + yScaleMetric(p[m], domain).toFixed(1);
+      }).join(" ");
+      var color = outcomeColor(sym);
+      var path = svgEl("path", { class: "race-line", d: d, stroke: color, "data-sym": sym });
+      svg.appendChild(path);
+      var first = arr[0];
+      svg.appendChild(svgEl("circle", { class: "race-dot start-dot", cx: xScale(first.day_hours), cy: yScaleMetric(first[m], domain), r: 2.5, fill: "none", stroke: color, "stroke-width": 1.4, "data-sym": sym }));
+      var last = arr[arr.length - 1];
+      var dot = svgEl("circle", { class: "race-dot", cx: xScale(last.day_hours), cy: yScaleMetric(last[m], domain), r: 3, fill: color, "data-sym": sym });
+      svg.appendChild(dot);
+    });
+
+    svg.__domain = domain;
+    document.getElementById("metric-cap").textContent = METRIC_CAPS[m];
+    attachHover(svg, "chart-metric");
+  }
+
+  function attachHover(svg, id) {
+    svg.addEventListener("mousemove", function (e) {
+      var rect = svg.getBoundingClientRect();
+      var xFrac = (e.clientX - rect.left) / rect.width;
+      var xSvg = xFrac * W;
+      var hours = ((xSvg - PAD_L) / (W - PAD_L - PAD_R)) * MAX_DAY_HOURS;
+      hours = Math.max(0, Math.min(MAX_DAY_HOURS, hours));
+      state.hoverHours = hours;
+      updateCrosshairs();
+      updateLeaderboard();
+    });
+    svg.addEventListener("mouseleave", function () {
+      state.hoverHours = MAX_DAY_HOURS;
+      updateCrosshairs();
+      updateLeaderboard();
+    });
+  }
+
+  function updateCrosshairs() {
+    var x = xScale(state.hoverHours);
+    var chP = document.getElementById("ch-price");
+    var chM = document.getElementById("ch-metric");
+    if (chP) { chP.setAttribute("x1", x); chP.setAttribute("x2", x); chP.classList.toggle("show", state.hoverHours < MAX_DAY_HOURS); }
+    if (chM) { chM.setAttribute("x1", x); chM.setAttribute("x2", x); chM.classList.toggle("show", state.hoverHours < MAX_DAY_HOURS); }
+  }
+
+  function applyHighlight() {
+    var active = state.pinned;
+    document.querySelectorAll(".race-line, .race-dot").forEach(function (el) {
+      var sym = el.getAttribute("data-sym");
+      el.classList.remove("hi", "dim");
+      if (active) {
+        el.classList.add(sym === active ? "hi" : "dim");
+      }
+    });
+    document.querySelectorAll(".end-label").forEach(function (el) {
+      el.classList.toggle("show", active && el.id === "lbl-price-" + active);
+    });
+    document.querySelectorAll(".lb-row").forEach(function (el) {
+      el.classList.toggle("pinned", active && el.dataset.sym === active);
+    });
+  }
+
+  function updateLeaderboard() {
+    var h = state.hoverHours;
+    document.getElementById("lb-hour").textContent = clockLabel(h);
+    document.getElementById("lb-metric-name").textContent = state.metric === "combined" ? "fiyat % / VPMV" : "fiyat % / " + METRIC_LABELS[state.metric];
+
+    var rows = SYMBOLS.filter(function (sym) {
+      return BY_SYMBOL[sym][0].day_hours <= h + 1e-6;
+    }).map(function (sym) {
+      var arr = BY_SYMBOL[sym];
+      var best = arr[0], bestDiff = Infinity;
+      for (var i = 0; i < arr.length; i++) {
+        var d = Math.abs(arr[i].day_hours - h);
+        if (d < bestDiff) { bestDiff = d; best = arr[i]; }
+      }
+      return { sym: sym, price: best.price_pct, metric: best[state.metric], rec: best };
+    });
+    rows.sort(function (a, b) { return b.price - a.price; });
+
+    var waiting = SYMBOLS.filter(function (sym) { return BY_SYMBOL[sym][0].day_hours > h + 1e-6; });
+
+    var html = rows.map(function (r, i) {
+      var color = outcomeColor(r.sym);
+      var mVal = state.metric === "cvd" ? r.metric.toFixed(3) : (state.metric === "n_aligned" ? r.metric + "/7" : r.metric.toFixed(1));
+      var dots = TFS.map(function (tf) {
+        return '<span class="ha-mini' + (r.rec["ha_" + tf] ? " on" : "") + '" title="' + tf + '"></span>';
+      }).join("");
+      return '<div class="lb-row" data-sym="' + r.sym + '">' +
+        '<div class="lb-row-top">' +
+        '<span class="lb-rank mono">' + (i + 1) + '</span>' +
+        '<span class="lb-dot" style="background:' + color + '"></span>' +
+        '<span class="lb-sym">' + r.sym.replace("USDT", "").replace("2", "″") + '</span>' +
+        '<span class="lb-val ' + (r.price >= 0 ? "pos" : "neg") + '">' + (r.price >= 0 ? "+" : "") + r.price.toFixed(1) + '%</span>' +
+        '<span class="lb-val mono" style="color:var(--text-faint);min-width:34px;text-align:right">' + mVal + '</span>' +
+        '</div>' +
+        '<div class="ha-mini-row">' + dots + '</div>' +
+        '</div>';
+    }).join("");
+
+    if (waiting.length) {
+      html += '<div class="lb-waiting-hdr">henüz gelmedi</div>' + waiting.map(function (sym) {
+        return '<div class="lb-row lb-waiting" data-sym="' + sym + '">' +
+          '<div class="lb-row-top">' +
+          '<span class="lb-rank mono">·</span>' +
+          '<span class="lb-dot" style="background:var(--text-faint)"></span>' +
+          '<span class="lb-sym">' + sym.replace("USDT", "").replace("2", "″") + '</span>' +
+          '<span class="lb-val mono" style="color:var(--text-faint)">' + BY_SYMBOL[sym][0].entry_clock + '</span>' +
+          '</div></div>';
+      }).join("");
+    }
+    document.getElementById("lb-rows").innerHTML = html;
+
+    document.querySelectorAll(".lb-row").forEach(function (el) {
+      el.addEventListener("click", function () {
+        var s = el.dataset.sym;
+        state.pinned = state.pinned === s ? null : s;
+        applyHighlight();
+      });
+    });
+    applyHighlight();
+  }
+
+  function delegateLineHover() {
+    [document.getElementById("chart-price"), document.getElementById("chart-metric")].forEach(function (svg) {
+      svg.addEventListener("mouseover", function (e) {
+        if (e.target.classList.contains("race-line") || e.target.classList.contains("race-dot")) {
+          var s = e.target.getAttribute("data-sym");
+          state.pinned = s;
+          applyHighlight();
+        }
+      });
+    });
+  }
+
+  document.getElementById("metric-tabs").addEventListener("click", function (e) {
+    if (e.target.tagName !== "BUTTON") return;
+    document.querySelectorAll("#metric-tabs button").forEach(function (b) { b.classList.remove("active"); });
+    e.target.classList.add("active");
+    state.metric = e.target.dataset.m;
+    renderMetricChart();
+    delegateLineHover();
+    applyHighlight();
+    updateLeaderboard();
+  });
+
+  renderPriceChart();
+  renderMetricChart();
+  delegateLineHover();
+  updateCrosshairs();
+  updateLeaderboard();
+})();
+</script>
