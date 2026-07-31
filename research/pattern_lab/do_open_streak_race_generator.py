@@ -144,6 +144,25 @@ async def _one_symbol_series(label: str, real_sym: str, entry_local: pd.Timestam
     entry_idx = idx[0]
     entry_price = float(df["close"].iloc[entry_idx])
 
+    # total_amount (Devis'So orijinal formülü): bar-bar imzalı %değişimin
+    # kümülatif toplamı. Orijinalde hiç sıfırlanmaz ama bu keyfi/karşılaştırılamaz
+    # bir taban yaratır (bkz. memory: bullish_pressure aynı hatayı taşıyor) —
+    # burada price_pct ile tutarlı olsun diye giriş anında 0'a sabitleniyor.
+    close_all = df["close"].to_numpy(float)
+    prev_close_all = np.roll(close_all, 1)
+    prev_close_all[0] = np.nan
+    up_bar_all = close_all > prev_close_all
+    down_bar_all = close_all < prev_close_all
+    delta_amount_all = np.zeros(len(close_all))
+    delta_amount_all[up_bar_all] = (
+        (close_all[up_bar_all] - prev_close_all[up_bar_all]) / prev_close_all[up_bar_all] * 100.0
+    )
+    delta_amount_all[down_bar_all] = (
+        -(prev_close_all[down_bar_all] - close_all[down_bar_all]) / close_all[down_bar_all] * 100.0
+    )
+    cum_amount_all = np.cumsum(delta_amount_all)
+    amount_at_entry = cum_amount_all[entry_idx]
+
     ha_series = {}
     for tf in _TFS:
         tdf = await get_cagg_klines(real_sym, tf, _KLINE_LOOKBACK)
@@ -200,6 +219,7 @@ async def _one_symbol_series(label: str, real_sym: str, entry_local: pd.Timestam
             "combined": _clean_float(vpmv),
             "evol": _clean_float(evol),
             "ersi": _clean_float(ersi),
+            "amt": _clean_float(cum_amount_all[i] - amount_at_entry),
         }
         row.update(ha_row)
         row["n_aligned"] = n_aligned

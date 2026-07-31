@@ -124,6 +124,7 @@ footer { margin-top: 18px; font-size: 11px; color: var(--text-faint); line-heigh
             <button data-m="vp">VP</button>
             <button data-m="evol">EVOL</button>
             <button data-m="ersi">ERSI</button>
+            <button data-m="amt">Toplam Birikim</button>
           </div>
         </div>
         <p class="chart-cap" id="metric-cap">0–100 bandı, girişteki mutlak değer (sabit taban yok — kendi seviyesinde takip et)</p>
@@ -169,7 +170,7 @@ footer { margin-top: 18px; font-size: 11px; color: var(--text-faint); line-heigh
   var METRIC_LABELS = {
     n_aligned: "TF Hizalanma (0-7)", combined: "VPMV Combined", vol: "Hacim skoru", mom: "Momentum skoru",
     vlt: "Volatilite skoru", prc: "Fiyat skoru", cvd: "CVD eğimi", vp: "VP (buy-sell)",
-    evol: "EVOL (Hacim Verimliliği)", ersi: "ERSI (RSI Verimliliği)"
+    evol: "EVOL (Hacim Verimliliği)", ersi: "ERSI (RSI Verimliliği)", amt: "Toplam Birikim (Devis'So)"
   };
   var METRIC_CAPS = {
     n_aligned: "0–7: 5m/15m/1h/4h/6h/8h/12h Heikin Ashi'sinden kaçı Long yönüyle uyumlu (kapanmış barlarla, her an için ayrı hesaplandı)",
@@ -177,7 +178,8 @@ footer { margin-top: 18px; font-size: 11px; color: var(--text-faint); line-heigh
     vol: "0–100 bandı (hacim baskınlığı)", mom: "0–100 bandı (momentum)", vlt: "0–100 bandı (volatilite)",
     prc: "0–100 bandı (fiyat ivmesi)", cvd: "ham eğim değeri, 0 civarı nötr", vp: "buy-sell delta, 0 civarı nötr",
     evol: "0–100 percentile — ΔFiyat%/RVOL, yüksek=az hacimle çok hareket (verimli)",
-    ersi: "0–100 percentile — ΔFiyat%/ΔRSI(14), yüksek=trend sağlıklı, düşük=RSI yoruluyor"
+    ersi: "0–100 percentile — ΔFiyat%/ΔRSI(14), yüksek=trend sağlıklı, düşük=RSI yoruluyor",
+    amt: "bar-bar imzalı %değişimin girişten beri kümülatif toplamı (0=giriş) — price_pct'e çok yakın çıkar (küçük hareketlerde toplama≈bileşik), sadece büyük kümülatif hareketlerde gözle görülür ayrışır"
   };
   var TFS = ["5m", "15m", "1h", "4h", "6h", "8h", "12h"];
   var DAY_START_HOUR = {DAY_START_HOUR_EXPR}; // ilk sinyal {DAY_START_LABEL}'da geldi
@@ -307,7 +309,7 @@ footer { margin-top: 18px; font-size: 11px; color: var(--text-faint); line-heigh
       SYMBOLS.forEach(function (s) { BY_SYMBOL[s].forEach(function (p) { allVals.push(p[m]); }); });
       domain = niceDomain(allVals, 0.1);
     }
-    var showZero = (m === "cvd" || m === "vp");
+    var showZero = (m === "cvd" || m === "vp" || m === "amt");
     if (showZero) { if (domain.min > 0) domain.min = 0; if (domain.max < 0) domain.max = 0; }
 
     [0.25, 0.5, 0.75].forEach(function (f) {
