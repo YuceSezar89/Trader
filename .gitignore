@@ -126,4 +126,4 @@ config.local.py
 
 # --- Database migration backups ---
 database/backups/
-*.sql.backup
+*.sql.backupresearch/pattern_lab/
