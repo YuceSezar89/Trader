@@ -2203,6 +2203,7 @@ class LiveDataManager:
                 from sqlalchemy import select as _sel
 
                 from database.engine import get_session as _gs
+                from database.models import PaperTrade as _PT
                 from database.models import Signal as _Sig
                 from utils.vpmv import POST_BARS, PRE_BARS, compute_post
 
@@ -2265,6 +2266,22 @@ class LiveDataManager:
                             if _row:
                                 _row.vpmv_post_avg = round(post_avg, 2)
                                 _row.vpmv_post_delta = round(post_delta, 2)
+                                # 2 Ağu 2026 (migration 029): aynı değer daha önce
+                                # SADECE Signal'e yazılıyordu, PaperTrade.vpmv_post_avg/
+                                # delta hep NULL kalıyordu — bu sinyalden doğmuş bir
+                                # paper trade varsa o da güncelleniyor.
+                                _pt_row = (
+                                    (
+                                        await _s2.execute(
+                                            _sel(_PT).where(_PT.signal_id == sig.id)
+                                        )
+                                    )
+                                    .scalars()
+                                    .first()
+                                )
+                                if _pt_row:
+                                    _pt_row.vpmv_post_avg = round(post_avg, 2)
+                                    _pt_row.vpmv_post_delta = round(post_delta, 2)
                                 await _s2.commit()
                                 updated += 1
                     except Exception as exc:  # pylint: disable=broad-exception-caught

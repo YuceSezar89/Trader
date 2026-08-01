@@ -211,6 +211,13 @@ class SignalLifecycleManager:
                         price_score=signal_data.get("price_score"),
                         candle_kategori=signal_data.get("candle_kategori"),
                         all_up=signal_data.get("all_up"),
+                        regime_trend=signal_data.get("regime_trend"),
+                        volatility_regime=signal_data.get("volatility_regime"),
+                        btc_z_score=signal_data.get("btc_z_score"),
+                        btc_trend=signal_data.get("btc_trend"),
+                        funding_rate=signal_data.get("funding_rate"),
+                        hour_utc=signal_data.get("hour_utc"),
+                        day_of_week=signal_data.get("day_of_week"),
                     )
                     session.add(new_sig)
                     await session.flush()

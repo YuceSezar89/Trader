@@ -133,6 +133,16 @@ class Signal(Base):
     candle_kategori = Column(String(20), nullable=True)
     all_up = Column(Boolean, nullable=True)
 
+    # 2 Ağu 2026 (migration 029): paper_trades'te zaten hesaplanan ama
+    # signals'a hiç yazılmayan piyasa bağlamı/ML alanları — simetri
+    regime_trend = Column(String(20), nullable=True)
+    volatility_regime = Column(String(20), nullable=True)
+    btc_z_score = Column(Float, nullable=True)
+    btc_trend = Column(String(20), nullable=True)
+    funding_rate = Column(Float, nullable=True)
+    hour_utc = Column(SmallInteger, nullable=True)
+    day_of_week = Column(SmallInteger, nullable=True)
+
     paper_trades = relationship("PaperTrade", back_populates="signal", lazy="noload")
 
 
@@ -203,7 +213,79 @@ class PaperTrade(Base):
     # her şey) — yeni metrik eklemek artık migration gerektirmiyor.
     entry_features = Column(JSONB, nullable=True)
 
+    # 2 Ağu 2026 (migration 029): signals'ta zaten hesaplanan ama
+    # paper_trades'e hiç kopyalanmayan sinyal kalite/sıralama alanları —
+    # simetri. paper_trade_manager.py zaten signal_id ile Signal satırını
+    # tekrar okuyor (devisso_score gibi), aynı okumadan doldurulacak.
+    alpha = Column(Float, nullable=True)
+    beta = Column(Float, nullable=True)
+    sharpe_ratio = Column(Float, nullable=True)
+    sortino_ratio = Column(Float, nullable=True)
+    calmar_ratio = Column(Float, nullable=True)
+    information_ratio = Column(Float, nullable=True)
+    vpmv_pre_proxy = Column(Float, nullable=True)
+    vpmv_pre_total = Column(Float, nullable=True)
+    vp_score_real = Column(Float, nullable=True)
+    market_structure = Column(String(10), nullable=True)
+    fvg_tfs = Column(String(40), nullable=True)
+    candle_pattern = Column(String(100), nullable=True)
+    rank_score = Column(Float, nullable=True)
+    vs_btc = Column(Float, nullable=True)
+    rank_combined = Column(Float, nullable=True)
+    rank_rsi_cross = Column(Float, nullable=True)
+    rank_z_confluence = Column(Float, nullable=True)
+    rank_r_score = Column(Float, nullable=True)
+    rank_aligned = Column(Boolean, nullable=True)
+    rank_alignment_count = Column(Integer, nullable=True)
+    ha_ultra_confirm = Column(SmallInteger, nullable=True)
+    vol_score = Column(Float, nullable=True)
+    mom_score = Column(Float, nullable=True)
+    volat_score = Column(Float, nullable=True)
+    price_score = Column(Float, nullable=True)
+    candle_kategori = Column(String(20), nullable=True)
+    all_up = Column(Boolean, nullable=True)
+    sl_multiplier = Column(Float, nullable=True)
+    tp_multiplier = Column(Float, nullable=True)
+
     signal = relationship("Signal", back_populates="paper_trades", lazy="noload")
+
+
+class SignalPerformance(Base):
+    """Sinyalin T+3/T+5/T+10 bar sonraki getirisi + MFE/MAE — trade'in
+    GERÇEKTEN nasıl kapandığından bağımsız, sabit-ufuk analitiği
+    (signal_performance_analyzer.py yazar). 2 Ağu 2026'ya kadar ORM
+    modeli yoktu, ham SQL ile erişiliyordu (migration 029 ile eklendi,
+    tabloya/veriye dokunulmadı — sadece SQLAlchemy şema senkronizasyonu)."""
+
+    __tablename__ = "signal_performance"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    signal_id = Column(Integer, ForeignKey("signals.id", ondelete="CASCADE"), nullable=False)
+    entry_price = Column(Float, nullable=True)
+    entry_timestamp = Column(DateTime, nullable=True)
+    atr_at_entry = Column(Float, nullable=True)
+    interval = Column(String(10), nullable=True)
+
+    return_t3_atr = Column(Float, nullable=True)
+    return_t5_atr = Column(Float, nullable=True)
+    return_t10_atr = Column(Float, nullable=True)
+    return_t3_pct = Column(Float, nullable=True)
+    return_t5_pct = Column(Float, nullable=True)
+    return_t10_pct = Column(Float, nullable=True)
+
+    mfe_atr = Column(Float, nullable=True)
+    mae_atr = Column(Float, nullable=True)
+    risk_reward = Column(Float, nullable=True)
+    mfe_bar_index = Column(Integer, nullable=True)
+    mae_bar_index = Column(Integer, nullable=True)
+
+    is_calculated = Column(Boolean, nullable=False, default=False)
+    calculation_attempts = Column(Integer, nullable=False, default=0)
+    last_calculation_error = Column(String, nullable=True)
+
+    created_at = Column(DateTime, nullable=False, default=datetime.now)
+    updated_at = Column(DateTime, nullable=True)
+    calculated_at = Column(DateTime, nullable=True)
 
 
 class TradeSnapshot(Base):
@@ -228,7 +310,7 @@ class TradeSnapshot(Base):
     vp_score_real = Column(Float, nullable=True)
     vol_score = Column(Float, nullable=True)
     mom_score = Column(Float, nullable=True)
-    vlt_score = Column(Float, nullable=True)
+    volat_score = Column(Float, nullable=True)
     price_score = Column(Float, nullable=True)
     price_since_entry_pct = Column(Float, nullable=True)
     vpmv_combined = Column(Float, nullable=True)

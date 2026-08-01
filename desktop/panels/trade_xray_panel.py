@@ -57,7 +57,7 @@ _C_WHITE = QColor(COLORS["text_primary"])
 _VPMV_SERIES = [
     ("vol_score", (100, 220, 100), "V"),
     ("mom_score", (100, 160, 240), "M"),
-    ("vlt_score", (240, 180, 80), "Vlt"),
+    ("volat_score", (240, 180, 80), "Vlt"),
     ("price_score", (220, 100, 100), "P"),
     ("vpmv_combined", (240, 240, 80), "Combined"),
 ]
@@ -124,7 +124,7 @@ class _SnapshotWorker(QThread):
                 cur.execute(
                     """
                     SELECT taken_at, price, cvd_slope, vp_score, vp_score_real,
-                           vol_score, mom_score, vlt_score, price_score,
+                           vol_score, mom_score, volat_score, price_score,
                            price_since_entry_pct, vpmv_combined, smc_market_structure
                     FROM trade_snapshots WHERE trade_id = %s ORDER BY taken_at ASC
                     """,
@@ -141,7 +141,7 @@ class _SnapshotWorker(QThread):
                     "vp_score_real": r[4],
                     "vol_score": r[5],
                     "mom_score": r[6],
-                    "vlt_score": r[7],
+                    "volat_score": r[7],
                     "price_score": r[8],
                     "price_since_entry_pct": r[9],
                     "vpmv_combined": r[10],
@@ -673,7 +673,7 @@ class TradeXRayPanel(QWidget):
             _row("PnL", pnl, "{:+.3f}%", pnl_color),
             _row("V", _pct_vs_base("vol_score"), "{:+.1f}%", "#64dc64"),
             _row("M", _pct_vs_base("mom_score"), "{:+.1f}%", "#64a0f0"),
-            _row("Vlt", _pct_vs_base("vlt_score"), "{:+.1f}%", "#f0b450"),
+            _row("Vlt", _pct_vs_base("volat_score"), "{:+.1f}%", "#f0b450"),
             _row("P", _pct_vs_base("price_score"), "{:+.1f}%", "#dc6464"),
             _row("Combined", _pct_vs_base("vpmv_combined"), "{:+.1f}%", "#f0f050"),
             _row("CVD", snap.get("cvd_slope"), "{:.4f}", "#50dcdc"),

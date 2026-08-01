@@ -887,6 +887,34 @@ async def process_and_enrich_signals(
                 enriched_signal["candle_pattern"] = _cdl
                 logger.info("CDL | %s | %s | pattern=%s", symbol, sig_type, _cdl)
 
+                # 2 Ağu 2026 (migration 029): bu alanlar zaten yukarıda (6.3/6.5)
+                # hesaplanmıştı ama sadece _pt_kwargs'a (paper_trade'e) gidiyordu,
+                # signals tablosuna hiç yazılmıyordu — artık enriched_signal'e de
+                # ekleniyor ki signal_lifecycle_manager.process() Signal satırına
+                # yazsın (simetri, "metrikler dağınık" toparlaması).
+                enriched_signal["regime_trend"] = regime_trend
+                enriched_signal["volatility_regime"] = volatility_regime
+                enriched_signal["btc_z_score"] = btc_z
+                enriched_signal["btc_trend"] = btc_trend_str
+                _opened_at = enriched_signal.get("opened_at")
+                if _opened_at is not None:
+                    enriched_signal["hour_utc"] = _opened_at.hour
+                    enriched_signal["day_of_week"] = _opened_at.weekday()
+
+                _funding: Optional[float] = None
+                try:
+                    import json as _json
+
+                    _ticker_raw = await asyncio.wait_for(
+                        RedisClient.get_client().get(f"ticker:{symbol}"),
+                        timeout=SAFE_EXTERNAL_TIMEOUT,
+                    )
+                    if _ticker_raw:
+                        _funding = _json.loads(_ticker_raw).get("funding_rate")
+                except Exception as exc:
+                    logger.debug("funding_rate okunamadı [%s]: %s", symbol, exc)
+                enriched_signal["funding_rate"] = _funding
+
                 logger.info(f"[{symbol}] Sinyal işleniyor: {signal_name} - {sig_type}")
                 if dry_run:
                     logger.info(
@@ -915,19 +943,10 @@ async def process_and_enrich_signals(
                 if signal_id and current_price:
                     _pt_flag = await _get_pt_flag()
                     if _pt_flag != "0":
-                        funding: Optional[float] = None
-                        try:
-                            import json as _json
-
-                            ticker_raw = await asyncio.wait_for(
-                                RedisClient.get_client().get(f"ticker:{symbol}"),
-                                timeout=SAFE_EXTERNAL_TIMEOUT,
-                            )
-                            if ticker_raw:
-                                ticker_d = _json.loads(ticker_raw)
-                                funding = ticker_d.get("funding_rate")
-                        except Exception as exc:
-                            logger.debug("funding_rate okunamadı [%s]: %s", symbol, exc)
+                        # funding artık yukarıda (enriched_signal doldurulurken) bir
+                        # kez okunuyor — signals VE paper_trades aynı değeri paylaşsın
+                        # diye burada ikinci kez sorgulanmıyor (migration 029)
+                        funding = enriched_signal.get("funding_rate")
 
                         _pt_kwargs = dict(
                             signal_data=enriched_signal,

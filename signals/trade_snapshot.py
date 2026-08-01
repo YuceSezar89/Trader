@@ -82,7 +82,7 @@ async def _snapshot_one(
                     vp_score_real=vp_score_real,
                     vol_score=round(vol_s, 2) if vol_s is not None else None,
                     mom_score=round(mom_s, 2) if mom_s is not None else None,
-                    vlt_score=round(vlt_s, 2) if vlt_s is not None else None,
+                    volat_score=round(vlt_s, 2) if vlt_s is not None else None,
                     price_score=round(prc_s, 2) if prc_s is not None else None,
                     price_since_entry_pct=price_since_entry_pct,
                     vpmv_combined=round(vpmv_combined, 2) if vpmv_combined is not None else None,

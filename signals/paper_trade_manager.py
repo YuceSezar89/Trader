@@ -202,7 +202,19 @@ class PaperTradeManager:
                         sl_price = None
                         tp_price = None
 
+                    # 2 Ağu 2026 (migration 029): signal_lifecycle_manager.py'nin
+                    # AYNI "ranking:snapshot" okuduğu blokla simetrik hale getirildi
+                    # — rank_at_entry (pozisyon) yanında rank_score/vs_btc/rank_*
+                    # alanları da (skor) burada, TEK okumadan çıkarılıyor.
                     rank_at_entry: Optional[int] = None
+                    rank_score_val: Optional[float] = None
+                    vs_btc_val: Optional[float] = None
+                    rank_combined_val: Optional[float] = None
+                    rank_rsi_cross_val: Optional[float] = None
+                    rank_z_confluence_val: Optional[float] = None
+                    rank_r_score_val: Optional[float] = None
+                    rank_aligned_val: Optional[bool] = None
+                    rank_alignment_count_val: Optional[int] = None
                     try:
                         raw = await asyncio.wait_for(
                             RedisClient.get_client().get("ranking:snapshot"),
@@ -210,8 +222,19 @@ class PaperTradeManager:
                         )
                         if raw:
                             snap = _json.loads(raw)
-                            rank_map = {item["symbol"]: item["rank"] for item in snap}
-                            rank_at_entry = rank_map.get(symbol)
+                            entry = next(
+                                (item for item in snap if item.get("symbol") == symbol), None
+                            )
+                            if entry:
+                                rank_at_entry = entry.get("rank")
+                                rank_score_val = entry.get("rank_score")
+                                vs_btc_val = entry.get("vs_btc")
+                                rank_combined_val = entry.get("combined")
+                                rank_rsi_cross_val = entry.get("rsi_cross_combined")
+                                rank_z_confluence_val = entry.get("z_confluence")
+                                rank_r_score_val = entry.get("r_score")
+                                rank_aligned_val = entry.get("aligned")
+                                rank_alignment_count_val = entry.get("alignment_count")
                     except Exception as exc:
                         logger.debug("[PaperTrade] ranking snapshot okunamadı: %s", exc)
 
@@ -254,6 +277,43 @@ class PaperTradeManager:
                         devisso_score=sig.devisso_score if sig else signal_data.get("devisso_score"),
                         devisso_delta=sig.devisso_delta if sig else None,
                         devisso_ratio=sig.devisso_ratio if sig else None,
+                        # 2 Ağu 2026 (migration 029): "metrikler dağınık" toparlaması —
+                        # signals'ta hesaplanan ama paper_trades'e hiç kopyalanmayan
+                        # alanlar artık simetrik. cvd_slope/vp_* zaten signal_data'da
+                        # vardı, sadece constructor'a bağlanmamıştı (bug'dı).
+                        cvd_slope=signal_data.get("cvd_slope"),
+                        vp_buy_avg=signal_data.get("vp_buy_avg"),
+                        vp_sell_avg=signal_data.get("vp_sell_avg"),
+                        vp_score=signal_data.get("vp_score"),
+                        alpha=signal_data.get("alpha"),
+                        beta=signal_data.get("beta"),
+                        sharpe_ratio=signal_data.get("sharpe_ratio"),
+                        sortino_ratio=signal_data.get("sortino_ratio"),
+                        calmar_ratio=signal_data.get("calmar_ratio"),
+                        information_ratio=signal_data.get("information_ratio"),
+                        vpmv_pre_proxy=signal_data.get("vpmv_pre_proxy"),
+                        vpmv_pre_total=signal_data.get("vpmv_pre_total"),
+                        vp_score_real=signal_data.get("vp_score_real"),
+                        market_structure=signal_data.get("market_structure"),
+                        fvg_tfs=signal_data.get("fvg_tfs"),
+                        candle_pattern=signal_data.get("candle_pattern"),
+                        ha_ultra_confirm=signal_data.get("ha_ultra_confirm"),
+                        vol_score=signal_data.get("vol_score"),
+                        mom_score=signal_data.get("mom_score"),
+                        volat_score=signal_data.get("volat_score"),
+                        price_score=signal_data.get("price_score"),
+                        candle_kategori=signal_data.get("candle_kategori"),
+                        all_up=signal_data.get("all_up"),
+                        sl_multiplier=sig.sl_multiplier if sig else None,
+                        tp_multiplier=sig.tp_multiplier if sig else None,
+                        rank_score=rank_score_val,
+                        vs_btc=vs_btc_val,
+                        rank_combined=rank_combined_val,
+                        rank_rsi_cross=rank_rsi_cross_val,
+                        rank_z_confluence=rank_z_confluence_val,
+                        rank_r_score=rank_r_score_val,
+                        rank_aligned=rank_aligned_val,
+                        rank_alignment_count=rank_alignment_count_val,
                         # 19 Tem 2026: giriş anındaki TÜM enriched_signal dict'i
                         # (VPMV bileşenleri, SMC, finansal oranlar, vb. — yukarıdaki
                         # kolonlarda olmayan her şey). json round-trip ile
