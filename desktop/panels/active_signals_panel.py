@@ -497,9 +497,6 @@ class ActiveSignalsPanel(QWidget):
                     "signal_type": row.signal_type,
                     "opened_at": row.timestamp.isoformat() if row.timestamp else None,
                     "entry_price": row.entry_price,
-                    "stop_loss_price": row.stop_loss_price,
-                    "take_profit_price": row.take_profit_price,
-                    "trailing_stop_price": row.trailing_stop_price,
                 }
             )
 

@@ -53,11 +53,14 @@ class _FetchWorker(QThread):
         try:
             conn = psycopg2.connect(**self._db_config)
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                # Sadece ta_kovalama_live izleniyor (24 Tem 2026 — tf_alignment_live
-                # ÇÜRÜTÜLDÜ/durduruldu, ta_kovalama_live'a geçildi; 14 Tem'deki AYNI
-                # tasarım kararı: panel karışmasın diye özet/tablolar tek aktif
-                # stratejiye göre filtrelendi). $2000 başlangıç bakiyesi bu bütçeyle
-                # eşleşiyor (bkz. paper_portfolio tablosu).
+                # Portföy özeti sadece ta_kovalama_live'ı izliyor (24 Tem 2026 —
+                # tf_alignment_live ÇÜRÜTÜLDÜ/durduruldu, ta_kovalama_live'a geçildi;
+                # $2000 başlangıç bakiyesi bu bütçeyle eşleşiyor, bkz. paper_portfolio
+                # tablosu) — manuel işlemlerin P&L'i bu bütçeye karışmasın diye
+                # buraya dahil edilmiyor. Açık/kapalı TABLOLAR ise ayrıca
+                # source='manual' işlemleri de gösteriyor (1 Ağu 2026 — manuel
+                # işlem, ManualTradeDialog'un o zamanki hatalı "tf_alignment_live"
+                # varsayılanı yüzünden panelde hiç görünmüyordu).
                 cur.execute(
                     """
                     SELECT
@@ -80,7 +83,7 @@ class _FetchWorker(QThread):
                            trailing_stop_price, opened_at, vpms_score, z_score_entry,
                            position_usd, devisso_score
                     FROM paper_trades
-                    WHERE status = 'open' AND strategy = 'ta_kovalama_live'
+                    WHERE status = 'open' AND (strategy = 'ta_kovalama_live' OR source = 'manual')
                     ORDER BY opened_at DESC
                 """
                 )
@@ -93,7 +96,7 @@ class _FetchWorker(QThread):
                            close_reason, closed_at, opened_at,
                            stop_loss_price, take_profit_price, trailing_stop_price
                     FROM paper_trades
-                    WHERE status = 'closed' AND strategy = 'ta_kovalama_live'
+                    WHERE status = 'closed' AND (strategy = 'ta_kovalama_live' OR source = 'manual')
                     ORDER BY closed_at DESC
                     LIMIT 200
                 """

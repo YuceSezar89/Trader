@@ -54,9 +54,12 @@ svg { display: block; width: 100%; height: auto; overflow: visible; cursor: cros
 .zeroline { stroke: var(--text-faint); stroke-width: 1; stroke-dasharray: 3 3; }
 .axis-label { fill: var(--text-faint); font-size: 10px; font-family: ui-monospace, Consolas, monospace; }
 .race-line { fill: none; stroke-width: 1.6; opacity: .55; transition: opacity .12s, stroke-width .12s; }
+.race-line.muted { opacity: .16; stroke-width: 1.2; }
+.race-line.spotlight { opacity: .9; stroke-width: 2; }
 .race-line.hi { stroke-width: 2.6; opacity: 1; }
 .race-line.dim { opacity: .12; }
 .race-dot { transition: opacity .12s, r .12s; }
+.race-dot.muted { opacity: .25; }
 .race-dot.dim { opacity: .12; }
 .end-label { font-size: 10.5px; font-family: ui-monospace, Consolas, monospace; font-weight: 600; opacity: 0; transition: opacity .12s; pointer-events: none; }
 .end-label.show { opacity: 1; }
@@ -166,6 +169,22 @@ footer { margin-top: 18px; font-size: 11px; color: var(--text-faint); line-heigh
     BY_SYMBOL[r.symbol].push(r);
   });
   SYMBOLS.forEach(function (s) { BY_SYMBOL[s].sort(function (a, b) { return a.day_hours - b.day_hours; }); });
+
+  // SPOTLIGHT: en iyi 5 + en kötü 5 (son price_pct'e göre) tam renkte/opak
+  // çizilir, geri kalanı soluk gri "kalabalık" olarak arka planda kalır —
+  // N=5'lik el-seçili bir kıyaslamada (Pine örneği) her çizgi zaten ayrı
+  // renkte görünüyordu; N büyüdükçe (20-35 sinyal) sembol-başına-renk
+  // pratik olmadığı için bunun yerine "en çok ayrışanı öne çıkar" seçildi.
+  var SPOTLIGHT = {};
+  (function () {
+    var finals = SYMBOLS.map(function (s) {
+      var arr = BY_SYMBOL[s];
+      return { sym: s, pct: arr[arr.length - 1].price_pct };
+    });
+    finals.sort(function (a, b) { return b.pct - a.pct; });
+    for (var i = 0; i < Math.min(5, finals.length); i++) SPOTLIGHT[finals[i].sym] = true;
+    for (var j = Math.max(0, finals.length - 5); j < finals.length; j++) SPOTLIGHT[finals[j].sym] = true;
+  })();
 
   var METRIC_LABELS = {
     n_aligned: "TF Hizalanma (0-7)", combined: "VPMV Combined", vol: "Hacim skoru", mom: "Momentum skoru",
@@ -278,15 +297,18 @@ footer { margin-top: 18px; font-size: 11px; color: var(--text-faint); line-heigh
       var d = arr.map(function (p, i) {
         return (i === 0 ? "M" : "L") + xScale(p.day_hours).toFixed(1) + "," + yScalePrice(p.price_pct, domain).toFixed(1);
       }).join(" ");
-      var color = outcomeColor(sym);
-      var path = svgEl("path", { class: "race-line", d: d, stroke: color, "data-sym": sym });
+      var spot = !!SPOTLIGHT[sym];
+      var color = spot ? outcomeColor(sym) : getVar("--line-idle");
+      var lineCls = "race-line " + (spot ? "spotlight" : "muted");
+      var dotCls = "race-dot " + (spot ? "" : "muted");
+      var path = svgEl("path", { class: lineCls, d: d, stroke: color, "data-sym": sym });
       svg.appendChild(path);
       var first = arr[0];
-      svg.appendChild(svgEl("circle", { class: "race-dot start-dot", cx: xScale(first.day_hours), cy: yScalePrice(first.price_pct, domain), r: 2.5, fill: "none", stroke: color, "stroke-width": 1.4, "data-sym": sym }));
+      svg.appendChild(svgEl("circle", { class: dotCls + " start-dot", cx: xScale(first.day_hours), cy: yScalePrice(first.price_pct, domain), r: 2.5, fill: "none", stroke: color, "stroke-width": 1.4, "data-sym": sym }));
       var last = arr[arr.length - 1];
-      var dot = svgEl("circle", { class: "race-dot", cx: xScale(last.day_hours), cy: yScalePrice(last.price_pct, domain), r: 3, fill: color, "data-sym": sym });
+      var dot = svgEl("circle", { class: dotCls, cx: xScale(last.day_hours), cy: yScalePrice(last.price_pct, domain), r: 3, fill: color, "data-sym": sym });
       svg.appendChild(dot);
-      var label = svgEl("text", { class: "end-label", x: xScale(last.day_hours) + 6, y: yScalePrice(last.price_pct, domain) + 3, fill: color, id: "lbl-price-" + sym });
+      var label = svgEl("text", { class: "end-label", x: xScale(last.day_hours) + 6, y: yScalePrice(last.price_pct, domain) + 3, fill: spot ? color : outcomeColor(sym), id: "lbl-price-" + sym });
       label.textContent = sym.replace("USDT", "").replace("2", "″");
       svg.appendChild(label);
     });
@@ -339,13 +361,16 @@ footer { margin-top: 18px; font-size: 11px; color: var(--text-faint); line-heigh
       var d = arr.map(function (p, i) {
         return (i === 0 ? "M" : "L") + xScale(p.day_hours).toFixed(1) + "," + yScaleMetric(p[m], domain).toFixed(1);
       }).join(" ");
-      var color = outcomeColor(sym);
-      var path = svgEl("path", { class: "race-line", d: d, stroke: color, "data-sym": sym });
+      var spot = !!SPOTLIGHT[sym];
+      var color = spot ? outcomeColor(sym) : getVar("--line-idle");
+      var lineCls = "race-line " + (spot ? "spotlight" : "muted");
+      var dotCls = "race-dot " + (spot ? "" : "muted");
+      var path = svgEl("path", { class: lineCls, d: d, stroke: color, "data-sym": sym });
       svg.appendChild(path);
       var first = arr[0];
-      svg.appendChild(svgEl("circle", { class: "race-dot start-dot", cx: xScale(first.day_hours), cy: yScaleMetric(first[m], domain), r: 2.5, fill: "none", stroke: color, "stroke-width": 1.4, "data-sym": sym }));
+      svg.appendChild(svgEl("circle", { class: dotCls + " start-dot", cx: xScale(first.day_hours), cy: yScaleMetric(first[m], domain), r: 2.5, fill: "none", stroke: color, "stroke-width": 1.4, "data-sym": sym }));
       var last = arr[arr.length - 1];
-      var dot = svgEl("circle", { class: "race-dot", cx: xScale(last.day_hours), cy: yScaleMetric(last[m], domain), r: 3, fill: color, "data-sym": sym });
+      var dot = svgEl("circle", { class: dotCls, cx: xScale(last.day_hours), cy: yScaleMetric(last[m], domain), r: 3, fill: color, "data-sym": sym });
       svg.appendChild(dot);
     });
 
@@ -390,7 +415,8 @@ footer { margin-top: 18px; font-size: 11px; color: var(--text-faint); line-heigh
       }
     });
     document.querySelectorAll(".end-label").forEach(function (el) {
-      el.classList.toggle("show", active && el.id === "lbl-price-" + active);
+      var sym = el.id.replace("lbl-price-", "");
+      el.classList.toggle("show", active ? sym === active : !!SPOTLIGHT[sym]);
     });
     document.querySelectorAll(".lb-row").forEach(function (el) {
       el.classList.toggle("pinned", active && el.dataset.sym === active);

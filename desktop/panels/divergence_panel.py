@@ -74,6 +74,15 @@ _PALETTE = [
     (120, 120, 240),
 ]
 
+# Grafikte aynı anda çok sayıda aktif sinyal varsa (>18) _PALETTE renkleri
+# tekrar etmeye başlayıp farklı sembolleri aynı renkte gösteriyordu, tablo
+# ile birlikte okununca "hangi çizgi hangisi" ayırt edilemez hale geliyordu
+# (31 Tem 2026). Artık sadece en yüksek skorlu (vpmv×|z|) SPOTLIGHT_N pozitif
+# + SPOTLIGHT_N negatif sembol gerçek renk+etiketle çiziliyor, geri kalanı
+# bu soluk gri tonla — race grafiğindeki aynı çözüm (bkz. do_open_streak_race_generator).
+_SPOTLIGHT_N = 10
+_C_LINE_MUTED = (90, 92, 105)
+
 
 class _NumericItem(QTableWidgetItem):
     def __lt__(self, other: "QTableWidgetItem") -> bool:
@@ -292,7 +301,7 @@ class DivergencePanel(QWidget):
 
     # ── Grafik güncelleme ─────────────────────────────────────────────────
 
-    def _update_chart(self, series: dict) -> None:
+    def _update_chart(self, series: dict, spotlight: set) -> None:
         active = set(series.keys())
         stale = set(self._curves.keys()) - active
 
@@ -303,7 +312,10 @@ class DivergencePanel(QWidget):
                 self._chart.removeItem(self._labels.pop(sym))
             self._sym_colors.pop(sym, None)
 
-        # Renk ata (yeni sembollere)
+        # Renk ata (yeni sembollere) — sadece spotlight'a girmişse anlamlı,
+        # ama sembol daha sonra tekrar spotlight'a girerse aynı rengi
+        # koruması için tüm aktiflere kimlik rengi atanıyor, kullanımı
+        # aşağıda spotlight şartına bağlı.
         color_idx = 0
         for sym in sorted(active):
             if sym not in self._sym_colors:
@@ -320,25 +332,35 @@ class DivergencePanel(QWidget):
             if len(z_arr) == 0:
                 if sym in self._curves:
                     self._chart.removeItem(self._curves.pop(sym))
+                if sym in self._labels:
+                    self._chart.removeItem(self._labels.pop(sym))
                 continue
-            color = self._sym_colors[sym]
+
+            is_spot = sym in spotlight
+            color = self._sym_colors[sym] if is_spot else _C_LINE_MUTED
+            width = 1.5 if is_spot else 1.0
             x_data = np.arange(len(z_arr), dtype=np.float32)
             y_data = z_arr.astype(np.float32)
 
             if sym in self._curves:
                 self._curves[sym].setData(x_data, y_data)
+                self._curves[sym].setPen(pg.mkPen(color=color, width=width))
             else:
-                pen = pg.mkPen(color=color, width=1.5)
+                pen = pg.mkPen(color=color, width=width)
                 curve = self._chart.plot(x_data, y_data, pen=pen)
                 self._curves[sym] = curve
 
-            # Uç etiket
-            if len(z_arr) == 0:
+            # Uç etiket — sadece spotlight'takiler için (18 renk kapasitesini
+            # aşan sayıda etiket zaten okunaksız oluyordu)
+            if not is_spot:
+                if sym in self._labels:
+                    self._chart.removeItem(self._labels.pop(sym))
                 continue
             label_text = sym.replace("USDT", "")
             if sym in self._labels:
                 self._labels[sym].setPos(float(x_data[-1]), float(y_data[-1]))
                 self._labels[sym].setText(label_text)
+                self._labels[sym].setColor(color)
             else:
                 txt = pg.TextItem(
                     text=label_text,
@@ -370,8 +392,6 @@ class DivergencePanel(QWidget):
                 sym: s for sym, s in series.items() if ind_filter in (indicators_map.get(sym) or "")
             }
 
-        self._update_chart(series)
-
         def _score(sym: str, z: float) -> float:
             return (vpmv_map.get(sym) or 0.0) * abs(z)
 
@@ -385,6 +405,11 @@ class DivergencePanel(QWidget):
             key=lambda x: _score(x[0], x[1]),
             reverse=True,
         )
+
+        spotlight = {sym for sym, _ in pos_rows[:_SPOTLIGHT_N]} | {
+            sym for sym, _ in neg_rows[:_SPOTLIGHT_N]
+        }
+        self._update_chart(series, spotlight)
 
         pos_deltas = {
             sym: self._prev_pos_ranks[sym] - i

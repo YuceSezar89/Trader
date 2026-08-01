@@ -44,7 +44,7 @@ class ManualTradeDialog(QDialog):
         prefill_direction: str = "Long",
         prefill_interval: str = "",
         prefill_price: float = 0.0,
-        strategy: str = "tf_alignment_live",
+        strategy: str = "manual",
     ):
         super().__init__(parent)
         self._db_config = db_config
