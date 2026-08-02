@@ -14,7 +14,7 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import DeclarativeBase, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 # SQLAlchemy 2.0 stili, mypy ve linter uyumluluğu için
@@ -297,9 +297,7 @@ class TradeSnapshot(Base):
     __tablename__ = "trade_snapshots"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    trade_id = Column(
-        Integer, ForeignKey("paper_trades.id", ondelete="CASCADE"), nullable=False
-    )
+    trade_id = Column(Integer, ForeignKey("paper_trades.id", ondelete="CASCADE"), nullable=False)
     symbol = Column(String(30), nullable=False)
     taken_at = Column(DateTime, primary_key=True, nullable=False, default=datetime.now)
     price = Column(Float, nullable=True)
@@ -320,13 +318,15 @@ class TradeSnapshot(Base):
 class PaperPortfolio(Base):
     __tablename__ = "paper_portfolio"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    strategy = Column(String(50), nullable=False, unique=True, default="conf_100")
-    balance = Column(Float, nullable=False, default=10000.0)
-    initial_balance = Column(Float, nullable=False, default=10000.0)
-    peak_balance = Column(Float, nullable=False, default=10000.0)
-    max_drawdown_pct = Column(Float, nullable=False, default=0.0)
-    total_trades = Column(Integer, nullable=False, default=0)
-    winning_trades = Column(Integer, nullable=False, default=0)
-    total_pnl_usd = Column(Float, nullable=False, default=0.0)
-    updated_at = Column(DateTime, nullable=False, default=datetime.now)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    strategy: Mapped[str] = mapped_column(
+        String(50), nullable=False, unique=True, default="conf_100"
+    )
+    balance: Mapped[float] = mapped_column(Float, nullable=False, default=10000.0)
+    initial_balance: Mapped[float] = mapped_column(Float, nullable=False, default=10000.0)
+    peak_balance: Mapped[float] = mapped_column(Float, nullable=False, default=10000.0)
+    max_drawdown_pct: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    total_trades: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    winning_trades: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_pnl_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.now)
