@@ -18,14 +18,12 @@ Her test benzersiz bir symbol kullanır (test_<uuid>) ve sonunda kendi satırlar
 siler — gerçek/paylaşılan verilere karışmaz, testler arası izolasyon sağlanır.
 """
 
-import uuid
 from datetime import datetime, timedelta
 
 import pytest
-import pytest_asyncio
 from sqlalchemy import text
 
-from database.engine import async_engine, get_session
+from database.engine import get_session
 from signals.signal_filter import SignalFilter
 
 IV = "1h"
@@ -34,33 +32,9 @@ IND = "Supertrend"
 pytestmark = pytest.mark.database
 
 
-@pytest_asyncio.fixture(autouse=True)
-async def _dispose_engine_pool():
-    """pytest-asyncio 1.x her testi kendi (function-scoped) event loop'unda
-    çalıştırır, ama async_engine'in bağlantı havuzu process ömrü boyunca tek bir
-    global nesne — bir önceki testin (artık kapanmış) loop'unda açılmış bir
-    asyncpg bağlantısı havuzda kalıp bu testte kullanılmaya çalışılırsa
-    "Event loop is closed" hatası verir. Her testten SONRA havuzu boşaltmak,
-    bir sonraki testin kendi loop'unda temiz bağlantı açmasını garantiler."""
-    yield
-    await async_engine.dispose()
-
-
 @pytest.fixture
 def f():
     return SignalFilter()
-
-
-@pytest_asyncio.fixture
-async def sym():
-    """Her test için benzersiz sembol — izolasyon ve otomatik temizlik."""
-    test_symbol = f"TEST{uuid.uuid4().hex[:10].upper()}"
-    yield test_symbol
-    async with get_session() as session:
-        await session.execute(
-            text("DELETE FROM signal_filter_events WHERE symbol = :sym"),
-            {"sym": test_symbol},
-        )
 
 
 def _bar_times(n: int):

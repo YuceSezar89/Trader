@@ -5,6 +5,7 @@ Pytest configuration and fixtures for TRader Panel tests.
 import asyncio
 import os
 import sys
+import uuid
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -16,7 +17,11 @@ import pytest_asyncio
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from sqlalchemy import delete, text
+
 from config import Config
+from database.engine import async_engine, get_session
+from database.models import Signal
 from utils.redis_client import RedisClient
 from utils.timeframe_aggregator import TimeframeAggregator
 
@@ -57,6 +62,68 @@ def _db_rollback_guard(request):
             request.getfixturevalue("db_connection").rollback()
         except Exception:
             pass
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _dispose_async_engine_pool():
+    """pytest-asyncio her testi kendi (function-scoped) event loop'unda çalıştırır,
+    ama database.engine.async_engine'in bağlantı havuzu process ömrü boyunca tek bir
+    global nesne — bir önceki testin (artık kapanmış) loop'unda açılmış bir asyncpg
+    bağlantısı havuzda kalıp bir sonraki testte kullanılmaya çalışılırsa "Event loop
+    is closed" hatası verir. Her testten SONRA havuzu boşaltmak, bir sonraki testin
+    kendi loop'unda temiz bağlantı açmasını garantiler."""
+    yield
+    await async_engine.dispose()
+
+
+async def create_test_signal(session, **overrides) -> Signal:
+    """TEST% prefix'li izole bir Signal satırı kurar (gerçek DB'ye yazar,
+    canlı sinyallerle çakışmaz). signal_processor/risk_manager/paper_trade_
+    manager DB-testlerinin ortak kuruluş noktası — bkz. R0801 duplicate-code
+    temizliği (2 Ağu 2026)."""
+    defaults = dict(
+        symbol="TESTUSDT",
+        interval="5m",
+        indicators="TEST_IND",
+        signal_type="Long",
+        opened_at=datetime.now(),
+        open_price=100.0,
+        status="active",
+    )
+    defaults.update(overrides)
+    sig = Signal(**defaults)
+    session.add(sig)
+    await session.flush()
+    await session.commit()
+    return sig
+
+
+@pytest_asyncio.fixture(scope="function")
+async def clean_test_signals():
+    """TEST% prefix'li Signal satırlarını testten önce/sonra temizler."""
+
+    async def _cleanup():
+        async with get_session() as session:
+            await session.execute(delete(Signal).where(Signal.symbol.like("TEST%")))
+            await session.commit()
+
+    await _cleanup()
+    yield
+    await _cleanup()
+
+
+@pytest_asyncio.fixture
+async def sym():
+    """Her test için benzersiz TEST sembolü + signal_filter_events temizliği —
+    SignalFilter/SignalEngine testlerinin ortak izolasyon noktası (bkz. R0801
+    duplicate-code temizliği, 2 Ağu 2026)."""
+    test_symbol = f"TEST{uuid.uuid4().hex[:10].upper()}"
+    yield test_symbol
+    async with get_session() as session:
+        await session.execute(
+            text("DELETE FROM signal_filter_events WHERE symbol = :sym"),
+            {"sym": test_symbol},
+        )
 
 
 @pytest.fixture(scope="function")
