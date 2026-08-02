@@ -1,9 +1,22 @@
+"""ORM modelleri — SQLAlchemy 2.0 Mapped[]/mapped_column() stili (2 Ağu 2026
+refaktörü, bkz. commit serisi 1/6-6/6). Şema/DDL davranışı eski Column()
+stiliyle birebir aynı, sadece statik tip bilgisi eklendi.
+
+pylint (4.0.5/astroid 4.0.4, bu depoda kullanılan sürüm) bu dosyanın tam
+karmaşıklığında (çok sayıda Mapped[] alanı + __table_args__ birlikte)
+'Mapped' unsubscriptable-object false-positive'i üretiyor — minimal/orta
+ölçekli tekrar-üretim denemelerinde HİÇ çıkmıyor, mypy database/models.py
+tamamen temiz, tüm testler geçiyor. Astroid'in Mapped[] generic'ini bu
+ölçekte çözümleyememesi, gerçek bir kod hatası değil."""
+
+# pylint: disable=unsubscriptable-object
+
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
-    Column,
     DateTime,
     Float,
     ForeignKey,
@@ -151,105 +164,109 @@ class Signal(Base):
 class PaperTrade(Base):
     __tablename__ = "paper_trades"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    signal_id = Column(Integer, ForeignKey("signals.id", ondelete="SET NULL"), nullable=True)
-    strategy = Column(String(50), nullable=False, default="conf_100")
-    source = Column(String(20), nullable=False, default="signal")
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    signal_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("signals.id", ondelete="SET NULL"), nullable=True
+    )
+    strategy: Mapped[str] = mapped_column(String(50), nullable=False, default="conf_100")
+    source: Mapped[str] = mapped_column(String(20), nullable=False, default="signal")
 
-    symbol = Column(String(30), nullable=False)
-    signal_type = Column(String(10), nullable=False)
-    interval = Column(String(10), nullable=False)
-    position_usd = Column(Float, nullable=False, default=100.0)
-    entry_price = Column(Float, nullable=False)
-    exit_price = Column(Float, nullable=True)
-    stop_loss_price = Column(Float, nullable=True)
-    take_profit_price = Column(Float, nullable=True)
-    trailing_stop_price = Column(Float, nullable=True)
+    symbol: Mapped[str] = mapped_column(String(30), nullable=False)
+    signal_type: Mapped[str] = mapped_column(String(10), nullable=False)
+    interval: Mapped[str] = mapped_column(String(10), nullable=False)
+    position_usd: Mapped[float] = mapped_column(Float, nullable=False, default=100.0)
+    entry_price: Mapped[float] = mapped_column(Float, nullable=False)
+    exit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    stop_loss_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    take_profit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    trailing_stop_price: Mapped[float | None] = mapped_column(Float, nullable=True)
 
-    fee_usd = Column(Float, nullable=True)
-    pnl_usd = Column(Float, nullable=True)
-    pnl_pct = Column(Float, nullable=True)
-    balance_after = Column(Float, nullable=True)
+    fee_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    pnl_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    pnl_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    balance_after: Mapped[float | None] = mapped_column(Float, nullable=True)
 
-    status = Column(String(20), nullable=False, default="open")
-    close_reason = Column(String(50), nullable=True)
-    opened_at = Column(DateTime, nullable=False, default=datetime.now)
-    closed_at = Column(DateTime, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="open")
+    close_reason: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    opened_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.now)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     # ML snapshot
-    btc_z_score = Column(Float, nullable=True)
-    btc_trend = Column(String(20), nullable=True)
-    hour_utc = Column(SmallInteger, nullable=True)
-    day_of_week = Column(SmallInteger, nullable=True)
-    funding_rate = Column(Float, nullable=True)
-    recent_win_rate = Column(Float, nullable=True)
+    btc_z_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    btc_trend: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    hour_utc: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    day_of_week: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    funding_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    recent_win_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # Denormalized signal features
-    vpms_score = Column(Float, nullable=True)
-    z_score_entry = Column(Float, nullable=True)
-    mtf_score = Column(Float, nullable=True)
-    atr = Column(Float, nullable=True)
-    rank_at_entry = Column(Integer, nullable=True)
-    regime_trend = Column(String(20), nullable=True)
-    volatility_regime = Column(String(20), nullable=True)
+    vpms_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    z_score_entry: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mtf_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    atr: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rank_at_entry: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    regime_trend: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    volatility_regime: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
-    vpmv_pre_avg = Column(Float, nullable=True)
-    vpmv_ratio = Column(Float, nullable=True)
-    vpmv_slope = Column(Float, nullable=True)
-    vpmv_post_avg = Column(Float, nullable=True)
-    vpmv_post_delta = Column(Float, nullable=True)
-    cvd_slope = Column(Float, nullable=True)
-    vp_buy_avg = Column(Float, nullable=True)
-    vp_sell_avg = Column(Float, nullable=True)
-    vp_score = Column(Float, nullable=True)
+    vpmv_pre_avg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    vpmv_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
+    vpmv_slope: Mapped[float | None] = mapped_column(Float, nullable=True)
+    vpmv_post_avg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    vpmv_post_delta: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cvd_slope: Mapped[float | None] = mapped_column(Float, nullable=True)
+    vp_buy_avg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    vp_sell_avg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    vp_score: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # 20 Tem 2026: "kolaylık" — ERSI (ΔFiyat%/ΔRSI) skoru + bir önceki aynı
     # sembol/TF/yön sinyaline göre fark/oran. Bilgi/izleme amaçlı (bkz.
     # memory/project_devisso_ersi.md — PnL ile korelasyonu yok, filtre değil).
-    devisso_score = Column(Float, nullable=True)
-    devisso_delta = Column(Float, nullable=True)
-    devisso_ratio = Column(Float, nullable=True)
+    devisso_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    devisso_delta: Mapped[float | None] = mapped_column(Float, nullable=True)
+    devisso_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # 19 Tem 2026: giriş anındaki TÜM enriched_signal dict'i (VPMV bileşenleri,
     # SMC, finansal oranlar, all_up, vb. — yukarıdaki kolonlarda yer almayan
     # her şey) — yeni metrik eklemek artık migration gerektirmiyor.
-    entry_features = Column(JSONB, nullable=True)
+    entry_features: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     # 2 Ağu 2026 (migration 029): signals'ta zaten hesaplanan ama
     # paper_trades'e hiç kopyalanmayan sinyal kalite/sıralama alanları —
     # simetri. paper_trade_manager.py zaten signal_id ile Signal satırını
     # tekrar okuyor (devisso_score gibi), aynı okumadan doldurulacak.
-    alpha = Column(Float, nullable=True)
-    beta = Column(Float, nullable=True)
-    sharpe_ratio = Column(Float, nullable=True)
-    sortino_ratio = Column(Float, nullable=True)
-    calmar_ratio = Column(Float, nullable=True)
-    information_ratio = Column(Float, nullable=True)
-    vpmv_pre_proxy = Column(Float, nullable=True)
-    vpmv_pre_total = Column(Float, nullable=True)
-    vp_score_real = Column(Float, nullable=True)
-    market_structure = Column(String(10), nullable=True)
-    fvg_tfs = Column(String(40), nullable=True)
-    candle_pattern = Column(String(100), nullable=True)
-    rank_score = Column(Float, nullable=True)
-    vs_btc = Column(Float, nullable=True)
-    rank_combined = Column(Float, nullable=True)
-    rank_rsi_cross = Column(Float, nullable=True)
-    rank_z_confluence = Column(Float, nullable=True)
-    rank_r_score = Column(Float, nullable=True)
-    rank_aligned = Column(Boolean, nullable=True)
-    rank_alignment_count = Column(Integer, nullable=True)
-    ha_ultra_confirm = Column(SmallInteger, nullable=True)
-    vol_score = Column(Float, nullable=True)
-    mom_score = Column(Float, nullable=True)
-    volat_score = Column(Float, nullable=True)
-    price_score = Column(Float, nullable=True)
-    candle_kategori = Column(String(20), nullable=True)
-    all_up = Column(Boolean, nullable=True)
-    sl_multiplier = Column(Float, nullable=True)
-    tp_multiplier = Column(Float, nullable=True)
+    alpha: Mapped[float | None] = mapped_column(Float, nullable=True)
+    beta: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sharpe_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sortino_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
+    calmar_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
+    information_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
+    vpmv_pre_proxy: Mapped[float | None] = mapped_column(Float, nullable=True)
+    vpmv_pre_total: Mapped[float | None] = mapped_column(Float, nullable=True)
+    vp_score_real: Mapped[float | None] = mapped_column(Float, nullable=True)
+    market_structure: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    fvg_tfs: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    candle_pattern: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    rank_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    vs_btc: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rank_combined: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rank_rsi_cross: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rank_z_confluence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rank_r_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rank_aligned: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    rank_alignment_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ha_ultra_confirm: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    vol_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mom_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    volat_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    candle_kategori: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    all_up: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    sl_multiplier: Mapped[float | None] = mapped_column(Float, nullable=True)
+    tp_multiplier: Mapped[float | None] = mapped_column(Float, nullable=True)
 
-    signal = relationship("Signal", back_populates="paper_trades", lazy="noload")
+    signal: Mapped["Signal | None"] = relationship(
+        "Signal", back_populates="paper_trades", lazy="noload"
+    )
 
 
 class SignalPerformance(Base):
