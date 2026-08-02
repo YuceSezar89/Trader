@@ -8,21 +8,24 @@ repos:
     hooks:
       - id: black
         language_version: python3
-        args: [--line-length=88]
+        args: [--line-length=100]
 
   # Import sorting
   - repo: https://github.com/pycqa/isort
     rev: 5.13.2
     hooks:
       - id: isort
-        args: [--profile=black, --line-length=88]
+        args: [--profile=black, --line-length=100]
 
   # Python linting
   - repo: https://github.com/pycqa/flake8
     rev: 7.0.0
     hooks:
       - id: flake8
-        args: [--max-line-length=88, --extend-ignore=E203,W503]
+        # NOT: "--extend-ignore=E203,W503" tırnaksız yazılırsa YAML bunu virgülden
+        # ikiye böler, W503 ayrı bir arg (dosya adı sanılıp E902 ile çöker) olur —
+        # 2 Ağu 2026, CI'ın haftalardır kırık olmasının kök nedenlerinden biri.
+        args: [--max-line-length=100, "--extend-ignore=E203,W503"]
 
   # Type checking
   - repo: https://github.com/pre-commit/mirrors-mypy
@@ -59,7 +62,19 @@ repos:
     rev: 1.7.5
     hooks:
       - id: bandit
-        args: [-r, ., -f, json, -o, bandit-report.json]
+        # pbr, bandit 1.7.5'in kendi bağımlılık zincirinde ama hook ortamına
+        # otomatik gelmiyor — pinned sürümle "ModuleNotFoundError: No module
+        # named 'pbr'" ile çöküyordu (2 Ağu 2026).
+        additional_dependencies: [pbr]
+        args: [-r, ., -f, json, -o, bandit-report.json, -x, "./.venv,./research,./graphify-out"]
+        # -r . zaten tüm depoyu tarıyor — pre-commit'in ayrıca eşleşen dosya
+        # adlarını da argüman olarak eklemesi "unrecognized arguments" ile
+        # çöküyordu (aynı kök neden zincirinin devamı, 2 Ağu 2026). pass_filenames:
+        # false sonrası pre-commit'in genel exclude'u artık uygulanmadığı için
+        # -x ile .venv/research/graphify-out açıkça hariç tutuluyor — yoksa
+        # binlerce üçüncü-parti/önbellek dosyası taranıp hook dakikalarca asılı
+        # kalıyordu.
+        pass_filenames: false
         exclude: ^tests/
 
   # Documentation
