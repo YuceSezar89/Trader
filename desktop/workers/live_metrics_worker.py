@@ -20,6 +20,7 @@ o desen burada ölçek sorunlarına yol açar).
 import json
 import logging
 import threading
+import time
 from typing import Optional
 
 import redis
@@ -28,6 +29,13 @@ from PyQt6.QtCore import QThread, pyqtSignal, pyqtSlot  # pylint: disable=no-nam
 logger = logging.getLogger(__name__)
 
 _UPDATE_SEC = 5
+# 2 Ağu 2026 (Fable 5 performans denetimi): ranking:snapshot/ha_alignment:snapshot
+# backend'de ~90-120sn'de bir yenileniyor (yukarıdaki docstring) ama bu worker
+# onları HER _UPDATE_SEC (5sn) turunda tekrar çekiyordu — 18 kere gereksiz aynı
+# ~250KB'lık veriyi okuyup JSON parse ediyordu. vpmv_live/devisso_live/
+# divergence_live gerçekten bar-kapanışı hızlı değiştiği için 5sn'de kalıyor,
+# sadece bu iki büyük "tüm evren" snapshot'ı ayrı, daha uzun bir TTL ile cache'leniyor.
+_SNAPSHOT_TTL_SEC = 30
 
 
 class LiveMetricsWorker(QThread):
@@ -41,6 +49,9 @@ class LiveMetricsWorker(QThread):
         self._lock = threading.Lock()
         self._wake = threading.Event()
         self._signals: dict[int, dict] = {}  # signal_id → {"symbol":.., "interval":..}
+        self._snapshot_cache_ts = 0.0
+        self._ranking_cache: dict = {}
+        self._ha_cache: dict = {}
 
     @pyqtSlot(list)
     def set_active_signals(self, signals: list) -> None:
@@ -94,8 +105,13 @@ class LiveMetricsWorker(QThread):
 
     # ------------------------------------------------------------------
     def _read_all(self) -> dict:
-        ranking = self._read_snapshot_field("ranking:snapshot", "rank_score")
-        ha = self._read_snapshot_full("ha_alignment:snapshot")
+        now = time.monotonic()
+        if now - self._snapshot_cache_ts >= _SNAPSHOT_TTL_SEC:
+            self._ranking_cache = self._read_snapshot_field("ranking:snapshot", "rank_score")
+            self._ha_cache = self._read_snapshot_full("ha_alignment:snapshot")
+            self._snapshot_cache_ts = now
+        ranking = self._ranking_cache
+        ha = self._ha_cache
 
         with self._lock:
             signals = dict(self._signals)

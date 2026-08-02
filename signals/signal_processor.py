@@ -573,6 +573,55 @@ async def process_and_enrich_signals(
         ):
             st_direction = float(st_dir_val)  # -1=bullish, 1=bearish
 
+    # 2 Ağu 2026 (Fable 5 performans denetimi): z_score/regime/ADX/BTC-z
+    # SADECE df/ref_df'e bağlı, sig_type'a bağlı DEĞİL (yön-bağımsız fiyat
+    # hesapları) — aynı bar'da birden fazla gösterge (ör. RSI_Cross VE
+    # HA_Cross) aynı anda tetiklenirse eskiden aşağıdaki döngü İÇİNDE her
+    # signal_data için tekrar tekrar hesaplanıyordu (canlı log kanıtı:
+    # aynı sembol+zaman için ort. 2x tekrar). st_direction ile aynı desende
+    # döngü dışına, bir kez hesaplanıyor.
+    z_score_entry = None
+    try:
+        df_g = truncate_after_gap(df)
+        if len(df_g) >= 210 and "close" in df_g.columns:
+            closes = df_g["close"].astype(float)
+            ema200 = closes.ewm(span=200, adjust=False).mean()
+            std200 = closes.rolling(200).std()
+            z_score_entry = round(
+                float((closes.iloc[-1] - ema200.iloc[-1]) / (std200.iloc[-1] + 1e-12)), 3
+            )
+    except Exception as exc:
+        logger.debug("z_score_entry hesaplanamadı [%s]: %s", symbol, exc)
+
+    regime_trend: Optional[str] = None
+    volatility_regime: Optional[str] = None
+    try:
+        if len(df) >= 28:
+            adx_series, _, _ = calculate_adx(df)
+            adx_val = float(adx_series.iloc[-1])
+            regime_trend = "trending" if adx_val > 25 else "ranging" if adx_val < 20 else "neutral"
+
+            atr_series = calculate_atr(df, period=Config.ATR_PERIOD)
+            atr_pct = float(normalize_volatility_0_100(atr_series).iloc[-1])
+            volatility_regime = "high" if atr_pct > 70 else "low" if atr_pct < 30 else "normal"
+    except Exception as exc:
+        logger.debug("volatility_regime hesaplanamadı [%s]: %s", symbol, exc)
+
+    btc_z: Optional[float] = None
+    btc_trend_str: Optional[str] = None
+    try:
+        btc_df = ref_df if not ref_df.empty else None
+        if btc_df is not None and len(btc_df) >= 210:
+            btc_closes = btc_df["close"].astype(float)
+            btc_ema = btc_closes.ewm(span=200, adjust=False).mean()
+            btc_std = btc_closes.rolling(200).std()
+            btc_z = round(
+                float((btc_closes.iloc[-1] - btc_ema.iloc[-1]) / (btc_std.iloc[-1] + 1e-12)), 3
+            )
+            btc_trend_str = "bullish" if btc_z > 0.5 else "bearish" if btc_z < -0.5 else "neutral"
+    except Exception as exc:
+        logger.debug("BTC trend hesaplanamadı: %s", exc)
+
     for signal_name, signal_list in technical_signals.items():
         if not isinstance(signal_list, list) or not signal_list:
             continue
@@ -656,21 +705,9 @@ async def process_and_enrich_signals(
                     f"(higher TFs: {_MTF_HIGHER.get(interval, [])})"
                 )
 
-                # 6. Z-score hesapla (EMA200 ayrışması)
-                z_score_entry = None
-                try:
-                    df_g = truncate_after_gap(df)
-                    if len(df_g) >= 210 and "close" in df_g.columns:
-                        closes = df_g["close"].astype(float)
-                        ema200 = closes.ewm(span=200, adjust=False).mean()
-                        std200 = closes.rolling(200).std()
-                        z_score_entry = round(
-                            float((closes.iloc[-1] - ema200.iloc[-1]) / (std200.iloc[-1] + 1e-12)),
-                            3,
-                        )
-                except Exception as exc:
-                    logger.debug("z_score_entry hesaplanamadı [%s]: %s", symbol, exc)
-
+                # 6. Z-score filtresi — ham değer artık döngü dışında (yukarıda)
+                # bir kez hesaplanıyor, burada sadece sig_type'a bağlı eşik
+                # kontrolü kalıyor.
                 if z_score_entry is not None:
                     _is_long = sig_type == "Long"
                     _z_min = Config.VPM.get("LONG_Z_MIN" if _is_long else "SHORT_Z_MIN")
@@ -687,47 +724,6 @@ async def process_and_enrich_signals(
                             _z_max,
                         )
                         continue
-
-                # 6.3. Rejim tespiti
-                regime_trend: Optional[str] = None
-                volatility_regime: Optional[str] = None
-                try:
-                    if len(df) >= 28:
-                        adx_series, _, _ = calculate_adx(df)
-                        adx_val = float(adx_series.iloc[-1])
-                        regime_trend = (
-                            "trending" if adx_val > 25 else "ranging" if adx_val < 20 else "neutral"
-                        )
-
-                        atr_series = calculate_atr(df, period=Config.ATR_PERIOD)
-                        atr_pct = float(normalize_volatility_0_100(atr_series).iloc[-1])
-                        volatility_regime = (
-                            "high" if atr_pct > 70 else "low" if atr_pct < 30 else "normal"
-                        )
-                except Exception as exc:
-                    logger.debug("volatility_regime hesaplanamadı [%s]: %s", symbol, exc)
-
-                # 6.5. BTC trend (confluence filtresi için önceden hesapla)
-                btc_z: Optional[float] = None
-                btc_trend_str: Optional[str] = None
-                try:
-                    btc_df = ref_df if not ref_df.empty else None
-                    if btc_df is not None and len(btc_df) >= 210:
-                        btc_closes = btc_df["close"].astype(float)
-                        btc_ema = btc_closes.ewm(span=200, adjust=False).mean()
-                        btc_std = btc_closes.rolling(200).std()
-                        btc_z = round(
-                            float(
-                                (btc_closes.iloc[-1] - btc_ema.iloc[-1])
-                                / (btc_std.iloc[-1] + 1e-12)
-                            ),
-                            3,
-                        )
-                        btc_trend_str = (
-                            "bullish" if btc_z > 0.5 else "bearish" if btc_z < -0.5 else "neutral"
-                        )
-                except Exception as exc:
-                    logger.debug("BTC trend hesaplanamadı: %s", exc)
 
                 indicators_name = signal_data.get("indicators", "")
 
@@ -914,6 +910,24 @@ async def process_and_enrich_signals(
                 except Exception as exc:
                     logger.debug("funding_rate okunamadı [%s]: %s", symbol, exc)
                 enriched_signal["funding_rate"] = _funding
+
+                # 2 Ağu 2026 (Fable 5 performans denetimi): ranking:snapshot
+                # ÖNCEDEN signal_lifecycle_manager.py VE (her strateji için)
+                # paper_trade_manager.py'de bağımsız bağımsız okunuyordu — bir
+                # sinyalde 5'e kadar ayrı Redis GET+json.loads (dakikada 250+
+                # gereksiz round-trip, ölçüldü). _get_ranking_snapshot() zaten
+                # 30sn cache'li — burada TEK sefer okunup enriched_signal'e
+                # gömülüyor, aşağıdaki tüketiciler artık kendi okumasını yapmaz.
+                _rank_entry = (await _get_ranking_snapshot() or {}).get(symbol) or {}
+                enriched_signal["rank_at_entry"] = _rank_entry.get("rank")
+                enriched_signal["rank_score"] = _rank_entry.get("rank_score")
+                enriched_signal["vs_btc"] = _rank_entry.get("vs_btc")
+                enriched_signal["rank_combined"] = _rank_entry.get("combined")
+                enriched_signal["rank_rsi_cross"] = _rank_entry.get("rsi_cross_combined")
+                enriched_signal["rank_z_confluence"] = _rank_entry.get("z_confluence")
+                enriched_signal["rank_r_score"] = _rank_entry.get("r_score")
+                enriched_signal["rank_aligned"] = _rank_entry.get("aligned")
+                enriched_signal["rank_alignment_count"] = _rank_entry.get("alignment_count")
 
                 logger.info(f"[{symbol}] Sinyal işleniyor: {signal_name} - {sig_type}")
                 if dry_run:

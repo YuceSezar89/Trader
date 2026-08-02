@@ -12,6 +12,7 @@ import json
 import os
 import resource
 import signal
+import time
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 
@@ -177,6 +178,27 @@ async def _incr_metric(key: str) -> None:
         pass
 
 
+# 2 Ağu 2026 (Fable 5 performans denetimi): get_mtf_klines'ın in-process cache'i
+# sadece veriyi YAZAN process'te (live_data_manager) dolu — signal_service.py
+# ayrı bir process olduğu için BTC referansı her _process_event çağrısında
+# gerçek bir Redis GET + Arrow deserialize'a düşüyordu. Bir bar-kapanışı
+# burst'ünde (ör. 5m'de 548 sembol) hepsi AYNI BTC verisini istiyor — kısa
+# TTL'li (2sn) interval-bazlı bir cache, aynı burst içindeki tekrarları eler.
+_REF_DF_CACHE_TTL = 2.0
+_ref_df_cache: dict[str, tuple[float, pd.DataFrame]] = {}
+
+
+async def _get_ref_df_cached(interval: str) -> "pd.DataFrame | None":
+    cached = _ref_df_cache.get(interval)
+    now = time.monotonic()
+    if cached is not None and (now - cached[0]) < _REF_DF_CACHE_TTL:
+        return cached[1]
+    ref_df = await RedisClient.get_mtf_klines(Config.MARKET_REFERENCE_SYMBOL, interval)
+    if ref_df is not None:
+        _ref_df_cache[interval] = (now, ref_df)
+    return ref_df
+
+
 async def _process_event(fields: dict) -> None:
     symbol = fields["symbol"]
     interval = fields["interval"]
@@ -196,7 +218,7 @@ async def _process_event(fields: dict) -> None:
         return
 
     df = await RedisClient.get_mtf_klines(symbol, interval)
-    ref_df = await RedisClient.get_mtf_klines(Config.MARKET_REFERENCE_SYMBOL, interval)
+    ref_df = await _get_ref_df_cached(interval)
     if df is None or ref_df is None or df.empty or ref_df.empty:
         logger.debug("[%s] %s buffer eksik, atlanıyor", symbol, interval)
         await _incr_metric("metrics:sigsvc:buffer_eksik")

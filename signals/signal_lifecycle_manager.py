@@ -118,39 +118,19 @@ class SignalLifecycleManager:
                         else None
                     )
 
-                    rank_score_val: Optional[float] = None
-                    vs_btc_val: Optional[float] = None
-                    rank_combined_val: Optional[float] = None
-                    rank_rsi_cross_val: Optional[float] = None
-                    rank_z_confluence_val: Optional[float] = None
-                    rank_r_score_val: Optional[float] = None
-                    rank_aligned_val: Optional[bool] = None
-                    rank_alignment_count_val: Optional[int] = None
-                    try:
-                        raw_rank = await asyncio.wait_for(
-                            RedisClient.get_client().get("ranking:snapshot"),
-                            timeout=SAFE_EXTERNAL_TIMEOUT,
-                        )
-                        if raw_rank:
-                            snap = json.loads(raw_rank)
-                            entry = next(
-                                (item for item in snap if item.get("symbol") == symbol), None
-                            )
-                            if entry:
-                                rank_score_val = entry.get("rank_score")
-                                vs_btc_val = entry.get("vs_btc")
-                                # 20 Tem 2026 (Faz 1, bkz. docs/plan_radar_data_persistence.md):
-                                # Ranking panelinin geri kalan alanları da aynı okumadan
-                                # bilgi/izleme amaçlı yakalanıyor — filtre değil, henüz test
-                                # edilmemiş ham veri.
-                                rank_combined_val = entry.get("combined")
-                                rank_rsi_cross_val = entry.get("rsi_cross_combined")
-                                rank_z_confluence_val = entry.get("z_confluence")
-                                rank_r_score_val = entry.get("r_score")
-                                rank_aligned_val = entry.get("aligned")
-                                rank_alignment_count_val = entry.get("alignment_count")
-                    except Exception as exc:  # pylint: disable=broad-exception-caught
-                        logger.debug("[%s] ranking snapshot okunamadı: %s", symbol, exc)
+                    # 2 Ağu 2026 (Fable 5 performans denetimi): bu değerler artık
+                    # burada ayrıca Redis'ten okunmuyor — signal_processor.py
+                    # ranking:snapshot'ı ZATEN 30sn-cache'li tek bir okumadan
+                    # çıkarıp enriched_signal'e (=signal_data) gömüyor, dakikada
+                    # 250+ gereksiz round-trip'in bir kısmı buradan geliyordu.
+                    rank_score_val = signal_data.get("rank_score")
+                    vs_btc_val = signal_data.get("vs_btc")
+                    rank_combined_val = signal_data.get("rank_combined")
+                    rank_rsi_cross_val = signal_data.get("rank_rsi_cross")
+                    rank_z_confluence_val = signal_data.get("rank_z_confluence")
+                    rank_r_score_val = signal_data.get("rank_r_score")
+                    rank_aligned_val = signal_data.get("rank_aligned")
+                    rank_alignment_count_val = signal_data.get("rank_alignment_count")
 
                     new_sig = Signal(
                         symbol=symbol,

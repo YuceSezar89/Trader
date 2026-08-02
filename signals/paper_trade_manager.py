@@ -202,41 +202,22 @@ class PaperTradeManager:
                         sl_price = None
                         tp_price = None
 
-                    # 2 Ağu 2026 (migration 029): signal_lifecycle_manager.py'nin
-                    # AYNI "ranking:snapshot" okuduğu blokla simetrik hale getirildi
-                    # — rank_at_entry (pozisyon) yanında rank_score/vs_btc/rank_*
-                    # alanları da (skor) burada, TEK okumadan çıkarılıyor.
-                    rank_at_entry: Optional[int] = None
-                    rank_score_val: Optional[float] = None
-                    vs_btc_val: Optional[float] = None
-                    rank_combined_val: Optional[float] = None
-                    rank_rsi_cross_val: Optional[float] = None
-                    rank_z_confluence_val: Optional[float] = None
-                    rank_r_score_val: Optional[float] = None
-                    rank_aligned_val: Optional[bool] = None
-                    rank_alignment_count_val: Optional[int] = None
-                    try:
-                        raw = await asyncio.wait_for(
-                            RedisClient.get_client().get("ranking:snapshot"),
-                            timeout=SAFE_EXTERNAL_TIMEOUT,
-                        )
-                        if raw:
-                            snap = _json.loads(raw)
-                            entry = next(
-                                (item for item in snap if item.get("symbol") == symbol), None
-                            )
-                            if entry:
-                                rank_at_entry = entry.get("rank")
-                                rank_score_val = entry.get("rank_score")
-                                vs_btc_val = entry.get("vs_btc")
-                                rank_combined_val = entry.get("combined")
-                                rank_rsi_cross_val = entry.get("rsi_cross_combined")
-                                rank_z_confluence_val = entry.get("z_confluence")
-                                rank_r_score_val = entry.get("r_score")
-                                rank_aligned_val = entry.get("aligned")
-                                rank_alignment_count_val = entry.get("alignment_count")
-                    except Exception as exc:
-                        logger.debug("[PaperTrade] ranking snapshot okunamadı: %s", exc)
+                    # 2 Ağu 2026 (Fable 5 performans denetimi): migration 029'da bu
+                    # blok kendi ranking:snapshot okumasını yapıyordu (signal_
+                    # lifecycle_manager.py'nin okumasından bağımsız, farklı anda) —
+                    # artık signal_processor.py TEK bir 30sn-cache'li okumadan
+                    # çıkarıp enriched_signal'e (=signal_data) gömüyor, ikisi de
+                    # oradan okuyor. Dakikada 250+ gereksiz Redis round-trip'ini
+                    # elemenin bir parçası.
+                    rank_at_entry = signal_data.get("rank_at_entry")
+                    rank_score_val = signal_data.get("rank_score")
+                    vs_btc_val = signal_data.get("vs_btc")
+                    rank_combined_val = signal_data.get("rank_combined")
+                    rank_rsi_cross_val = signal_data.get("rank_rsi_cross")
+                    rank_z_confluence_val = signal_data.get("rank_z_confluence")
+                    rank_r_score_val = signal_data.get("rank_r_score")
+                    rank_aligned_val = signal_data.get("rank_aligned")
+                    rank_alignment_count_val = signal_data.get("rank_alignment_count")
 
                     recent_win_rate = await self._recent_win_rate(session, symbol, self.strategy)
 
