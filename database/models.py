@@ -259,33 +259,35 @@ class SignalPerformance(Base):
 
     __tablename__ = "signal_performance"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    signal_id = Column(Integer, ForeignKey("signals.id", ondelete="CASCADE"), nullable=False)
-    entry_price = Column(Float, nullable=True)
-    entry_timestamp = Column(DateTime, nullable=True)
-    atr_at_entry = Column(Float, nullable=True)
-    interval = Column(String(10), nullable=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    signal_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("signals.id", ondelete="CASCADE"), nullable=False
+    )
+    entry_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    entry_timestamp: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    atr_at_entry: Mapped[float | None] = mapped_column(Float, nullable=True)
+    interval: Mapped[str | None] = mapped_column(String(10), nullable=True)
 
-    return_t3_atr = Column(Float, nullable=True)
-    return_t5_atr = Column(Float, nullable=True)
-    return_t10_atr = Column(Float, nullable=True)
-    return_t3_pct = Column(Float, nullable=True)
-    return_t5_pct = Column(Float, nullable=True)
-    return_t10_pct = Column(Float, nullable=True)
+    return_t3_atr: Mapped[float | None] = mapped_column(Float, nullable=True)
+    return_t5_atr: Mapped[float | None] = mapped_column(Float, nullable=True)
+    return_t10_atr: Mapped[float | None] = mapped_column(Float, nullable=True)
+    return_t3_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    return_t5_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    return_t10_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
 
-    mfe_atr = Column(Float, nullable=True)
-    mae_atr = Column(Float, nullable=True)
-    risk_reward = Column(Float, nullable=True)
-    mfe_bar_index = Column(Integer, nullable=True)
-    mae_bar_index = Column(Integer, nullable=True)
+    mfe_atr: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mae_atr: Mapped[float | None] = mapped_column(Float, nullable=True)
+    risk_reward: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mfe_bar_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    mae_bar_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    is_calculated = Column(Boolean, nullable=False, default=False)
-    calculation_attempts = Column(Integer, nullable=False, default=0)
-    last_calculation_error = Column(String, nullable=True)
+    is_calculated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    calculation_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_calculation_error: Mapped[str | None] = mapped_column(String, nullable=True)
 
-    created_at = Column(DateTime, nullable=False, default=datetime.now)
-    updated_at = Column(DateTime, nullable=True)
-    calculated_at = Column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.now)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    calculated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class TradeSnapshot(Base):
