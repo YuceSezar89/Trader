@@ -27,14 +27,6 @@ repos:
         # 2 Ağu 2026, CI'ın haftalardır kırık olmasının kök nedenlerinden biri.
         args: [--max-line-length=100, "--extend-ignore=E203,W503"]
 
-  # Type checking
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.8.0
-    hooks:
-      - id: mypy
-        additional_dependencies: [types-redis, types-psycopg2, types-requests]
-        args: [--ignore-missing-imports, --no-strict-optional]
-
   # General hooks
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.5.0

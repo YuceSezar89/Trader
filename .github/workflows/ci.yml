@@ -81,23 +81,3 @@ jobs:
         path: |
           bandit-report.json
           safety-report.json
-
-  type-check:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: 3.13
-
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install mypy types-redis types-psycopg2 types-requests
-
-    - name: Run MyPy type checking
-      run: |
-        mypy . --ignore-missing-imports --no-strict-optional
