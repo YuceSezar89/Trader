@@ -46,6 +46,7 @@ from signals.risk_manager import risk_manager
 from signals.signal_processor import process_and_enrich_signals, trim_to_closed_bar
 from signals.tf_alignment_gate import load_pending_from_db, tf_alignment_eval_loop
 from signals.trade_snapshot import trade_snapshot_loop
+from utils.data_health import data_health_loop
 from utils.heartbeat import beat, record_activity, throughput_watchdog_loop, watchdog_loop
 from utils.logger import get_logger
 from utils.redis_client import SAFE_EXTERNAL_TIMEOUT, RedisClient
@@ -319,11 +320,15 @@ async def _check_do_open_streak(symbol: str, df_15m: pd.DataFrame) -> None:
 
         if "volume" in df_15m.columns:
             recent = df_15m.tail(96)  # ~1 gün, 15m
-            avg_liquidity_usd = float((recent["volume"].astype(float) * recent["close"].astype(float)).mean())
+            avg_liquidity_usd = float(
+                (recent["volume"].astype(float) * recent["close"].astype(float)).mean()
+            )
             if avg_liquidity_usd < cfg["MIN_LIQUIDITY_USD"]:
                 logger.info(
                     "[%s] do_open_streak elendi: likidite $%.0f < eşik $%.0f",
-                    symbol, avg_liquidity_usd, cfg["MIN_LIQUIDITY_USD"],
+                    symbol,
+                    avg_liquidity_usd,
+                    cfg["MIN_LIQUIDITY_USD"],
                 )
                 return
 
@@ -593,6 +598,10 @@ async def run_all() -> None:
     trade_snapshot_task = asyncio.create_task(
         _supervised(trade_snapshot_loop(), "trade_snapshot"), name="trade_snapshot"
     )
+    data_health_task = asyncio.create_task(
+        _supervised(data_health_loop(), "signal_service_data_health"),
+        name="signal_service_data_health",
+    )
     tasks = {
         consume_task,
         risk_check_task,
@@ -603,6 +612,7 @@ async def run_all() -> None:
         throughput_task,
         tf_alignment_task,
         trade_snapshot_task,
+        data_health_task,
     }
 
     def _handler(sig_name: str) -> None:
