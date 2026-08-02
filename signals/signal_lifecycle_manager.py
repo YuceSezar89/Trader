@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.engine import get_session, run_with_db_timeout
 from database.models import Signal
+from database.signal_repository import build_signal
 from utils.redis_client import SAFE_EXTERNAL_TIMEOUT, RedisClient
 
 logger = logging.getLogger(__name__)
@@ -118,86 +119,20 @@ class SignalLifecycleManager:
                         else None
                     )
 
-                    # 2 Ağu 2026 (Fable 5 performans denetimi): bu değerler artık
-                    # burada ayrıca Redis'ten okunmuyor — signal_processor.py
-                    # ranking:snapshot'ı ZATEN 30sn-cache'li tek bir okumadan
-                    # çıkarıp enriched_signal'e (=signal_data) gömüyor, dakikada
-                    # 250+ gereksiz round-trip'in bir kısmı buradan geliyordu.
-                    rank_score_val = signal_data.get("rank_score")
-                    vs_btc_val = signal_data.get("vs_btc")
-                    rank_combined_val = signal_data.get("rank_combined")
-                    rank_rsi_cross_val = signal_data.get("rank_rsi_cross")
-                    rank_z_confluence_val = signal_data.get("rank_z_confluence")
-                    rank_r_score_val = signal_data.get("rank_r_score")
-                    rank_aligned_val = signal_data.get("rank_aligned")
-                    rank_alignment_count_val = signal_data.get("rank_alignment_count")
-
-                    new_sig = Signal(
-                        symbol=symbol,
-                        interval=interval,
-                        indicators=indicators,
-                        signal_type=sig_type,
-                        opened_at=signal_data.get("opened_at", datetime.now()),
-                        open_price=open_price,
-                        status="active",
-                        vpms_score=signal_data.get("vpms_score"),
-                        mtf_score=signal_data.get("mtf_score"),
-                        st_confirmed=signal_data.get("st_confirmed"),
-                        rsi=signal_data.get("rsi"),
-                        strength=signal_data.get("strength"),
-                        atr=signal_data.get("atr"),
-                        alpha=signal_data.get("alpha"),
-                        beta=signal_data.get("beta"),
-                        sharpe_ratio=signal_data.get("sharpe_ratio"),
-                        sortino_ratio=signal_data.get("sortino_ratio"),
-                        calmar_ratio=signal_data.get("calmar_ratio"),
-                        information_ratio=signal_data.get("information_ratio"),
-                        oi_data=signal_data.get("oi_data"),
-                        stop_loss_price=sl_price,
-                        take_profit_price=tp_price,
-                        sl_multiplier=sl_mult,
-                        tp_multiplier=tp_mult,
-                        z_score_entry=signal_data.get("z_score_entry"),
-                        is_confluence=signal_data.get("is_confluence", False),
-                        ha_ultra_confirm=signal_data.get("ha_ultra_confirm"),
-                        vpmv_pre_avg=signal_data.get("vpmv_pre_avg"),
-                        vpmv_pre_proxy=signal_data.get("vpmv_pre_proxy"),
-                        vpmv_pre_total=signal_data.get("vpmv_pre_total"),
-                        vpmv_slope=signal_data.get("vpmv_slope"),
-                        vpmv_ratio=signal_data.get("vpmv_ratio"),
-                        cvd_slope=signal_data.get("cvd_slope"),
-                        vp_buy_avg=signal_data.get("vp_buy_avg"),
-                        vp_sell_avg=signal_data.get("vp_sell_avg"),
-                        vp_score=signal_data.get("vp_score"),
-                        vp_score_real=signal_data.get("vp_score_real"),
-                        devisso_score=new_deviso,
+                    # 2 Ağu 2026 (Fable 5 mimari denetimi, Kademe 1): Signal
+                    # nesnesinin KURULUŞU artık database/signal_repository.py'de
+                    # (build_signal) — tek yerden hem burada hem ileride başka
+                    # bir yazma noktasında aynı eşleme kullanılabilecek. Davranış
+                    # birebir aynı, sadece bu 80 satırlık alan-eşleme bloğunun
+                    # adresi değişti.
+                    new_sig = build_signal(
+                        signal_data,
                         devisso_delta=devisso_delta,
                         devisso_ratio=devisso_ratio,
-                        pd_zone=signal_data.get("pd_zone"),
-                        market_structure=signal_data.get("market_structure"),
-                        fvg_tfs=signal_data.get("fvg_tfs"),
-                        candle_pattern=signal_data.get("candle_pattern"),
-                        rank_score=rank_score_val,
-                        vs_btc=vs_btc_val,
-                        rank_combined=rank_combined_val,
-                        rank_rsi_cross=rank_rsi_cross_val,
-                        rank_z_confluence=rank_z_confluence_val,
-                        rank_r_score=rank_r_score_val,
-                        rank_aligned=rank_aligned_val,
-                        rank_alignment_count=rank_alignment_count_val,
-                        vol_score=signal_data.get("vol_score"),
-                        mom_score=signal_data.get("mom_score"),
-                        volat_score=signal_data.get("volat_score"),
-                        price_score=signal_data.get("price_score"),
-                        candle_kategori=signal_data.get("candle_kategori"),
-                        all_up=signal_data.get("all_up"),
-                        regime_trend=signal_data.get("regime_trend"),
-                        volatility_regime=signal_data.get("volatility_regime"),
-                        btc_z_score=signal_data.get("btc_z_score"),
-                        btc_trend=signal_data.get("btc_trend"),
-                        funding_rate=signal_data.get("funding_rate"),
-                        hour_utc=signal_data.get("hour_utc"),
-                        day_of_week=signal_data.get("day_of_week"),
+                        sl_price=sl_price,
+                        tp_price=tp_price,
+                        sl_mult=sl_mult,
+                        tp_mult=tp_mult,
                     )
                     session.add(new_sig)
                     await session.flush()
