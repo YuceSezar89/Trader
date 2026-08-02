@@ -36,16 +36,16 @@ class Base(DeclarativeBase):
 class PriceData(Base):
     __tablename__ = "price_data"
 
-    symbol = Column(String, primary_key=True)
-    timestamp = Column(DateTime, primary_key=True)
-    interval = Column(String, nullable=True)
-    open = Column(Float)
-    high = Column(Float)
-    low = Column(Float)
-    close = Column(Float)
-    volume = Column(Float)
-    buy_volume = Column(Float, nullable=True)
-    sell_volume = Column(Float, nullable=True)
+    symbol: Mapped[str] = mapped_column(String, primary_key=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, primary_key=True)
+    interval: Mapped[str | None] = mapped_column(String, nullable=True)
+    open: Mapped[float | None] = mapped_column(Float)
+    high: Mapped[float | None] = mapped_column(Float)
+    low: Mapped[float | None] = mapped_column(Float)
+    close: Mapped[float | None] = mapped_column(Float)
+    volume: Mapped[float | None] = mapped_column(Float)
+    buy_volume: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sell_volume: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     __table_args__ = (
         PrimaryKeyConstraint("symbol", "timestamp"),
