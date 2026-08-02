@@ -8,7 +8,6 @@ Her strateji için ayrı instance kullanılır:
 """
 
 import asyncio
-import json as _json
 import logging
 from datetime import datetime
 from typing import Callable, Optional
@@ -19,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import Config
 from database.engine import get_session, run_with_db_timeout
 from database.models import PaperPortfolio, PaperTrade, Signal
+from database.signal_repository import build_paper_trade
 from indicators.core import calculate_evol
 from signals.risk_policy import default_policy
 from signals.signal_lifecycle_manager import _calc_pnl
@@ -202,22 +202,14 @@ class PaperTradeManager:
                         sl_price = None
                         tp_price = None
 
-                    # 2 Ağu 2026 (Fable 5 performans denetimi): migration 029'da bu
-                    # blok kendi ranking:snapshot okumasını yapıyordu (signal_
-                    # lifecycle_manager.py'nin okumasından bağımsız, farklı anda) —
-                    # artık signal_processor.py TEK bir 30sn-cache'li okumadan
-                    # çıkarıp enriched_signal'e (=signal_data) gömüyor, ikisi de
-                    # oradan okuyor. Dakikada 250+ gereksiz Redis round-trip'ini
-                    # elemenin bir parçası.
+                    # 2 Ağu 2026 (Fable 5 performans denetimi): ranking:snapshot
+                    # artık SADECE signal_processor.py'de (30sn cache'li) okunup
+                    # enriched_signal'e (=signal_data) gömülüyor — burada ayrıca
+                    # okunmuyor. rank_score/vs_btc/rank_* ailesi build_paper_trade
+                    # içinde doğrudan signal_data'dan çekiliyor, rank_at_entry
+                    # (pozisyon) tek istisna: DB'ye özel kolon ismi farklı olduğu
+                    # için burada ayrı bir parametre olarak kalıyor.
                     rank_at_entry = signal_data.get("rank_at_entry")
-                    rank_score_val = signal_data.get("rank_score")
-                    vs_btc_val = signal_data.get("vs_btc")
-                    rank_combined_val = signal_data.get("rank_combined")
-                    rank_rsi_cross_val = signal_data.get("rank_rsi_cross")
-                    rank_z_confluence_val = signal_data.get("rank_z_confluence")
-                    rank_r_score_val = signal_data.get("rank_r_score")
-                    rank_aligned_val = signal_data.get("rank_aligned")
-                    rank_alignment_count_val = signal_data.get("rank_alignment_count")
 
                     recent_win_rate = await self._recent_win_rate(session, symbol, self.strategy)
 
@@ -227,82 +219,31 @@ class PaperTradeManager:
                     if isinstance(opened_at, datetime) and opened_at.tzinfo is not None:
                         opened_at = opened_at.replace(tzinfo=None)
 
-                    trade = PaperTrade(
+                    # 2 Ağu 2026 (Fable 5 mimari denetimi, Kademe 2): PaperTrade
+                    # nesnesinin KURULUŞU artık database/signal_repository.py'de
+                    # (build_paper_trade) — build_signal ile aynı desen. Davranış
+                    # birebir aynı, sadece bu alan-eşleme bloğunun adresi değişti.
+                    trade = build_paper_trade(
+                        signal_data,
                         signal_id=signal_id,
                         strategy=self.strategy,
-                        symbol=symbol,
-                        signal_type=signal_data.get("signal_type", ""),
-                        interval=signal_data.get("interval", ""),
                         position_usd=self.position_usd,
                         entry_price=current_price,
-                        stop_loss_price=sl_price,
-                        take_profit_price=tp_price,
-                        status="open",
                         opened_at=opened_at,
+                        sl_price=sl_price,
+                        tp_price=tp_price,
                         btc_z_score=btc_z_score,
                         btc_trend=btc_trend,
-                        hour_utc=opened_at.hour if opened_at else None,
-                        day_of_week=opened_at.weekday() if opened_at else None,
                         funding_rate=funding_rate,
                         recent_win_rate=recent_win_rate,
-                        vpms_score=signal_data.get("vpms_score"),
-                        z_score_entry=signal_data.get("z_score_entry"),
-                        mtf_score=signal_data.get("mtf_score"),
-                        atr=signal_data.get("atr"),
-                        rank_at_entry=rank_at_entry,
                         regime_trend=regime_trend,
                         volatility_regime=volatility_regime,
-                        vpmv_pre_avg=signal_data.get("vpmv_pre_avg"),
-                        vpmv_slope=signal_data.get("vpmv_slope"),
-                        vpmv_ratio=signal_data.get("vpmv_ratio"),
+                        rank_at_entry=rank_at_entry,
                         devisso_score=sig.devisso_score if sig else signal_data.get("devisso_score"),
                         devisso_delta=sig.devisso_delta if sig else None,
                         devisso_ratio=sig.devisso_ratio if sig else None,
-                        # 2 Ağu 2026 (migration 029): "metrikler dağınık" toparlaması —
-                        # signals'ta hesaplanan ama paper_trades'e hiç kopyalanmayan
-                        # alanlar artık simetrik. cvd_slope/vp_* zaten signal_data'da
-                        # vardı, sadece constructor'a bağlanmamıştı (bug'dı).
-                        cvd_slope=signal_data.get("cvd_slope"),
-                        vp_buy_avg=signal_data.get("vp_buy_avg"),
-                        vp_sell_avg=signal_data.get("vp_sell_avg"),
-                        vp_score=signal_data.get("vp_score"),
-                        alpha=signal_data.get("alpha"),
-                        beta=signal_data.get("beta"),
-                        sharpe_ratio=signal_data.get("sharpe_ratio"),
-                        sortino_ratio=signal_data.get("sortino_ratio"),
-                        calmar_ratio=signal_data.get("calmar_ratio"),
-                        information_ratio=signal_data.get("information_ratio"),
-                        vpmv_pre_proxy=signal_data.get("vpmv_pre_proxy"),
-                        vpmv_pre_total=signal_data.get("vpmv_pre_total"),
-                        vp_score_real=signal_data.get("vp_score_real"),
-                        market_structure=signal_data.get("market_structure"),
-                        fvg_tfs=signal_data.get("fvg_tfs"),
-                        candle_pattern=signal_data.get("candle_pattern"),
-                        ha_ultra_confirm=signal_data.get("ha_ultra_confirm"),
-                        vol_score=signal_data.get("vol_score"),
-                        mom_score=signal_data.get("mom_score"),
-                        volat_score=signal_data.get("volat_score"),
-                        price_score=signal_data.get("price_score"),
-                        candle_kategori=signal_data.get("candle_kategori"),
-                        all_up=signal_data.get("all_up"),
                         sl_multiplier=sig.sl_multiplier if sig else None,
                         tp_multiplier=sig.tp_multiplier if sig else None,
-                        rank_score=rank_score_val,
-                        vs_btc=vs_btc_val,
-                        rank_combined=rank_combined_val,
-                        rank_rsi_cross=rank_rsi_cross_val,
-                        rank_z_confluence=rank_z_confluence_val,
-                        rank_r_score=rank_r_score_val,
-                        rank_aligned=rank_aligned_val,
-                        rank_alignment_count=rank_alignment_count_val,
-                        # 19 Tem 2026: giriş anındaki TÜM enriched_signal dict'i
-                        # (VPMV bileşenleri, SMC, finansal oranlar, vb. — yukarıdaki
-                        # kolonlarda olmayan her şey). json round-trip ile
-                        # datetime/numpy tiplerini (JSONB'nin serileştiremeyeceği)
-                        # güvenli string'e çeviriyoruz — bkz. utils/redis_client.py
-                        # aynı desen (default=str), 18 Tem'deki numpy.bool_ bug'ıyla
-                        # aynı sınıf hatayı burada önceden önlüyor.
-                        entry_features=_json.loads(_json.dumps(signal_data, default=str)),
                     )
                     session.add(trade)
                     await session.commit()
