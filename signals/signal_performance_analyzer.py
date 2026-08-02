@@ -551,10 +551,12 @@ class SignalPerformanceAnalyzer:
                 ORDER BY s.opened_at ASC
             """
 
+            params: list = [hours_back]
             if max_signals:
-                query += f" LIMIT {max_signals}"
+                query += " LIMIT %s"
+                params.append(max_signals)
 
-            cursor.execute(query, (hours_back,))
+            cursor.execute(query, tuple(params))
             signal_ids = [row[0] for row in cursor.fetchall()]
 
             logger.info(f"{len(signal_ids)} sinyal performansı hesaplanacak")

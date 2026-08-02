@@ -5,7 +5,11 @@ from contextlib import asynccontextmanager
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from utils.logger import get_logger
+
 from .models import Base
+
+logger = get_logger(__name__)
 
 # Hot-path DB işlemlerini (SignalFilter.check, sinyal yazma/kapama vb.) sarmalamak
 # için ortak zaman aşımı — 8 Tem: gerçek bir ağ kesintisi sırasında timeout'suz bir
@@ -120,7 +124,7 @@ async def init_db():
 
         except Exception as e:
             # Hypertable zaten varsa veya başka bir hata varsa devam et
-            print(f"Hypertable creation warning: {e}")
+            logger.warning("Hypertable creation warning: %s", e)
 
 
 from contextlib import asynccontextmanager

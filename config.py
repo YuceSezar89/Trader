@@ -35,7 +35,11 @@ class Config:
     # DATABASE AYARLARI (PostgreSQL)
     # =============================================================================
     DB_HOST = os.getenv("DB_HOST", "localhost")
-    DB_PORT = int(os.getenv("DB_PORT", 5432))
+    # 6432 = pgbouncer (database/engine.py'nin kendi varsayılanıyla tutarlı) —
+    # burada yanlışlıkla 5432 (doğrudan Postgres) duruyordu; .env bozulursa/
+    # eksik olursa Config sessizce pgbouncer'ı atlayıp doğrudan Postgres'e
+    # bağlanmaya çalışırdı (2 Ağu 2026, Fable 5 mimari denetimi).
+    DB_PORT = int(os.getenv("DB_PORT", 6432))
     DB_NAME = os.getenv("DB_NAME", "trader_panel")
     DB_USER = os.getenv("DB_USER", "postgres")
     DB_PASSWORD = os.getenv("DB_PASSWORD", "")
