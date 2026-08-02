@@ -296,23 +296,27 @@ class TradeSnapshot(Base):
 
     __tablename__ = "trade_snapshots"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
-    trade_id = Column(Integer, ForeignKey("paper_trades.id", ondelete="CASCADE"), nullable=False)
-    symbol = Column(String(30), nullable=False)
-    taken_at = Column(DateTime, primary_key=True, nullable=False, default=datetime.now)
-    price = Column(Float, nullable=True)
-    cvd_slope = Column(Float, nullable=True)
-    vp_buy = Column(Float, nullable=True)
-    vp_sell = Column(Float, nullable=True)
-    vp_score = Column(Float, nullable=True)
-    vp_score_real = Column(Float, nullable=True)
-    vol_score = Column(Float, nullable=True)
-    mom_score = Column(Float, nullable=True)
-    volat_score = Column(Float, nullable=True)
-    price_score = Column(Float, nullable=True)
-    price_since_entry_pct = Column(Float, nullable=True)
-    vpmv_combined = Column(Float, nullable=True)
-    smc_market_structure = Column(String(20), nullable=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    trade_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("paper_trades.id", ondelete="CASCADE"), nullable=False
+    )
+    symbol: Mapped[str] = mapped_column(String(30), nullable=False)
+    taken_at: Mapped[datetime] = mapped_column(
+        DateTime, primary_key=True, nullable=False, default=datetime.now
+    )
+    price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cvd_slope: Mapped[float | None] = mapped_column(Float, nullable=True)
+    vp_buy: Mapped[float | None] = mapped_column(Float, nullable=True)
+    vp_sell: Mapped[float | None] = mapped_column(Float, nullable=True)
+    vp_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    vp_score_real: Mapped[float | None] = mapped_column(Float, nullable=True)
+    vol_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mom_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    volat_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_since_entry_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    vpmv_combined: Mapped[float | None] = mapped_column(Float, nullable=True)
+    smc_market_structure: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
 
 class PaperPortfolio(Base):
