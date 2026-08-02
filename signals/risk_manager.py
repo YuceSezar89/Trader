@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import Config
 from database.engine import get_session, run_with_db_timeout
 from database.models import Signal
+from database.signal_repository import close_signal
 from signals.signal_lifecycle_manager import _calc_pnl
 from signals.trailing import update_trailing
 
@@ -155,11 +156,11 @@ class RiskManager:
         close_price: float,
         reason: str,
     ) -> None:
-        sig.status = "closed"
-        sig.closed_at = datetime.now()
-        sig.close_price = close_price
-        sig.close_reason = reason
-        sig.realized_pnl = _calc_pnl(sig.signal_type, float(sig.open_price), close_price)
+        # 2 Ağu 2026 (Fable 5 mimari denetimi, Kademe 3): signal_lifecycle_
+        # manager.py'de BİREBİR AYNI blok kopyalanmıştı — close_signal() ile
+        # tek yere toplandı.
+        realized_pnl = _calc_pnl(sig.signal_type, float(sig.open_price), close_price)
+        close_signal(sig, close_price=close_price, reason=reason, realized_pnl=realized_pnl)
         session.add(sig)
 
 

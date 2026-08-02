@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import Config
 from database.engine import get_session, run_with_db_timeout
 from database.models import PaperPortfolio, PaperTrade, Signal
-from database.signal_repository import build_paper_trade
+from database.signal_repository import build_paper_trade, build_paper_trade_direct
 from indicators.core import calculate_evol
 from signals.risk_policy import default_policy
 from signals.signal_lifecycle_manager import _calc_pnl
@@ -312,8 +312,10 @@ class PaperTradeManager:
                         )
                         return False
 
-                    trade = PaperTrade(
-                        signal_id=None,
+                    # 2 Ağu 2026 (Fable 5 mimari denetimi, Kademe 3): kuruluş
+                    # build_paper_trade_direct()'e taşındı (tutarlılık — tek
+                    # yazma noktasıydı, kopya riski yoktu). Davranış birebir aynı.
+                    trade = build_paper_trade_direct(
                         strategy=self.strategy,
                         source=note or None,
                         symbol=symbol,
@@ -323,10 +325,8 @@ class PaperTradeManager:
                             position_usd if position_usd is not None else self.position_usd
                         ),
                         entry_price=price,
-                        stop_loss_price=sl_price,
-                        take_profit_price=tp_price,
-                        status="open",
-                        opened_at=datetime.now(),
+                        sl_price=sl_price,
+                        tp_price=tp_price,
                         atr=atr,
                     )
                     session.add(trade)

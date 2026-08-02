@@ -9,15 +9,23 @@ Kademe 1: `build_signal()` — signal_lifecycle_manager.py'nin en sık kullanıl
 yolu (yeni sinyal açma).
 Kademe 2: `build_paper_trade()` — paper_trade_manager.py::on_new_signal'ın
 ana açılış yolu (_do_open).
+Kademe 3 (toparlama): `close_signal()`, `build_trade_snapshot()`,
+`build_paper_trade_direct()` — geri kalan yazma noktaları. `close_signal()`
+GERÇEK bir kopya kodu birleştiriyor (signal_lifecycle_manager.py VE
+risk_manager.py'de BİREBİR AYNI 5 satırlık kapatma bloğu vardı); diğer ikisi
+(TradeSnapshot, _do_open_direct'in PaperTrade'i) tek-siteli, sadece
+tutarlılık için taşındı — bug-önleme değerleri daha düşük.
 
-İkisi de aynı disiplinde: session/transaction yönetimine DOKUNULMADI,
-davranış birebir aynı — fonksiyonlar session.add()/commit() yapmıyor,
-sadece HENÜZ session'a eklenmemiş bir ORM nesnesi kurup dönüyor. Çağıran
+Hepsi aynı disiplinde: session/transaction yönetimine DOKUNULMADI, davranış
+birebir aynı — fonksiyonlar session.add()/commit() yapmıyor, sadece HENÜZ
+session'a eklenmemiş/mutasyona uğramış bir ORM nesnesi dönüyor ya da
+(close_signal için) var olan nesneyi yerinde mutasyona uğratıyor. Çağıran
 taraf kendi transaction sınırlarını aynen koruyor.
 
-Sıradaki kademeler (henüz yapılmadı): close_paper_trade(), record_snapshot(),
-paper_trade_manager.py'nin ikinci açılış yolu (_do_open_direct) — her biri
-ayrı, kendi başına doğrulanan bir adım olacak.
+Bilerek TAŞINMADI: signal_lifecycle_manager.py::_update_scores — koşullu
+alan güncellemesi (3 satır, "eğer data'da bu key varsa güncelle"), tek site,
+"build_X" deseniyle uyuşmayacak kadar basit/farklı — taşımak indirection
+katardı, değer katmazdı.
 """
 
 from __future__ import annotations
@@ -26,7 +34,7 @@ import json
 from datetime import datetime
 from typing import Any, Optional
 
-from database.models import PaperTrade, Signal
+from database.models import PaperTrade, Signal, TradeSnapshot
 
 
 def build_signal(
@@ -216,4 +224,99 @@ def build_paper_trade(
         # olmayan her şey). json round-trip ile datetime/numpy tiplerini
         # (JSONB'nin serileştiremeyeceği) güvenli string'e çeviriyoruz.
         entry_features=json.loads(json.dumps(signal_data, default=str)),
+    )
+
+
+def close_signal(
+    sig: Signal, *, close_price: float, reason: str, realized_pnl: float
+) -> None:
+    """Bir Signal'ı kapanmış duruma çevirir — VAR OLAN nesneyi yerinde
+    mutasyona uğratır (yeni nesne kurmaz), session.add()/commit() çağıranın
+    işi. realized_pnl çağıran tarafça (_calc_pnl ile) önceden hesaplanmış
+    olmalı — bu fonksiyon PnL hesabı yapmaz, sadece atar.
+
+    signal_lifecycle_manager.py VE risk_manager.py'de BİREBİR AYNI 5 satır
+    kopyalanmıştı (2 Ağu 2026, Fable 5 mimari denetimi) — tek yere toplandı.
+    """
+    sig.status = "closed"
+    sig.closed_at = datetime.now()
+    sig.close_price = close_price
+    sig.close_reason = reason
+    sig.realized_pnl = realized_pnl
+
+
+def build_trade_snapshot(
+    *,
+    trade_id: int,
+    symbol: str,
+    price: Optional[float],
+    cvd_slope: Optional[float],
+    vp_buy: Optional[float],
+    vp_sell: Optional[float],
+    vp_score_real: Optional[float],
+    vol_score: Optional[float],
+    mom_score: Optional[float],
+    volat_score: Optional[float],
+    price_score: Optional[float],
+    price_since_entry_pct: Optional[float],
+    vpmv_combined: Optional[float],
+    smc_market_structure: Optional[str],
+) -> TradeSnapshot:
+    """Açık bir paper trade için periyodik piyasa-bağlamı anlık görüntüsü
+    kurar — dönen nesne HENÜZ session'a eklenmemiştir. trade_snapshot.py'nin
+    tek yazma noktasıydı, kopya riski yoktu — sadece tutarlılık için taşındı."""
+    # Orijinal kod SADECE vp_buy is not None kontrolü yapıyordu (vp_sell'i
+    # değil) — birebir aynı davranış korunuyor, "iyileştirme" yapılmadı.
+    vp_score = round(vp_buy - vp_sell, 2) if vp_buy is not None else None
+    return TradeSnapshot(
+        trade_id=trade_id,
+        symbol=symbol,
+        price=price,
+        cvd_slope=cvd_slope,
+        vp_buy=vp_buy,
+        vp_sell=vp_sell,
+        vp_score=vp_score,
+        vp_score_real=vp_score_real,
+        vol_score=round(vol_score, 2) if vol_score is not None else None,
+        mom_score=round(mom_score, 2) if mom_score is not None else None,
+        volat_score=round(volat_score, 2) if volat_score is not None else None,
+        price_score=round(price_score, 2) if price_score is not None else None,
+        price_since_entry_pct=price_since_entry_pct,
+        vpmv_combined=round(vpmv_combined, 2) if vpmv_combined is not None else None,
+        smc_market_structure=smc_market_structure,
+    )
+
+
+def build_paper_trade_direct(
+    *,
+    strategy: str,
+    symbol: str,
+    signal_type: str,
+    interval: str,
+    position_usd: float,
+    entry_price: float,
+    sl_price: Optional[float],
+    tp_price: Optional[float],
+    atr: Optional[float],
+    source: Optional[str] = None,
+) -> PaperTrade:
+    """Sinyal tablosundan BAĞIMSIZ pozisyon açan yol (dedektör-tabanlı
+    stratejiler: do_kirilimi/do_open_streak) için PaperTrade kurar — dönen
+    nesne HENÜZ session'a eklenmemiştir. build_paper_trade()'den farklı
+    olarak enriched_signal dict'i YOK, sadece ham parametreler var — tek
+    yazma noktasıydı, sadece tutarlılık için taşındı."""
+    return PaperTrade(
+        signal_id=None,
+        strategy=strategy,
+        source=source,
+        symbol=symbol,
+        signal_type=signal_type,
+        interval=interval,
+        position_usd=position_usd,
+        entry_price=entry_price,
+        stop_loss_price=sl_price,
+        take_profit_price=tp_price,
+        status="open",
+        opened_at=datetime.now(),
+        atr=atr,
     )

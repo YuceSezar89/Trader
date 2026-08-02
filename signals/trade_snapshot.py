@@ -16,7 +16,8 @@ import numpy as np
 
 from database.crud import get_cagg_klines
 from database.engine import get_session, run_with_db_timeout
-from database.models import PaperTrade, TradeSnapshot
+from database.models import PaperTrade
+from database.signal_repository import build_trade_snapshot
 from signals.market_context import (
     compute_cvd_slope,
     compute_smc_market_structure,
@@ -69,26 +70,27 @@ async def _snapshot_one(
         return
 
     try:
+        # 2 Ağu 2026 (Fable 5 mimari denetimi, Kademe 3): kuruluş build_trade_
+        # snapshot()'a taşındı (tutarlılık — bu tek yazma noktasıydı, kopya
+        # riski yoktu). Davranış birebir aynı.
+        snapshot = build_trade_snapshot(
+            trade_id=trade_id,
+            symbol=symbol,
+            price=price,
+            cvd_slope=cvd,
+            vp_buy=vp_buy,
+            vp_sell=vp_sell,
+            vp_score_real=vp_score_real,
+            vol_score=vol_s,
+            mom_score=mom_s,
+            volat_score=vlt_s,
+            price_score=prc_s,
+            price_since_entry_pct=price_since_entry_pct,
+            vpmv_combined=vpmv_combined,
+            smc_market_structure=smc_struct,
+        )
         async with get_session() as session:
-            session.add(
-                TradeSnapshot(
-                    trade_id=trade_id,
-                    symbol=symbol,
-                    price=price,
-                    cvd_slope=cvd,
-                    vp_buy=vp_buy,
-                    vp_sell=vp_sell,
-                    vp_score=round(vp_buy - vp_sell, 2) if vp_buy is not None else None,
-                    vp_score_real=vp_score_real,
-                    vol_score=round(vol_s, 2) if vol_s is not None else None,
-                    mom_score=round(mom_s, 2) if mom_s is not None else None,
-                    volat_score=round(vlt_s, 2) if vlt_s is not None else None,
-                    price_score=round(prc_s, 2) if prc_s is not None else None,
-                    price_since_entry_pct=price_since_entry_pct,
-                    vpmv_combined=round(vpmv_combined, 2) if vpmv_combined is not None else None,
-                    smc_market_structure=smc_struct,
-                )
-            )
+            session.add(snapshot)
             await run_with_db_timeout(session.commit())
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.warning("[%s] snapshot yazılamadı: %s", symbol, exc)
