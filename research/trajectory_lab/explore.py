@@ -40,13 +40,14 @@ def main() -> None:
 
     import matplotlib.pyplot as plt
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 9))
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 12.5))
     viz.plot_overlay(corpus, args.metric, ax=ax1)
     viz.plot_mean_band(corpus, args.metric, ax=ax2)
+    _, peak_offset, peak_value = viz.plot_divergence(corpus, args.metric, ax=ax3)
     fig.tight_layout()
     out = os.path.join(C.REPORT_DIR, f"{base}_{args.metric}.png")
     fig.savefig(out, dpi=120)
-    print(f"-> {out}")
+    print(f"-> {out} (en güçlü ayrışma: t={peak_offset}, değer={peak_value:+.3f})")
 
 
 if __name__ == "__main__":

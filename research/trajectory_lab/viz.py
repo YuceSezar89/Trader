@@ -78,6 +78,52 @@ def plot_mean_band(
     return ax
 
 
+def compute_divergence(
+    corpus: pd.DataFrame, metric: str, group_a: str = "winner", group_b: str = "loser"
+) -> pd.Series:
+    """Her t_offset için group_a_mean - group_b_mean — 'ayrışma eğrisi'.
+    Döner: t_offset index'li Series."""
+    sub = corpus[corpus["metric"] == metric]
+    means = sub.groupby(["outcome", "t_offset"])["value"].mean().unstack("outcome")
+    return (means[group_a] - means[group_b]).sort_index()
+
+
+def plot_divergence(
+    corpus: pd.DataFrame,
+    metric: str,
+    group_a: str = "winner",
+    group_b: str = "loser",
+    ax=None,
+):
+    """Ayrışma eğrisi — her bar için group_a_mean - group_b_mean. Ayrışmanın
+    EN GÜÇLÜ olduğu bar (|değer| max) işaretlenir; bu, Pattern Lab'a taşınacak
+    hipotezin ("kaç bar sonra bakılmalı") doğrudan adayıdır."""
+    divergence = compute_divergence(corpus, metric, group_a, group_b)
+    if ax is None:
+        _, ax = plt.subplots(figsize=(10, 3.5))
+
+    ax.plot(divergence.index, divergence.values, color="#9467bd", linewidth=2)
+    ax.axhline(0, color="gray", linewidth=0.8)
+    ax.axvline(0, color="black", linestyle="--", linewidth=1, alpha=0.6)
+
+    peak_offset = divergence.abs().idxmax()
+    peak_value = divergence.loc[peak_offset]
+    ax.scatter([peak_offset], [peak_value], color="black", zorder=5, s=50)
+    ax.annotate(
+        f"t={peak_offset}: {peak_value:+.3f}",
+        (peak_offset, peak_value),
+        textcoords="offset points",
+        xytext=(8, 8),
+        fontsize=9,
+        fontweight="bold",
+    )
+
+    ax.set_title(f"{metric} — ayrışma eğrisi ({group_a}_mean - {group_b}_mean)")
+    ax.set_xlabel("t_offset (bar, 0=sinyal)")
+    ax.set_ylabel(f"{group_a} - {group_b}")
+    return ax, peak_offset, peak_value
+
+
 def plot_signal_story(corpus: pd.DataFrame, signal_id, metrics: list[str] | None = None):
     """Tek sinyal, çoklu metrik, ortak zaman ekseninde alt alta panel —
     'davranış hikâyesi' replay'i. metrics=None ise corpus'ta o sinyal için

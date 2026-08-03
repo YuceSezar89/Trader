@@ -158,6 +158,59 @@ def cvd_slope_series(df: pd.DataFrame, slope_window: int = 10) -> pd.Series:
     return cvd.diff().rolling(slope_window).mean() / avg_vol
 
 
+def z_score_series(df: pd.DataFrame) -> pd.Series:
+    """signal_processor.py::z_score_entry hesabının bağımsız, TAM SERİ
+    kopyası — sembolün kendi fiyatının EMA200'den kaç std uzakta olduğu.
+    Giriş-anı (statik) değeri z_score_entry olarak zaten kaydediliyor;
+    burada amaç sinyal ÖNCESİ trajectory'sini (eğimini) görmek — production
+    formülü, sadece son bar yerine tüm seri için. NOT: STD200'ün geçerli
+    olması için en az 200 bar geçmiş gerekir (bkz. config.py WARMUP_BARS)."""
+    close = df["close"].astype(float)
+    ema200 = close.ewm(span=200, adjust=False).mean()
+    std200 = close.rolling(200).std()
+    return (close - ema200) / (std200 + 1e-12)
+
+
+def volatility_pct_series(df: pd.DataFrame) -> pd.Series:
+    """signal_processor.py::volatility_regime hesabının bağımsız, TAM SERİ
+    kopyası — ATR(14)'ün 200-bar rolling percentile-rank'i (0-100). Production
+    bunu >70 high / <30 low / normal kategorik etiketine indirgiyor; burada
+    amaç sinyal-öncesi REJİM İSTİKRARINI (bu serinin t∈[-10,-1] std'si —
+    düşük std=istikrarlı rejim) test etmek, ham seviyeyi değil. _atr/
+    _normalize_volatility_0_100 zaten vpmv_series içinde kullanılan aynı
+    helper'lar — yeni formül riski yok. NOT: 200-bar rolling ihtiyacı
+    z_score ile aynı (bkz. config.py WARMUP_BARS=220)."""
+    atr = _atr(df, period=14)
+    return _normalize_volatility_0_100(atr)
+
+
+def cvd_level_series(df: pd.DataFrame, lookback: int = 500) -> pd.Series:
+    """cvd_slope_series ile BİREBİR AYNI ham kümülatif CVD'yi ((2*bv-volume)
+    cumsum) kullanır — fark alıp orana çevirmek yerine, VP Score'daki `_norm`
+    ile aynı rolling min-max normalizasyonuyla 0-100 SEVİYESİNE sıkıştırır.
+
+    Amaç: CVD Slope'un divergence-peak testinde neden zaman/sembol split'te
+    tutmadığını ayırt etmek — "CVD verisi bilgi taşımıyor" mu, yoksa "oran
+    (türev) temsili yanlış nesneye yanlış test" mi? Tek manipüle edilen
+    değişken temsil biçimi (seviye vs oran); ham order-flow girdisi
+    cvd_slope_series ile birebir aynı — kontrollü deney.
+
+    lookback=500, VP Score ile aynı temsil biçimini korumak ve yalnızca
+    "seviye vs. oran" değişkenini izole etmek amacıyla seçildi. Bu çalışma,
+    normalizasyon penceresini optimize etmeyi hedeflememektedir.
+    """
+    if "buy_volume" in df.columns and df["buy_volume"].notna().any():
+        hl = (df["high"] - df["low"]).clip(lower=1e-8)
+        bv = df["buy_volume"].fillna(df["volume"] * (df["close"] - df["low"]) / hl)
+    else:
+        hl = (df["high"] - df["low"]).clip(lower=1e-8)
+        bv = df["volume"] * (df["close"] - df["low"]) / hl
+    cvd = (2 * bv - df["volume"]).cumsum()
+    lo = cvd.rolling(lookback, min_periods=1).min()
+    hi = cvd.rolling(lookback, min_periods=1).max()
+    return ((cvd - lo) / (hi - lo + 1e-10) * 100).fillna(50.0)
+
+
 def vp_score_series(
     df: pd.DataFrame, lookback: int = 500, use_real_volume: bool = False
 ) -> pd.Series:
@@ -198,5 +251,8 @@ PROVIDERS = {
     "evol": lambda df, signal_type: evol_series(df),
     "vpmv": lambda df, signal_type: vpmv_series(df, signal_type),
     "cvd_slope": lambda df, signal_type: cvd_slope_series(df),
+    "cvd_level": lambda df, signal_type: cvd_level_series(df),
     "vp_score": lambda df, signal_type: vp_score_series(df),
+    "z_score": lambda df, signal_type: z_score_series(df),
+    "volatility_pct": lambda df, signal_type: volatility_pct_series(df),
 }
