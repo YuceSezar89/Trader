@@ -126,7 +126,8 @@ config.local.py
 
 # --- Database migration backups ---
 database/backups/
-*.sql.backupresearch/pattern_lab/
+*.sql.backup
+research/pattern_lab/
 
 # --- pre-commit/CI tarama çıktıları ---
 bandit-report.json
