@@ -1,0 +1,183 @@
+TRADER PANEL — PROJEDE HESAPLANAN TÜM METRİKLER
+(3 Ağu 2026 itibarıyla, kod taranarak çıkarılmıştır)
+
+===========================================================================
+A. KLASİK TEKNİK GÖSTERGELER (indicators/core.py)
+===========================================================================
+
+EMA                 — Üstel hareketli ortalama (varsayılan periyot 21).
+SMA                 — Basit hareketli ortalama (varsayılan periyot 21).
+RSI                 — Göreceli Güç Endeksi, Wilder/TradingView uyumlu EMA
+                      tabanlı (period=14 varsayılan). Ayrıca SMA-tabanlı
+                      klasik varyantı da var (calculate_rsi_sma).
+Bollinger Bands     — SMA ± N standart sapma (üst/orta/alt bant).
+MACD                — Hızlı EMA - yavaş EMA, signal çizgisi, histogram.
+Supertrend          — ATR-tabanlı trend takip çizgisi + yön (-1=boğa,
+                      1=ayı) + long/short flip sinyalleri (10,3.0 varsayılan).
+ADX / +DI / -DI      — Trend gücü ve yön endeksleri (Wilder RMA ile).
+MFI                 — Money Flow Index (hacim-ağırlıklı RSI benzeri).
+OBV                 — On Balance Volume (kümülatif yönlü hacim).
+ATR                 — Ortalama Gerçek Aralık (volatilite ölçüsü).
+CCI                 — Commodity Channel Index.
+Stochastic (%K/%D)  — Klasik stokastik osilatör.
+Williams %R         — Stokastiğin tersine çevrilmiş versiyonu.
+Donchian Channel    — N barlık en yüksek/en düşük bandı.
+Keltner Channel     — EMA ± ATR katsayılı bant.
+VWAP                — Hacim ağırlıklı ortalama fiyat (kümülatif).
+Parabolic SAR       — Trend dönüş noktası + yön.
+Awesome Oscillator  — Hızlı/yavaş medyan-fiyat SMA farkı.
+ROC (Momentum)      — Fiyatın N bar öncesine göre yüzde değişimi.
+Stochastic RSI      — RSI'ın kendi üzerine stokastik uygulanmış hali.
+Heiken Ashi         — Düzleştirilmiş mum (ha_open/ha_close/ha_high/ha_low).
+Fibonacci Pivot     — Önceki periyot H/L/C'den PP/R1-3/S1-3 seviyeleri.
+Destek/Direnç       — Lokal min/max (argrelextrema) ile kümelenmiş seviyeler.
+EVOL (Hacim         — ΔFiyat% / RVOL (Volume/SMA(Volume)), EMA(7) ile
+  Verimliliği)         yumuşatılıp son 100 barın percentile-rank'ine (0-100)
+                      çevrilir. Yüksek = az hacimle çok hareket (verimli),
+                      düşük = çok hacim harcanıp az hareket (zorlanıyor).
+
+===========================================================================
+B. VPMV AİLESİ — Volume-Price-Momentum-Volatility (utils/vpmv.py,
+   signals/vpm_calculator.py)
+===========================================================================
+
+vol_score           — Hacmin (yönlü: Long=buy_volume, Short=sell_volume,
+                      yoksa toplam) rolling normalize edilmiş hali (0-100).
+mom_score           — RSI(14) değişiminin (yönlü) normalize edilmiş hali.
+vlt_score           — ATR'nin normalize edilmiş hali (volatilite).
+price_score         — Fiyat yüzde değişiminin (yönlü) normalize edilmiş hali.
+VPMV (kompozit)     — 0.35×vol + 0.35×mom + 0.20×vlt + 0.10×price
+                      (VPMCalculator.calculate — ağırlıklar özelleştirilebilir).
+vpmv_pre_avg        — Sinyal öncesi PRE_BARS(5) barın VPMV ortalaması.
+vpmv_slope          — Sinyal öncesi ilk-son VPMV farkı (eğim).
+vpmv_post_avg       — Sinyal sonrası POST_BARS(4) barın VPMV ortalaması.
+vpmv_post_delta     — post_avg - sinyal anındaki VPMV.
+vpmv_pre_proxy /    — Aynı pre_avg hesabının farklı hacim modlarıyla
+  vpmv_pre_total       (proxy: mum-konumu vekili, total: yönsüz toplam hacim)
+                      tekrarı — A/B/C karşılaştırma deneyi, panelde gösterilmiyor.
+
+===========================================================================
+C. PİYASA BAĞLAMI — CVD / VP / SMC (signals/market_context.py)
+===========================================================================
+
+cvd_slope           — Kümülatif hacim deltasının (CVD) 10 barlık eğimi,
+                      normalize edilmiş (~-1..+1).
+vp_score            — "%VP Normalized Lines" (PineScript portu). Fiyat-
+                      tabanlı (pozitif/negatif hareket oranı) ve hacim-
+                      tabanlı (alış/satış hacmi oranı) iki ölçü, her biri
+                      son 500 barın min-max'ına göre normalize edilip
+                      ortalanır. vp_score = alıcı_baskı - satıcı_baskı.
+vp_score_real       — Aynı hesap, yaklaşık (OHLC-vekili) hacim yerine
+                      GERÇEK taker buy/sell hacmi ile.
+market_structure    — SMC (Smart Money Concepts) BOS/CHoCH'un YÖNÜ, sinyal
+  (Uyum/Karşı)         yönüyle karşılaştırılır: Uyum↑/↓ (trend devamı) ya da
+                      Karşı↑/↓ (dönüş denemesi). Premium/Discount bölgesi
+                      kasıtlı olarak yok (işe yaramadığı için kaldırıldı).
+
+===========================================================================
+D. FİNANSAL RİSK-AYARLI ORANLAR (indicators/financial_metrics.py)
+===========================================================================
+
+alpha / beta        — CAPM-tipi, referans (BTC) getirisine karşı rolling
+                      regresyon (TradingView Pine formülü). Pencere boyu
+                      "piyasa rejimi" (Sharpe vb. için ~30 gün) ile "sinyal
+                      ömrü" (Alpha/Beta için gerçek medyan tutulma süresinin
+                      3 katı) arasında kasıtlı olarak AYRIŞTIRILMIŞ.
+sharpe_ratio        — Yıllıklandırılmış ortalama getiri / getiri std sapması.
+sortino_ratio        — Sharpe'ın sadece aşağı-yönlü sapmayı cezalandıran hali.
+calmar_ratio         — Yıllıklandırılmış getiri / pencere-içi en kötü drawdown.
+omega_ratio          — Kazanç toplamı / kayıp toplamı oranı.
+treynor_ratio        — (Getiri - risksiz oran) / beta.
+information_ratio    — Piyasaya göre fazladan getiri / takip hatası (tracking
+                      error), ±10 ile kırpılmış.
+composite_ratio      — Yukarıdaki 6 oranın (Sharpe/Sortino/Calmar/Omega/
+                      Treynor/Information) ortalaması, normalize+yumuşatılmış.
+zscore_ratio_percent — (close - EMA200) / 200-barlık std × 100 (Pine panel
+                      eşdeğeri).
+smoothed_*           — price_diff/volume/volatility/momentum/rsi/cumulative/
+                      composite/signal_momentum'un normalize+yumuşatılmış
+                      (EMA) versiyonları — ara hesap adımları, panelde
+                      doğrudan gösterilmiyor.
+
+===========================================================================
+E. SİNYAL-ÖZEL TÜRETİLMİŞ METRİKLER (signals/signal_processor.py)
+===========================================================================
+
+devisso_score (ERSI) — "RSI Verimliliği": Δfiyat% / ΔRSI(14), EMA(7) ile
+                      yumuşatılıp son 100 barın percentile-rank'ine (0-100)
+                      çevrilir. Yüksek = fiyat az RSI ile çok hareket etti
+                      (verimli/sağlıklı trend), düşük = RSI çok yorulmuş.
+devisso_delta        — Bu sinyalin devisso_score'u - aynı sembol/TF/yöndeki
+                      BİR ÖNCEKİ sinyalin devisso_score'u.
+devisso_ratio        — Aynı ikisinin oranı (yeni/eski).
+candle_pattern       — Son mumda tespit edilen candlestick formasyon(lar)ı
+                      (pandas_ta_classic, ör. "+HAMMER,-SHOOTINGSTAR").
+candle_kategori      — Son mumun gövde/üst fitil/alt fitil oranına göre
+                      hangi kısmın baskın olduğu (govde/ust_fitil/alt_fitil).
+z_score_entry        — (close - EMA200) / 200-barlık std sapma — sinyal
+                      anında fiyatın kendi ortalamasından ne kadar saptığı.
+regime_trend         — ADX>25→"trending", <20→"ranging", arası→"neutral".
+volatility_regime    — ATR'nin percentile'ı >70→"high", <30→"low", arası
+                      →"normal".
+btc_z_score/         — Aynı z-score formülü BTC referans verisine uygulanmış
+  btc_trend             hali + yön etiketi (bullish/bearish/neutral, ±0.5 eşik).
+funding_rate         — Binance ticker'ından okunan fonlama oranı (hesaplanmış
+                      bir metrik değil, doğrudan borsa verisi).
+st_confirmed         — Sinyalin yönü, o anki Supertrend yönüyle uyumlu mu
+                      (Supertrend'in kendi sinyali için her zaman True).
+mtf_score            — Üst zaman dilimlerinin Supertrend yönüne göre
+                      konfirmasyon skoru (0/50/100).
+htf_bull_count       — 4h/6h/8h/12h/1d'nin kaçının HA (Heiken Ashi) yönü
+                      sinyal yönüyle uyuştuğu (0-5).
+ha_ultra_confirm     — 15m/1h/4h'nin (SADECE 5m sinyalleri için) HA yönünün
+                      sinyal yönüyle kaçının uyuştuğu (0-3, "ultra hizalama").
+all_up               — Hacim/momentum/volatilite/fiyat skorlarının HEPSİ, bir
+                      önceki aynı sembol/TF/gösterge/yön sinyaline göre arttı
+                      mı (True/False/None).
+is_confluence        — HA_Cross + Long + 15m + htf_bull_count eşik üstü ise
+                      "konfluans sinyali" olarak işaretlenir.
+fvg_tfs              — Hangi zaman dilimlerinde (1m/5m/15m/1h/4h/1d) entry
+                      fiyatının içinde aktif bir FVG (Fair Value Gap) var.
+
+===========================================================================
+F. SIRALAMA/RANKING METRİKLERİ (live_data_manager.py — desktop paneli için,
+   `ranking:snapshot` Redis key'i, ~90sn'de bir tüm evren için yeniden hesaplanır)
+===========================================================================
+
+score_5m/15m/1h/4h   — RankingWorker'ın KENDİ VPMV varyantı (compute_
+                      components'ten farklı: RSI(14)≥50 eşikli yön), her TF
+                      için ayrı.
+combined             — Bu 4 TF skorunun ağırlıklı ortalaması.
+rank_score           — combined'ın O ANKİ CANLI EVRENE göre percentile'ı
+                      (evrendeki sembollerin yüzde kaçından daha iyi).
+rsi_cross_combined   — RSI9-RSI24 farkının normalize edilmiş, TF-ağırlıklı
+                      ortalaması. 4 kapıyla (korelasyon+gerçek $+placebo+
+                      split-period) doğrulanmış TEK ranking metriği.
+z_confluence         — VPMV'nin kendi geçmişine göre z-score'unun (son 20+
+                      bar) TF-ağırlıklı ortalaması.
+r_score              — Sortino(%40)+Omega(%30)+Calmar(%20)+Sharpe(%10)
+                      ağırlıklı blend, ±50 ile kırpılmış (blow-up koruması).
+vs_btc               — Sembolün combined skoru - BTC'nin combined skoru.
+aligned/             — TF'ler arası Supertrend yönü uyumu (hepsi aynı yönde
+  alignment_count       mi) ve kaç TF'nin uyuştuğu.
+
+===========================================================================
+G. SİNYAL PERFORMANS / TEMİZ HEDEF METRİKLERİ (signal_performance tablosu,
+   signal_performance_analyzer.py — realized_pnl'den BAĞIMSIZ, sabit-ufuk)
+===========================================================================
+
+return_t3/t5/t10_atr — Sinyalden T+3/T+5/T+10 bar sonraki getiri, ATR
+                      biriminde (volatiliteye göre normalize).
+return_t3/t5/t10_pct — Aynısı, yüzde olarak.
+mfe_atr / mae_atr    — Maximum Favorable/Adverse Excursion (en iyi/en kötü
+                      ara nokta), ATR biriminde.
+risk_reward          — mfe/mae oranı.
+mfe_bar_index /      — mfe/mae'nin kaç bar sonra gerçekleştiği.
+  mae_bar_index
+
+---------------------------------------------------------------------------
+NOT: Bu liste "üretim/canlı" tarafında ADI OLAN ve genelde bir tabloya/
+panele yansıyan metrikleri kapsar. research/pattern_lab/ (237 script) içinde
+bunlara ek olarak onlarca deneysel/tek-seferlik özellik (entropi, Hurst
+üsteli, Kaufman ER, Amihud illikidite, choppiness index vb.) test edilmiş
+ama hiçbiri canlıya alınmadığı için burada listelenmedi.
