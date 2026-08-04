@@ -129,6 +129,12 @@ database/backups/
 *.sql.backup
 research/pattern_lab/
 
+# --- Trajectory Lab — yeniden üretilebilir corpus/görsel çıktıları ---
+# (kod/bulgular README.md+RESEARCH_SOP.md'de commit'li; ham corpus/PNG
+# 4 Ağustos'ta boyut nedeniyle (~450MB) dışarıda bırakıldı)
+research/trajectory_corpus/
+research/trajectory_reports/
+
 # --- pre-commit/CI tarama çıktıları ---
 bandit-report.json
 safety-report.json
