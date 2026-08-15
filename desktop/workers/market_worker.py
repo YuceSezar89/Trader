@@ -125,10 +125,11 @@ class MarketWorker(QThread):  # pylint: disable=too-many-instance-attributes
                     if message["type"] != "message":
                         continue
                     data = message.get("data", "")
-                    if ":" not in data:
-                        continue
-                    symbol, tf = data.rsplit(":", 1)
-                    self._handle_update(symbol, tf)
+                    for pair in data.split(","):
+                        if ":" not in pair:
+                            continue
+                        symbol, tf = pair.rsplit(":", 1)
+                        self._handle_update(symbol, tf)
             except redis.RedisError as exc:
                 logger.warning("Pub/sub kesildi: %s — 5s sonra yeniden bağlanılıyor", exc)
                 if self._running:

@@ -27,6 +27,7 @@ from desktop.panels.chart_panel import ChartPanel
 from desktop.panels.deviso_panel import DevisoPanel
 from desktop.panels.divergence_panel import DivergencePanel
 from desktop.panels.paper_trade_panel import PaperTradePanel
+from desktop.panels.rank_panel import RankPanel
 from desktop.panels.ranking_panel import RankingPanel
 from desktop.panels.tf_alignment_panel import TFAlignmentPanel
 from desktop.panels.trade_xray_panel import TradeXRayPanel
@@ -36,9 +37,10 @@ from desktop.theme import COLORS
 from desktop.widgets.log_panel import LogPanel
 from desktop.workers.divergence_worker import DivergenceWorker
 from desktop.workers.health_worker import HealthWorker, ServiceStatus
+from desktop.workers.live_metrics_worker import LiveMetricsWorker
 from desktop.workers.market_worker import MarketWorker
 from desktop.workers.signal_worker import SignalWorker
-from desktop.workers.live_metrics_worker import LiveMetricsWorker
+from desktop.workers.totalamount_worker import TotalamountWorker
 from desktop.workers.vpmv_worker import VpmvWorker
 
 
@@ -302,6 +304,17 @@ class MainWindow(QMainWindow):
         self._add_panel_toggle(ranking_dock)
         self._docks["ranking"] = ranking_dock
 
+        # ── Rank paneli — Devisso Döngüsü / Totalamount (sağ tabified) ─────
+        self._rank_panel = RankPanel(self)
+        rank_dock = QDockWidget("Rank", self)
+        rank_dock.setObjectName("dock_rank")
+        rank_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        rank_dock.setWidget(self._rank_panel)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, rank_dock)
+        self.tabifyDockWidget(chart_dock, rank_dock)
+        self._add_panel_toggle(rank_dock)
+        self._docks["rank"] = rank_dock
+
         # ── TF Hizalanma Adayları paneli (sağ tabified) ────────────────────
         self._tf_alignment_panel = TFAlignmentPanel(db_cfg, redis_url, self)
         tf_alignment_dock = QDockWidget("TF Hizalanma Adayları", self)
@@ -314,7 +327,7 @@ class MainWindow(QMainWindow):
         self._docks["tf_alignment"] = tf_alignment_dock
 
         # ── İşlem Röntgeni paneli (alt, geniş — Aktif Sinyaller/Paper Trade ile tabified)
-        self._trade_xray_panel = TradeXRayPanel(db_cfg, self)
+        self._trade_xray_panel = TradeXRayPanel(db_cfg, redis_url, self)
         trade_xray_dock = QDockWidget("İşlem Röntgeni", self)
         trade_xray_dock.setObjectName("dock_trade_xray")
         trade_xray_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
@@ -463,6 +476,15 @@ class MainWindow(QMainWindow):
         self._signal_worker.new_signal.connect(self._divergence_worker.add_symbol)
         self._divergence_worker.start()
         self._workers.append(self._divergence_worker)
+
+        # Totalamount worker — Devisso Döngüsü / Rank sekmesi (13 Ağu 2026)
+        self._totalamount_worker = TotalamountWorker(redis_url, parent=self)
+        self._totalamount_worker.totalamount_updated.connect(
+            self._rank_panel.on_totalamount_updated
+        )
+        self._totalamount_worker.status_updated.connect(self._rank_panel.on_status_updated)
+        self._totalamount_worker.start()
+        self._workers.append(self._totalamount_worker)
 
         # VPMV worker — sinyal sonrası VPMV momentum ayrışması
         self._vpmv_worker = VpmvWorker(redis_url, parent=self)

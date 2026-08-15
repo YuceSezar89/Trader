@@ -425,8 +425,8 @@ class RedisClient:
             async with r.pipeline(transaction=False) as pipe:
                 for k, (data, ttl) in pending.items():
                     pipe.set(k, data, ex=ttl)
-                for msg in publishes:
-                    pipe.publish("kline_updated", msg)
+                if publishes:
+                    pipe.publish("kline_updated", ",".join(publishes))
                 for event in closed_events:
                     pipe.xadd("kline_closed", event, maxlen=100_000, approximate=True)
                 await pipe.execute()

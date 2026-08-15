@@ -4,7 +4,13 @@ grafik olarak gösterir (20 Tem 2026, "her işlemin röntgenini çekelim").
 
 Üstte tüm işlemler (açık+kapalı, tüm stratejiler) listesi, satıra tıklayınca
 altta 4 alt-grafik yükleniyor: PnL%, VPMV bileşenleri, CVD, VP skorları.
-DB sorguları QThread'de (UI donmasın diye — bkz. bugünkü panel donma dersi).
+
+14 Ağu 2026 mimari denetimi: işlem listesi artık backend'in (live_data_manager.py::
+_trade_xray_publish_loop) yazdığı `trade_xray:trades` Redis key'inden okunuyor
+(bkz. _TradeListWorker) — periyodik/geniş DB taraması UI tarafında değil. Tıklanan
+işlemin detay grafiği (trade_snapshots zaman serisi) talebe bağlı/tek-trade'e
+sınırlı olduğu için DB sorgusu olarak KALDI (bkz. _SnapshotWorker), QThread'de
+(UI donmasın diye — bkz. bugünkü panel donma dersi).
 """
 
 from __future__ import annotations
@@ -16,7 +22,14 @@ from typing import Optional
 
 import psycopg2
 import pyqtgraph as pg
-from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal, pyqtSlot  # pylint: disable=no-name-in-module
+import redis
+from PyQt6.QtCore import (  # pylint: disable=no-name-in-module
+    Qt,
+    QThread,
+    QTimer,
+    pyqtSignal,
+    pyqtSlot,
+)
 from PyQt6.QtGui import QColor, QFont  # pylint: disable=no-name-in-module
 from PyQt6.QtWidgets import (  # pylint: disable=no-name-in-module
     QComboBox,
@@ -64,49 +77,39 @@ _VPMV_SERIES = [
 
 
 class _TradeListWorker(QThread):
+    """İşlem listesini okur — 14 Ağu 2026 mimari denetimi: önceden HER 15
+    saniyede bir kendi DB bağlantısıyla doğrudan sorgu atıyordu (backend-
+    hesaplar-UI-okur mimarisine uymuyordu, diğer tüm panellerin aksine).
+    Artık live_data_manager.py::_trade_xray_publish_loop'un yazdığı
+    `trade_xray:trades` Redis key'ini okuyor — DB bağlantısı yok."""
+
     trades_loaded = pyqtSignal(object)
 
-    def __init__(self, db_config: dict, parent=None):
+    def __init__(self, redis_url: str, parent=None):
         super().__init__(parent)
-        self._db_config = db_config
+        self._redis_url = redis_url
 
     def run(self) -> None:
+        r = None
         try:
-            conn = psycopg2.connect(**self._db_config)
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT p.id, p.symbol, p.strategy, p.signal_type, p.status, p.opened_at,
-                           COALESCE(p.pnl_pct, latest.price_since_entry_pct) AS pnl_pct,
-                           p.entry_features
-                    FROM paper_trades p
-                    LEFT JOIN LATERAL (
-                        SELECT price_since_entry_pct FROM trade_snapshots ts
-                        WHERE ts.trade_id = p.id ORDER BY taken_at DESC LIMIT 1
-                    ) latest ON true
-                    ORDER BY p.opened_at DESC
-                    LIMIT 500
-                    """
-                )
-                rows = cur.fetchall()
-            conn.close()
-            trades = [
-                {
-                    "id": r[0],
-                    "symbol": r[1],
-                    "strategy": r[2],
-                    "signal_type": r[3],
-                    "status": r[4],
-                    "opened_at": r[5],
-                    "pnl_pct": r[6],
-                    "entry_features": r[7] if isinstance(r[7], dict) else (json.loads(r[7]) if r[7] else None),
-                }
-                for r in rows
-            ]
+            # 14 Ağu 2026 bugfix: her 15sn'de bir YENİ worker + YENİ redis client
+            # oluşturuluyor (refresh() deseni) — kapatılmazsa 13 Tem 2026'daki
+            # 4-dosyalık "bağlantı hiç kapanmıyor" sızıntısının aynısı olurdu.
+            r = redis.Redis.from_url(
+                self._redis_url, decode_responses=True, socket_connect_timeout=3
+            )
+            raw = r.get("trade_xray:trades")
+            trades = json.loads(raw) if raw else []
             self.trades_loaded.emit(trades)
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.error("[TradeXRay] işlem listesi yüklenemedi: %s", exc)
             self.trades_loaded.emit([])
+        finally:
+            if r is not None:
+                try:
+                    r.close()
+                except Exception:  # pylint: disable=broad-exception-caught
+                    pass
 
 
 class _SnapshotWorker(QThread):
@@ -166,9 +169,10 @@ class _NumericItem(QTableWidgetItem):
 
 
 class TradeXRayPanel(QWidget):
-    def __init__(self, db_config: dict, parent=None):
+    def __init__(self, db_config: dict, redis_url: str, parent=None):
         super().__init__(parent)
         self._db_config = db_config
+        self._redis_url = redis_url
         self._trades: list[dict] = []
         self._filtered_trades: list[dict] = []
         self._search_text = ""
@@ -343,9 +347,11 @@ class TradeXRayPanel(QWidget):
         date_axis = pg.DateAxisItem(orientation="bottom")
 
         def _title(text: str) -> str:
-            return f'<span {_TITLE_STYLE}>{text}</span>'
+            return f"<span {_TITLE_STYLE}>{text}</span>"
 
-        self._plot_pnl = self._plot_widget.addPlot(row=0, col=0, title=_title("Kâr/Zarar % (giriş yönlü)"))
+        self._plot_pnl = self._plot_widget.addPlot(
+            row=0, col=0, title=_title("Kâr/Zarar % (giriş yönlü)")
+        )
         self._plot_widget.nextRow()
         self._plot_vpmv = self._plot_widget.addPlot(row=1, col=0, title=_title("VPMV Bileşenleri"))
         self._plot_widget.nextRow()
@@ -399,7 +405,7 @@ class TradeXRayPanel(QWidget):
 
     def refresh(self) -> None:
         self._status.setText("Yükleniyor…")
-        self._list_worker = _TradeListWorker(self._db_config, parent=self)
+        self._list_worker = _TradeListWorker(self._redis_url, parent=self)
         self._list_worker.trades_loaded.connect(self._on_trades_loaded)
         self._list_worker.start()
 
@@ -485,8 +491,7 @@ class TradeXRayPanel(QWidget):
             status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self._table.setItem(row_idx, _COL_STATUS, status_item)
 
-            opened = t.get("opened_at")
-            opened_item = QTableWidgetItem(opened.strftime("%d/%m %H:%M") if opened else "—")
+            opened_item = QTableWidgetItem(t.get("opened_at_str") or "—")
             opened_item.setForeground(_C_MUTED)
             opened_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self._table.setItem(row_idx, _COL_OPENED, opened_item)
@@ -614,8 +619,7 @@ class TradeXRayPanel(QWidget):
             self._vpmv_baseline[key] = base
             if base:
                 y = [
-                    ((s[key] - base) / base * 100.0) if s[key] is not None else None
-                    for s in snaps
+                    ((s[key] - base) / base * 100.0) if s[key] is not None else None for s in snaps
                 ]
             else:
                 y = [None for _ in snaps]

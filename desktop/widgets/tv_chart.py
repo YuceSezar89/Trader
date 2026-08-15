@@ -348,26 +348,36 @@ function loadSupertrend(segmentsJson) {{
   // sabit seri + whitespace nokta" yontemi bu kutuphane paketinde guvenilir
   // calismiyordu (19 Tem 2026 bug'i - "whitespace" kelimesi bu js dosyasinda
   // hic gecmiyor).
+  //
+  // _stSeries KALICI BIR HAVUZ (pool) - sembol/TF degisiminde chart.removeSeries()
+  // + chart.addLineSeries() ile yikip-yeniden-kurmuyoruz. Stres testiyle olculdu:
+  // her sembol degisiminde bu yikip-kurma dongusu QtWebEngineProcess RSS'ini
+  // ~3-8MB kalici olarak artiriyordu (24 degisimde 150MB -> 320MB, geri donmuyor)
+  // - removeSeries() bu paketli lightweight-charts v4.2.0 surumunde ic kaynaklari
+  // tam serbest birakmiyor (bkz. asagidaki "SIZINTI-DEBUG removeSeries basarisiz"
+  // logu - gecmiste bu zaten supheliydi). Artik var olan seriler YENIDEN
+  // KULLANILIYOR (renk+veri guncelleniyor), havuzdan fazla kalanlar silinmek
+  // yerine setData([]) ile bosaltiliyor (10 Ağu 2026 fix).
   if (!chart) return;
   try {{
-    let _removeFail = 0;
-    _stSeries.forEach(s => {{ try {{ chart.removeSeries(s); }} catch(e) {{ _removeFail++; }} }});
-    if (_removeFail > 0) console.log('SIZINTI-DEBUG removeSeries basarisiz:', _removeFail, '/', _stSeries.length);
-    _stSeries = [];
     const segments = JSON.parse(segmentsJson);
-    segments.forEach(seg => {{
-      const s = chart.addLineSeries({{
-        color: seg.up ? COLORS.green : COLORS.red,
-        lineWidth: 2,
-        priceLineVisible: false,
-        lastValueVisible: false,
-        crosshairMarkerVisible: false,
-      }});
-      safeApply(s, {{ scaleMargins: {{ top: 0.05, bottom: 0.35 }} }});
+    segments.forEach((seg, i) => {{
+      let s = _stSeries[i];
+      if (!s) {{
+        s = chart.addLineSeries({{
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+        }});
+        safeApply(s, {{ scaleMargins: {{ top: 0.05, bottom: 0.35 }} }});
+        _stSeries.push(s);
+      }}
+      s.applyOptions({{ color: seg.up ? COLORS.green : COLORS.red, lineWidth: 2 }});
       s.setData(seg.points);
-      _stSeries.push(s);
     }});
-    console.log('SIZINTI-DEBUG loadSupertrend: yeni-segment=' + segments.length + ' _stSeries.length=' + _stSeries.length);
+    for (let i = segments.length; i < _stSeries.length; i++) {{
+      _stSeries[i].setData([]);
+    }}
   }} catch(e) {{ console.log('loadSupertrend error:', e.message); }}
 }}
 

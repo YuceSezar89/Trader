@@ -8,13 +8,15 @@ sadece pasif CSV loglamıyor, eşik aşılınca Telegram'a da uyarı atıyor.
 Kullanım:
     .venv/bin/python scripts/monitor_desktop_perf.py &
 
-Çıktı: logs/desktop_perf.csv (timestamp, process, elapsed_min, rss_mb, cpu_pct,
-       num_threads, num_fds)
+Çıktı: logs/desktop_perf.csv (timestamp, process, elapsed_min, rss_mb,
+       footprint_mb, cpu_pct, num_threads, num_fds)
 """
 
 import asyncio
 import csv
 import os
+import re
+import subprocess
 import time
 from datetime import datetime
 
@@ -34,6 +36,29 @@ _WATCHED: dict[str, dict[str, float]] = {
     "run_services.py": {"warn_mb": 6000, "critical_mb": 10000},
     "signal_service.py": {"warn_mb": 3000, "critical_mb": 6000},
 }
+
+# 14 Ağu 2026 bugfix: desktop.main gerçek bir olayda (~42-66GB, PC kilitlendi)
+# RSS'i psutil/ps'te 54+ dakika boyunca 37-40MB'DE SABİT gösterdi — macOS
+# bellek baskısı altında (WebEngine/QtWebEngine sürecinin) sayfalarını
+# SIKIŞTIRIYOR/takas ediyor, RSS bunu SAYMIYOR (Activity Monitor'ün "Bellek"
+# sütunu farklı, gerçek ayak izini gösteriyor). 13 Tem 2026'daki 74GB olayında
+# da aynı ders çıkmış, `footprint` komutuyla (macOS yerleşik, sudo gerekmiyor)
+# doğrulanmıştı ama bu script'e o zaman eklenmemişti. Sadece desktop.main
+# için (backend'lerde bu sorun hiç gözlenmedi, gereksiz subprocess maliyeti).
+_FOOTPRINT_PROCS = {"desktop.main"}
+_FOOTPRINT_PATTERN = re.compile(r"Footprint:\s*([\d.]+)\s*MB")
+
+
+def _footprint_mb(pid: int) -> float | None:
+    try:
+        out = subprocess.run(
+            ["footprint", str(pid)], capture_output=True, text=True, timeout=5, check=False
+        ).stdout
+        match = _FOOTPRINT_PATTERN.search(out)
+        return float(match.group(1)) if match else None
+    except Exception:  # pylint: disable=broad-exception-caught
+        return None
+
 
 # fd limiti (setrlimit ile 4096/8192'ye çıkarıldı, 17 Tem 2026) doluşu sessizce
 # ilerleyip "DNS'e ulaşılamıyor" gibi kafa karıştırıcı hatalara yol açabiliyor —
@@ -76,6 +101,7 @@ def main() -> None:
                     "process",
                     "elapsed_min",
                     "rss_mb",
+                    "footprint_mb",
                     "cpu_pct",
                     "num_threads",
                     "num_fds",
@@ -104,6 +130,10 @@ def main() -> None:
                 proc = procs[name]
                 try:
                     rss_mb = proc.memory_info().rss / (1024 * 1024)
+                    footprint_mb = _footprint_mb(proc.pid) if name in _FOOTPRINT_PROCS else None
+                    # Sıkıştırma altında RSS küçük kalabilir — eşik karşılaştırması
+                    # ikisinin büyüğüyle yapılır (bkz. yukarıdaki 14 Ağu notu).
+                    effective_mb = max(rss_mb, footprint_mb or 0.0)
                     cpu_pct = proc.cpu_percent()
                     num_threads = proc.num_threads()
                     try:
@@ -118,6 +148,7 @@ def main() -> None:
                             name,
                             round(elapsed_min, 1),
                             round(rss_mb, 1),
+                            round(footprint_mb, 1) if footprint_mb is not None else "",
                             round(cpu_pct, 1),
                             num_threads,
                             num_fds,
@@ -126,19 +157,26 @@ def main() -> None:
                     f.flush()
 
                     thresholds = _WATCHED[name]
-                    if rss_mb >= thresholds["critical_mb"] and "critical" not in alerted[name]:
+                    if (
+                        effective_mb >= thresholds["critical_mb"]
+                        and "critical" not in alerted[name]
+                    ):
                         _alert(
-                            f"{name} (PID {proc.pid}) bellek {rss_mb:.0f}MB — KRİTİK eşik "
-                            f"({thresholds['critical_mb']:.0f}MB) aşıldı, {elapsed_min:.0f} dk çalışıyor."
+                            f"{name} (PID {proc.pid}) bellek {effective_mb:.0f}MB "
+                            f"(RSS={rss_mb:.0f}MB, footprint={footprint_mb or 0:.0f}MB) — "
+                            f"KRİTİK eşik ({thresholds['critical_mb']:.0f}MB) aşıldı, "
+                            f"{elapsed_min:.0f} dk çalışıyor."
                         )
                         alerted[name].add("critical")
-                    elif rss_mb >= thresholds["warn_mb"] and "warn" not in alerted[name]:
+                    elif effective_mb >= thresholds["warn_mb"] and "warn" not in alerted[name]:
                         _alert(
-                            f"{name} (PID {proc.pid}) bellek {rss_mb:.0f}MB — uyarı eşiği "
-                            f"({thresholds['warn_mb']:.0f}MB) aşıldı, {elapsed_min:.0f} dk çalışıyor."
+                            f"{name} (PID {proc.pid}) bellek {effective_mb:.0f}MB "
+                            f"(RSS={rss_mb:.0f}MB, footprint={footprint_mb or 0:.0f}MB) — "
+                            f"uyarı eşiği ({thresholds['warn_mb']:.0f}MB) aşıldı, "
+                            f"{elapsed_min:.0f} dk çalışıyor."
                         )
                         alerted[name].add("warn")
-                    elif rss_mb < thresholds["warn_mb"] and alerted[name] - {
+                    elif effective_mb < thresholds["warn_mb"] and alerted[name] - {
                         "fd_warn",
                         "fd_critical",
                     }:

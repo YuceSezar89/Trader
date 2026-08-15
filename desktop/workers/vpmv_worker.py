@@ -137,16 +137,18 @@ class VpmvWorker(QThread):
                     if message["type"] != "message":
                         continue
                     data = message.get("data", "")
-                    if ":" not in data:
-                        continue
-                    symbol, tf = data.rsplit(":", 1)
-                    with self._lock:
-                        relevant = any(
-                            sig.get("symbol") == symbol and sig.get("interval") == tf
-                            for sig in self._signals.values()
-                        )
-                    if relevant:
-                        self._wake.set()
+                    for pair in data.split(","):
+                        if ":" not in pair:
+                            continue
+                        symbol, tf = pair.rsplit(":", 1)
+                        with self._lock:
+                            relevant = any(
+                                sig.get("symbol") == symbol and sig.get("interval") == tf
+                                for sig in self._signals.values()
+                            )
+                        if relevant:
+                            self._wake.set()
+                            break
             except redis.RedisError as exc:
                 logger.warning("Pub/sub kesildi: %s — 5s sonra yeniden bağlanılıyor", exc)
                 if self._running:

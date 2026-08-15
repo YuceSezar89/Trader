@@ -2,6 +2,27 @@
 SignalsModel — aktif sinyaller için QAbstractTableModel.
 
 Sütunlar: Sembol | Tip | TF | VPM | MTF | α | β | Z | P&L% | Süre
+
+── dataChanged KURALI (15 Ağu 2026, proje geneli mimari ilke) ──────────────
+`dataChanged.emit(tl, br, ...)` ASLA "kolayca tüm tabloyu kapsasın" diye
+koşulsuz `index(0, ilk_sütun)`→`index(rowCount()-1, son_sütun)` ile
+çağrılmaz. Sadece GERÇEKTEN değişen satır aralığı (min/max index, tek
+satırsa aynı index) VE gerçekten etkilenen sütun(lar) bildirilir — arada
+kalan ilgisiz sütunlar için (Qt'nin dataChanged'i dikdörtgen bir aralık
+istediğinden) gerekiyorsa AYRI dataChanged çağrıları yapılır.
+
+Neden: `on_prices_updated` (MarketWorker, saniyede bir) ~1758 satırlık
+Aktif Sinyaller tablosunda, kaç sembol değişirse değişsin, KOŞULSUZ
+tüm-satır × 10-sütunluk bir dataChanged yayınlıyordu — sadece 2 sütun
+(current_price/pnl_pct'e bağlı COL_PNL+COL_GUV) gerçekten değişirken
+aradaki 8 ilgisiz sütun (RANK/VPM_DELTA/Z_DELTA/TF_ALIGN/VERIM*/AGE) da
+dahil ediliyordu. Bu, saniyede binlerce gereksiz "hücre değişti"
+bildirimi anlamına geliyordu — masaüstü panelde tekrarlayan, açıklanamamış
+bellek/CPU patlamalarının (13-15 Ağustos 2026) güçlü şüphelilerinden
+biriydi (Qt'nin native tarafı + varsa macOS erişilebilirlik köprüsü, her
+bildirimi işlemek zorunda). Aynı kural: yeni bir worker/panel eklerken,
+bir Timer'la periyodik "tüm tabloyu güncelle" YAZMA — sadece gerçekten
+değişeni izle ve onu bildir.
 """
 
 from __future__ import annotations
@@ -585,31 +606,42 @@ class SignalsModel(QAbstractTableModel):
 
     @pyqtSlot(str, float, float)
     def on_prices_updated(self, prices: dict) -> None:
-        """Tüm satırları tek seferde günceller — 1 dataChanged, 1 resort."""
-        changed = False
+        """15 Ağu 2026 mimari düzeltmesi (bkz. dosya başındaki "dataChanged
+        kuralı"): SADECE gerçekten değişen satır aralığı + SADECE
+        update_price()'ın etkilediği iki sütun (COL_PNL, COL_GUV — arada
+        kalan RANK/VPM_DELTA/Z_DELTA/TF_ALIGN/VERIM*/AGE hiç etkilenmiyor)
+        için dataChanged yayınlanır. Eskiden HER saniye (MarketWorker
+        _FALLBACK_MS=1000), kaç sembol değişirse değişsin, ~1758 satır ×
+        10 sütunluk KOŞULSUZ tam-tablo bildirimi atılıyordu — Qt'nin native
+        tarafında (ve varsa erişilebilirlik köprüsünde) sürekli, gereksiz
+        bir yeniden-tarama/işleme yüküne yol açıyordu."""
+        min_idx: Optional[int] = None
+        max_idx: Optional[int] = None
         for sym, indices in self._sym_rows.items():
             p = prices.get(sym)
             if p is None:
                 continue
             for idx in indices:
                 self._rows[idx].update_price(float(p))
-                changed = True
-        if changed and self._rows:
-            tl = self.index(0, COL_PNL)
-            br = self.index(len(self._rows) - 1, COL_GUV)
-            self.dataChanged.emit(
-                tl, br, [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ForegroundRole]
-            )
+                if min_idx is None or idx < min_idx:
+                    min_idx = idx
+                if max_idx is None or idx > max_idx:
+                    max_idx = idx
+        if min_idx is None:
+            return
+        roles = [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ForegroundRole]
+        self.dataChanged.emit(self.index(min_idx, COL_PNL), self.index(max_idx, COL_PNL), roles)
+        self.dataChanged.emit(self.index(min_idx, COL_GUV), self.index(max_idx, COL_GUV), roles)
 
     def on_price_updated(self, symbol: str, price: float, _change_pct: float) -> None:
         indices = self._sym_rows.get(symbol, [])
+        roles = [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ForegroundRole]
         for idx in indices:
             self._rows[idx].update_price(price)
-            tl = self.index(idx, COL_PNL)
-            br = self.index(idx, COL_GUV)
-            self.dataChanged.emit(
-                tl, br, [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ForegroundRole]
-            )
+            # Aradaki ilgisiz sütunları içermesin diye COL_PNL/COL_GUV AYRI
+            # yayınlanıyor (bkz. on_prices_updated'in dosya başı kuralına atıfı).
+            self.dataChanged.emit(self.index(idx, COL_PNL), self.index(idx, COL_PNL), roles)
+            self.dataChanged.emit(self.index(idx, COL_GUV), self.index(idx, COL_GUV), roles)
 
     def signal_at(self, row: int) -> Optional[SignalRow]:
         if 0 <= row < len(self._rows):
@@ -619,7 +651,12 @@ class SignalsModel(QAbstractTableModel):
     def apply_live_metrics(self, payload: dict) -> None:
         """LiveMetricsWorker.metrics_updated'ten gelen toplu güncelleme —
         Güç Sıralaması/TF Hizalanma sembol bazlı, VPMV/Verimlilik sinyal-id
-        bazlı, Ayrışma Z-score (symbol, interval) bazlı eşleniyor."""
+        bazlı, Ayrışma Z-score (symbol, interval) bazlı eşleniyor.
+
+        15 Ağu 2026: dataChanged artık SADECE gerçekten güncellenen satır
+        aralığı için yayınlanıyor (bkz. dosya başındaki "dataChanged
+        kuralı") — her sembol/sinyal için payload'da veri olmayabilir,
+        eskiden yine de TÜM satırlar için bildirim atılıyordu."""
         if not self._rows:
             return
         ranking = payload.get("ranking") or {}
@@ -628,28 +665,41 @@ class SignalsModel(QAbstractTableModel):
         vpmv = payload.get("vpmv") or {}
         divergence = payload.get("divergence") or {}
 
-        for row in self._rows:
+        min_idx: Optional[int] = None
+        max_idx: Optional[int] = None
+        for idx, row in enumerate(self._rows):
+            row_changed = False
             if row.symbol in ranking:
                 row.rank_score_live = ranking[row.symbol]
+                row_changed = True
             ha_row = ha.get(row.symbol)
             if ha_row:
                 row.ha_4h = ha_row.get("ha_4h")
                 row.ha_6h = ha_row.get("ha_6h")
                 row.ha_8h = ha_row.get("ha_8h")
                 row.ha_12h = ha_row.get("ha_12h")
+                row_changed = True
             if row.id in devisso:
                 row.verim_live = devisso[row.id]
+                row_changed = True
             if row.id in vpmv:
                 row.vpmv_live_val = vpmv[row.id]
+                row_changed = True
             z = divergence.get((row.symbol, row.interval))
             if z is not None:
                 row.z_live_val = z
+                row_changed = True
+            if row_changed:
+                if min_idx is None or idx < min_idx:
+                    min_idx = idx
+                if max_idx is None or idx > max_idx:
+                    max_idx = idx
 
-        tl = self.index(0, COL_RANK)
-        br = self.index(len(self._rows) - 1, COL_VERIM_DELTA_PREV)
-        self.dataChanged.emit(
-            tl, br, [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ForegroundRole]
-        )
+        if min_idx is None:
+            return
+        tl = self.index(min_idx, COL_RANK)
+        br = self.index(max_idx, COL_VERIM_DELTA_PREV)
+        self.dataChanged.emit(tl, br, [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ForegroundRole])
 
 
 _RANGE_FIELDS = ("vpm", "mtf", "alpha", "beta", "zscore")

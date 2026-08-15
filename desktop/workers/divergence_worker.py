@@ -250,13 +250,15 @@ class DivergenceWorker(QThread):  # pylint: disable=too-many-instance-attributes
                     if message["type"] != "message":
                         continue
                     data = message.get("data", "")
-                    if ":" not in data:
-                        continue
-                    symbol, tf = data.rsplit(":", 1)
-                    with self._lock:
-                        relevant = symbol in self._symbols and tf == self._timeframe
-                    if relevant:
-                        self._wake.set()
+                    for pair in data.split(","):
+                        if ":" not in pair:
+                            continue
+                        symbol, tf = pair.rsplit(":", 1)
+                        with self._lock:
+                            relevant = symbol in self._symbols and tf == self._timeframe
+                        if relevant:
+                            self._wake.set()
+                            break
             except redis.RedisError as exc:
                 logger.warning("Pub/sub kesildi: %s — 5s sonra yeniden bağlanılıyor", exc)
                 if self._running:
