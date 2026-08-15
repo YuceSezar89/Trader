@@ -29,7 +29,6 @@ except (ValueError, OSError):
 
 from config import Config
 from indicators.financial_metrics import calculate_metrics
-from signals.do_kirilimi import btc_day_context, do_kirilimi_detector
 from signals.do_open_streak import do_open_streak_detector
 from signals.paper_trade_manager import (
     do_kirilimi_manager,
@@ -50,7 +49,6 @@ from utils.data_health import data_health_loop
 from utils.heartbeat import beat, record_activity, throughput_watchdog_loop, watchdog_loop
 from utils.logger import get_logger
 from utils.redis_client import SAFE_EXTERNAL_TIMEOUT, RedisClient
-from utils.telegram_notify import send_telegram_message
 
 _RISK_CHECK_INTERVAL = 5  # saniye — live_data_manager.py::_risk_check_loop ile aynı
 _EVOL_EXIT_CHECK_INTERVAL = 60  # saniye — EVOL anlık fiyat kadar sık değişmiyor
@@ -262,46 +260,8 @@ async def _process_event(fields: dict) -> None:
     tag = "[DRY-RUN] " if dry_run else ""
     logger.info("%s[%s] %s işlendi (%.1fms)", tag, symbol, interval, elapsed_ms)
 
-    if interval == "5m":
-        await _check_do_kirilimi(symbol, df, ref_df)
-    elif interval == "15m":
+    if interval == "15m":
         await _check_do_open_streak(symbol, df)
-
-
-async def _check_do_kirilimi(symbol: str, df_5m: pd.DataFrame, btc_df_5m: pd.DataFrame) -> None:
-    """DO Kırılımı dedektörü — live_data_manager.py::_check_do_kirilimi'nin
-    signal_service.py eşdeğeri (10 Tem 2026). BTC context artık in-memory
-    self.mtf_buffers'tan değil, zaten elde olan ref_df'ten (MARKET_REFERENCE_SYMBOL
-    = BTCUSDT) hesaplanıyor — process ayrımı sonrası in-process state erişimi yok."""
-    try:
-        btc_ctx = (
-            btc_day_context(btc_df_5m) if btc_df_5m is not None and not btc_df_5m.empty else None
-        )
-        loop = asyncio.get_running_loop()
-        entry = await loop.run_in_executor(None, do_kirilimi_detector.check, symbol, df_5m, btc_ctx)
-        if not entry:
-            return
-        # Paper trade açma BİLİNÇLİ OLARAK devre dışı (14 Tem 2026, Config.PAPER
-        # ENABLED_STRATEGIES'ten çıkarıldı) — Telegram bildirimi buna bağlı değil,
-        # sinyal tespit edildiğinde her zaman gönderilir.
-        await do_kirilimi_manager.open_direct(
-            symbol=symbol,
-            signal_type="Long",
-            interval="5m",
-            price=entry["price"],
-            atr=entry["atr"],
-            sl_price=entry["sl_price"],
-            tp_price=entry["tp_price"],
-            note=f"{entry['pattern']} {entry['ayrisma']:+.1f}%",
-        )
-        await send_telegram_message(
-            f"🎯 DO Kırılımı — {symbol}\n"
-            f"Giriş: {entry['price']:.6g}\n"
-            f"SL: {entry['sl_price']:.6g} · TP: {entry['tp_price']:.6g}\n"
-            f"Pattern: {entry['pattern']} · Ayrışma: {entry['ayrisma']:+.1f}%"
-        )
-    except Exception as exc:  # pylint: disable=broad-exception-caught
-        logger.error("[DOKirilimi] %s kanca hatası: %s", symbol, exc, exc_info=True)
 
 
 async def _check_do_open_streak(symbol: str, df_15m: pd.DataFrame) -> None:
