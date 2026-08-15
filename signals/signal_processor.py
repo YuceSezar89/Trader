@@ -1,7 +1,7 @@
 import asyncio
 import json
 import time
-from typing import Awaitable, Callable, Optional
+from typing import Awaitable, Callable, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -10,7 +10,15 @@ from sqlalchemy import select
 from config import Config
 from database.engine import get_session, run_with_db_timeout
 from database.models import Signal
-from indicators.core import calculate_adx, calculate_atr, calculate_rsi, truncate_after_gap
+from indicators.core import (
+    calculate_adx,
+    calculate_atr,
+    calculate_macd,
+    calculate_mfi,
+    calculate_obv,
+    calculate_rsi,
+    truncate_after_gap,
+)
 from indicators.financial_metrics import calculate_metrics
 from signals import ta_kovalama_gate, tf_alignment_gate
 from signals.market_context import (
@@ -33,7 +41,7 @@ from utils.preprocessing import (
     normalize_volatility_0_100,
 )
 from utils.redis_client import SAFE_EXTERNAL_TIMEOUT, RedisClient
-from utils.vpmv import compute_components, compute_pre
+from utils.vpmv import compute_components, compute_pre, compute_raw_components
 
 logger = get_logger(__name__)
 
@@ -100,6 +108,61 @@ async def _compute_all_up(
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.debug("[%s] all_up hesaplanamadı: %s", symbol, exc)
         return None
+
+
+_EMPTY_COMPONENT_PCT = {"vol": None, "mom": None, "vlt": None, "prc": None}
+
+
+async def _compute_component_change_pct(
+    symbol: str,
+    interval: str,
+    indicators_name: str,
+    sig_type: str,
+    raw: Optional[dict],
+) -> dict:
+    """4 ham bileşenin (vol/mom/vlt/prc — utils/vpmv.py::compute_raw_components),
+    aynı symbol+interval+indicators+signal_type için BİR ÖNCEKİ sinyale göre
+    yüzdesel değişimi (Sinyal Mumu Ratioları'nın `volume/lastSignalVolume-1`
+    mantığıyla aynı baseline — 5-bar pencere ortalaması DEĞİL)."""
+    if raw is None:
+        return dict(_EMPTY_COMPONENT_PCT)
+
+    async def _do_query() -> dict:
+        async with get_session() as session:
+            result = await session.execute(
+                select(Signal.vol_raw, Signal.mom_raw, Signal.volat_raw, Signal.price_raw)
+                .where(
+                    Signal.symbol == symbol,
+                    Signal.interval == interval,
+                    Signal.indicators == indicators_name,
+                    Signal.signal_type == sig_type,
+                    Signal.vol_raw.isnot(None),
+                )
+                .order_by(Signal.opened_at.desc())
+                .limit(1)
+            )
+            row = result.first()
+            if row is None:
+                return dict(_EMPTY_COMPONENT_PCT)
+            prev_vol, prev_mom, prev_vlt, prev_prc = row
+            out: dict = {}
+            for name, current, previous in (
+                ("vol", raw["vol"], prev_vol),
+                ("mom", raw["mom"], prev_mom),
+                ("vlt", raw["vlt"], prev_vlt),
+                ("prc", raw["prc"], prev_prc),
+            ):
+                if previous is None or abs(previous) < 1e-8:
+                    out[name] = None
+                else:
+                    out[name] = (current - previous) / abs(previous) * 100.0
+            return out
+
+    try:
+        return await run_with_db_timeout(_do_query())
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.debug("[%s] component change_pct hesaplanamadı: %s", symbol, exc)
+        return dict(_EMPTY_COMPONENT_PCT)
 
 
 async def _get_pt_flag() -> str:
@@ -395,18 +458,57 @@ def _compute_candle_pattern(df: pd.DataFrame) -> str:
         return "-"
 
 
-def _classify_candle(last: pd.Series) -> str:
-    """Son mumun gövde/üst fitil/alt fitil oranına göre baskın kısmı döner."""
+def _classify_candle(last: pd.Series) -> Tuple[str, Optional[float], Optional[float]]:
+    """Son mumun gövde/üst fitil/alt fitil oranına göre baskın kısmını VE
+    sayısal gövde/fitil yüzdelerini döner: (kategori, body_pct, wick_pct).
+    wick_pct = üst+alt fitil toplamı (=100-body_pct) — Hoca'nın Sinyal Mumu
+    Ratioları'ndaki Body Ratio/Wick Length metriklerinin sayısal karşılığı
+    (13 Ağu 2026 — önceden sadece kategori tutulup sayı atılıyordu)."""
     rng = last["high"] - last["low"]
     if rng <= 0:
-        return "belirsiz"
+        return "belirsiz", None, None
     upper = max(last["open"], last["close"])
     lower = min(last["open"], last["close"])
     body = abs(last["close"] - last["open"]) / rng * 100
     upper_wick = (last["high"] - upper) / rng * 100
     lower_wick = (lower - last["low"]) / rng * 100
     parts = {"govde": body, "ust_fitil": upper_wick, "alt_fitil": lower_wick}
-    return max(parts, key=parts.get)
+    kategori = max(parts, key=parts.get)
+    return kategori, round(body, 2), round(upper_wick + lower_wick, 2)
+
+
+def _compute_signal_extras(df: pd.DataFrame) -> Optional[dict]:
+    """Sinyal Mumu Ratioları'nın (Hoca Telegram külliyatı, S29 — orijinal
+    Pine dosyası) kalan metrikleri: RSI(14)/MFI(14)/RSI-of-MACD(12,26,9,14)
+    bar-to-bar değişimi + OBV seviyesi, sinyal barında. VPMV'nin 4
+    bileşeninden (vol/mom/vlt/prc) BAĞIMSIZ, kendi ham hesabı — isim
+    çakışmasın diye "signal_" önekiyle (13 Ağu 2026)."""
+    if len(df) < 35:  # MACD(26) + üstüne RSI(14) ısınma payı
+        return None
+
+    out: dict = {"rsi_change": None, "mfi_change": None, "macd_change": None, "obv": None}
+    try:
+        rsi = calculate_rsi(df, period=14)
+        out["rsi_change"] = float(rsi.diff().iloc[-1])
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.debug("signal_extras rsi_change hesaplanamadı: %s", exc)
+    try:
+        mfi = calculate_mfi(df, period=14)
+        out["mfi_change"] = float(mfi.diff().iloc[-1])
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.debug("signal_extras mfi_change hesaplanamadı: %s", exc)
+    try:
+        macd_line, _, _ = calculate_macd(df, fast=12, slow=26, signal=9)
+        macd_rsi = calculate_rsi(pd.DataFrame({"macd": macd_line}), period=14, price_col="macd")
+        out["macd_change"] = float(macd_rsi.diff().iloc[-1])
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.debug("signal_extras macd_change hesaplanamadı: %s", exc)
+    try:
+        obv = calculate_obv(df)
+        out["obv"] = float(obv.iloc[-1])
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.debug("signal_extras obv hesaplanamadı: %s", exc)
+    return out
 
 
 _FVG_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
@@ -647,7 +749,10 @@ async def process_and_enrich_signals(
                 # 3. VPMV Hesapla
                 vpms_score: Optional[float] = None
                 vol_s = mom_s = vlt_s = prc_s = None
-                candle_kategori = _classify_candle(df.iloc[-1]) if len(df) >= 1 else None
+                if len(df) >= 1:
+                    candle_kategori, body_pct, wick_pct = _classify_candle(df.iloc[-1])
+                else:
+                    candle_kategori, body_pct, wick_pct = None, None, None
                 try:
                     vol_s, mom_s, vlt_s, prc_s = compute_components(df, sig_type)
                     vpms_score = VPMCalculator.calculate(
@@ -785,6 +890,8 @@ async def process_and_enrich_signals(
                     "volat_score": vlt_s,
                     "price_score": prc_s,
                     "candle_kategori": candle_kategori,
+                    "body_pct": body_pct,
+                    "wick_pct": wick_pct,
                 }
 
                 enriched_signal["all_up"] = await _compute_all_up(
@@ -811,6 +918,58 @@ async def process_and_enrich_signals(
                 enriched_signal["vpmv_pre_avg"] = _vpmv_pre_avg
                 enriched_signal["vpmv_slope"] = _vpmv_slope
                 enriched_signal["vpmv_ratio"] = _vpmv_ratio
+
+                # 13 Ağu 2026: 4 HAM bileşenin (hacim/RSI seviyesi/ATR/kapanış
+                # fiyatı) BU sinyaldeki değeri + BİR ÖNCEKİ aynı (symbol,
+                # interval, indicators, signal_type) sinyaline göre yüzdesel
+                # değişimi — Sinyal Mumu Ratioları'nın `volume/lastSignalVolume-1`
+                # mantığıyla aynı baseline.
+                _raw_components_map = {
+                    "vol": ("vol_raw", "vol_change_pct"),
+                    "mom": ("mom_raw", "mom_change_pct"),
+                    "vlt": ("volat_raw", "volat_change_pct"),
+                    "prc": ("price_raw", "price_change_pct"),
+                }
+                for _raw_key, _pct_key in _raw_components_map.values():
+                    enriched_signal[_raw_key] = None
+                    enriched_signal[_pct_key] = None
+                try:
+                    _raw_comp = compute_raw_components(df, sig_type)
+                    if _raw_comp is not None:
+                        for _name, (_raw_key, _) in _raw_components_map.items():
+                            enriched_signal[_raw_key] = round(_raw_comp[_name], 4)
+                        _pct_comp = await _compute_component_change_pct(
+                            symbol, interval, indicators_name, sig_type, _raw_comp
+                        )
+                        for _name, (_, _pct_key) in _raw_components_map.items():
+                            _pct = _pct_comp.get(_name)
+                            enriched_signal[_pct_key] = round(_pct, 2) if _pct is not None else None
+                except Exception as _vpce:
+                    logger.warning("[%s] VPMV ham-bileşen hesaplama hatası: %s", symbol, _vpce)
+
+                # 13 Ağu 2026: Sinyal Mumu Ratioları'nın kalan metrikleri —
+                # RSI/MFI/MACD'nin sinyal barındaki değişimi + OBV seviyesi.
+                enriched_signal["signal_rsi_change"] = None
+                enriched_signal["signal_mfi_change"] = None
+                enriched_signal["signal_macd_change"] = None
+                enriched_signal["signal_obv"] = None
+                try:
+                    _extras = _compute_signal_extras(df)
+                    if _extras is not None:
+                        enriched_signal["signal_rsi_change"] = (
+                            round(_extras["rsi_change"], 4) if _extras["rsi_change"] is not None else None
+                        )
+                        enriched_signal["signal_mfi_change"] = (
+                            round(_extras["mfi_change"], 4) if _extras["mfi_change"] is not None else None
+                        )
+                        enriched_signal["signal_macd_change"] = (
+                            round(_extras["macd_change"], 4) if _extras["macd_change"] is not None else None
+                        )
+                        enriched_signal["signal_obv"] = (
+                            round(_extras["obv"], 2) if _extras["obv"] is not None else None
+                        )
+                except Exception as _sxe:
+                    logger.warning("[%s] Sinyal Mumu ekstra metrik hatası: %s", symbol, _sxe)
 
                 # A/B/C deneyi: aynı skor vekil ve yönsüz hacimle (analiz için, panelde yok)
                 _vpmv_proxy = _vpmv_total = None

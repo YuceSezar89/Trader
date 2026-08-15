@@ -9,6 +9,7 @@ Her strateji için ayrı instance kullanılır:
 
 import asyncio
 import logging
+import time
 from datetime import datetime
 from typing import Callable, Optional
 
@@ -24,6 +25,7 @@ from signals.risk_policy import default_policy
 from signals.signal_lifecycle_manager import _calc_pnl
 from signals.trailing import update_trailing
 from utils.redis_client import SAFE_EXTERNAL_TIMEOUT, RedisClient
+from utils.telegram_notify import send_telegram_message
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +92,11 @@ class PaperTradeManager:
         # Strateji-özel kapasite/boyut — verilmezse global MAX_OPEN/POSITION_USD kullanılır.
         self.max_open = max_open if max_open is not None else MAX_OPEN
         self.position_usd = position_usd if position_usd is not None else POSITION_USD
+        # 15 Ağu 2026 bugfix: open_direct'teki bir DB hatası (ör. VARCHAR taşması)
+        # sadece logger.error ile geçiyordu — 14 Ağu'da bu, kimse fark etmeden
+        # ~19.5 saat boyunca HER açma denemesini sessizce yuttu. Artık ilk hatada
+        # Telegram'a haber veriyor, sonrasında spam olmasın diye 30dk cooldown var.
+        self._last_open_error_alert = 0.0
 
     async def load_open_symbols(self) -> None:
         async def _do_load() -> set[str]:
@@ -239,7 +246,9 @@ class PaperTradeManager:
                         regime_trend=regime_trend,
                         volatility_regime=volatility_regime,
                         rank_at_entry=rank_at_entry,
-                        devisso_score=sig.devisso_score if sig else signal_data.get("devisso_score"),
+                        devisso_score=(
+                            sig.devisso_score if sig else signal_data.get("devisso_score")
+                        ),
                         devisso_delta=sig.devisso_delta if sig else None,
                         devisso_ratio=sig.devisso_ratio if sig else None,
                         sl_multiplier=sig.sl_multiplier if sig else None,
@@ -351,6 +360,16 @@ class PaperTradeManager:
                     logger.error(
                         "[PaperTrade][%s] open_direct hatası: %s", self.strategy, exc, exc_info=True
                     )
+                    now = time.monotonic()
+                    if now - self._last_open_error_alert > 1800:  # 30dk cooldown
+                        self._last_open_error_alert = now
+                        try:
+                            await send_telegram_message(
+                                f"⚠️ [PaperTrade][{self.strategy}] open_direct hatası: {symbol} "
+                                f"açılamadı — {exc}"
+                            )
+                        except Exception:  # pylint: disable=broad-exception-caught
+                            pass
                     return False
 
         # Kayıp-kritik nokta: bu, do_kirilimi/do_open_streak gibi nadir ateşlenen
@@ -655,6 +674,10 @@ rsi_15m_manager = PaperTradeManager("rsi_15m")
 manual_manager = PaperTradeManager("manual")
 do_kirilimi_manager = PaperTradeManager("do_kirilimi")
 do_open_streak_manager = PaperTradeManager("do_open_streak", max_hold_hours=24.0)
+# Totalamount Rank-1 / Devisso Döngüsü (13 Ağu 2026, bkz. signals/totalamount_rank1.py):
+# max_hold_hours=None — sabit süre/SL/TP ile değil, Supertrend ters sinyaliyle
+# (live_data_manager.py::_totalamount_rank1_loop) kapanır. SL sadece güvenlik ağı.
+totalamount_rank1_manager = PaperTradeManager("totalamount_rank1")
 # $2000 bakiye tavanı, işlem başına düşük risk için düşük POSITION_USD + yüksek MAX_OPEN
 # (bkz. [[project_rsi_ha_cross_live_readiness_13_14tem]] — filtreli hacim zaten ~8-9 eşzamanlı).
 rsi_cross_live_manager = PaperTradeManager("rsi_cross_live", max_open=80, position_usd=25.0)
@@ -664,9 +687,7 @@ rsi_cross_live_manager = PaperTradeManager("rsi_cross_live", max_open=80, positi
 # zaman True (gating zaten on_new_signal çağrılmadan ÖNCE bitmiş oluyor).
 # Kaldıraçsız başlatıldı (henüz gerçek $'da doğrulanmadı, LEVERAGE_BY_STRATEGY'de
 # tanımsız = 1.0 varsayılan).
-tf_alignment_live_manager = PaperTradeManager(
-    "tf_alignment_live", max_open=80, position_usd=25.0
-)
+tf_alignment_live_manager = PaperTradeManager("tf_alignment_live", max_open=80, position_usd=25.0)
 # all_up + TA-percentile/kovalama + HA-hizalanma (24 Tem 2026, [[project_rsi_cross_ta_triple_combo_24tem]]
 # — "didik didik" serisinin canlıya alınması). Gating signals/ta_kovalama_gate.py'de
 # on_new_signal ÇAĞRILMADAN ÖNCE bitiyor. Scale-in AÇIK (aynı yönde 2. bacağa izin

@@ -88,6 +88,14 @@ def build_signal(
         vpmv_pre_total=signal_data.get("vpmv_pre_total"),
         vpmv_slope=signal_data.get("vpmv_slope"),
         vpmv_ratio=signal_data.get("vpmv_ratio"),
+        vol_raw=signal_data.get("vol_raw"),
+        mom_raw=signal_data.get("mom_raw"),
+        volat_raw=signal_data.get("volat_raw"),
+        price_raw=signal_data.get("price_raw"),
+        vol_change_pct=signal_data.get("vol_change_pct"),
+        mom_change_pct=signal_data.get("mom_change_pct"),
+        volat_change_pct=signal_data.get("volat_change_pct"),
+        price_change_pct=signal_data.get("price_change_pct"),
         cvd_slope=signal_data.get("cvd_slope"),
         vp_buy_avg=signal_data.get("vp_buy_avg"),
         vp_sell_avg=signal_data.get("vp_sell_avg"),
@@ -113,6 +121,12 @@ def build_signal(
         volat_score=signal_data.get("volat_score"),
         price_score=signal_data.get("price_score"),
         candle_kategori=signal_data.get("candle_kategori"),
+        body_pct=signal_data.get("body_pct"),
+        wick_pct=signal_data.get("wick_pct"),
+        signal_rsi_change=signal_data.get("signal_rsi_change"),
+        signal_mfi_change=signal_data.get("signal_mfi_change"),
+        signal_macd_change=signal_data.get("signal_macd_change"),
+        signal_obv=signal_data.get("signal_obv"),
         all_up=signal_data.get("all_up"),
         regime_trend=signal_data.get("regime_trend"),
         volatility_regime=signal_data.get("volatility_regime"),
@@ -183,6 +197,14 @@ def build_paper_trade(
         vpmv_pre_avg=signal_data.get("vpmv_pre_avg"),
         vpmv_slope=signal_data.get("vpmv_slope"),
         vpmv_ratio=signal_data.get("vpmv_ratio"),
+        vol_raw=signal_data.get("vol_raw"),
+        mom_raw=signal_data.get("mom_raw"),
+        volat_raw=signal_data.get("volat_raw"),
+        price_raw=signal_data.get("price_raw"),
+        vol_change_pct=signal_data.get("vol_change_pct"),
+        mom_change_pct=signal_data.get("mom_change_pct"),
+        volat_change_pct=signal_data.get("volat_change_pct"),
+        price_change_pct=signal_data.get("price_change_pct"),
         devisso_score=devisso_score,
         devisso_delta=devisso_delta,
         devisso_ratio=devisso_ratio,
@@ -208,6 +230,12 @@ def build_paper_trade(
         volat_score=signal_data.get("volat_score"),
         price_score=signal_data.get("price_score"),
         candle_kategori=signal_data.get("candle_kategori"),
+        body_pct=signal_data.get("body_pct"),
+        wick_pct=signal_data.get("wick_pct"),
+        signal_rsi_change=signal_data.get("signal_rsi_change"),
+        signal_mfi_change=signal_data.get("signal_mfi_change"),
+        signal_macd_change=signal_data.get("signal_macd_change"),
+        signal_obv=signal_data.get("signal_obv"),
         all_up=signal_data.get("all_up"),
         sl_multiplier=sl_multiplier,
         tp_multiplier=tp_multiplier,
@@ -227,9 +255,7 @@ def build_paper_trade(
     )
 
 
-def close_signal(
-    sig: Signal, *, close_price: float, reason: str, realized_pnl: float
-) -> None:
+def close_signal(sig: Signal, *, close_price: float, reason: str, realized_pnl: float) -> None:
     """Bir Signal'ı kapanmış duruma çevirir — VAR OLAN nesneyi yerinde
     mutasyona uğratır (yeni nesne kurmaz), session.add()/commit() çağıranın
     işi. realized_pnl çağıran tarafça (_calc_pnl ile) önceden hesaplanmış
@@ -308,7 +334,12 @@ def build_paper_trade_direct(
     return PaperTrade(
         signal_id=None,
         strategy=strategy,
-        source=source,
+        # PaperTrade.source VARCHAR(20) — 15 Ağu 2026 bugfix: tek yazma noktası
+        # olduğu için burada kesiliyor, çağıranın karakter sayısını hatırlamasına
+        # güvenilmiyor. 14 Ağu'da bu limit aşılınca (StringDataRightTruncationError)
+        # ~19.5 saat boyunca totalamount_rank1'in HER açma denemesi sessizce
+        # başarısız olmuştu — aynı hata bir daha hiçbir çağıranda tekrarlanamaz.
+        source=source[:20] if source else None,
         symbol=symbol,
         signal_type=signal_type,
         interval=interval,

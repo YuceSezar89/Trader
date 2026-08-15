@@ -117,6 +117,22 @@ class Signal(Base):
     vpmv_slope: Mapped[float | None] = mapped_column(Float, nullable=True)
     vpmv_post_avg: Mapped[float | None] = mapped_column(Float, nullable=True)
     vpmv_post_delta: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 13 Ağu 2026 (migration 033, önceki denemeler 031/032'yi düzeltir):
+    # 4 ham bileşenin (hacim/momentum-RSI seviyesi/ATR/kapanış fiyatı —
+    # 0-100'e normalize edilMEmiş) BU sinyaldeki değeri + BİR ÖNCEKİ aynı
+    # (symbol, interval, indicators, signal_type) sinyaline göre yüzdesel
+    # değişimi — Sinyal Mumu Ratioları'ndaki `volume/lastSignalVolume-1`
+    # mantığıyla aynı baseline (5-bar pencere ortalaması DEĞİL). Bkz.
+    # utils/vpmv.py::compute_raw_components + signal_processor.py::
+    # _compute_component_change_pct.
+    vol_raw: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mom_raw: Mapped[float | None] = mapped_column(Float, nullable=True)
+    volat_raw: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_raw: Mapped[float | None] = mapped_column(Float, nullable=True)
+    vol_change_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mom_change_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    volat_change_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_change_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     cvd_slope: Mapped[float | None] = mapped_column(Float, nullable=True)
     vp_buy_avg: Mapped[float | None] = mapped_column(Float, nullable=True)
     vp_sell_avg: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -144,6 +160,21 @@ class Signal(Base):
     volat_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     price_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     candle_kategori: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # 13 Ağu 2026 (migration 034): candle_kategori'nin sayısal kırılımı —
+    # önceden sadece hangi kısmın (gövde/üst fitil/alt fitil) baskın olduğu
+    # tutulup ham yüzdeler atılıyordu. wick_pct = üst+alt fitil toplamı
+    # (=100-body_pct) — Sinyal Mumu Ratioları'ndaki Body Ratio/Wick Length.
+    body_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    wick_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 13 Ağu 2026 (migration 035): Sinyal Mumu Ratioları'nın kalan
+    # metrikleri — RSI(14)/MFI(14)/RSI-of-MACD(12,26,9,14) sinyal barındaki
+    # bar-to-bar değişimi + OBV seviyesi. "signal_" önekiyle, df üzerindeki
+    # farklı-amaçlı rsi_change/macd_change kolonlarıyla (indicators/core.py)
+    # karışmasın diye.
+    signal_rsi_change: Mapped[float | None] = mapped_column(Float, nullable=True)
+    signal_mfi_change: Mapped[float | None] = mapped_column(Float, nullable=True)
+    signal_macd_change: Mapped[float | None] = mapped_column(Float, nullable=True)
+    signal_obv: Mapped[float | None] = mapped_column(Float, nullable=True)
     all_up: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
     # 2 Ağu 2026 (migration 029): paper_trades'te zaten hesaplanan ama
@@ -213,6 +244,15 @@ class PaperTrade(Base):
     vpmv_slope: Mapped[float | None] = mapped_column(Float, nullable=True)
     vpmv_post_avg: Mapped[float | None] = mapped_column(Float, nullable=True)
     vpmv_post_delta: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 13 Ağu 2026 (migration 033): Signal ile aynı — bkz. yukarıdaki açıklama.
+    vol_raw: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mom_raw: Mapped[float | None] = mapped_column(Float, nullable=True)
+    volat_raw: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_raw: Mapped[float | None] = mapped_column(Float, nullable=True)
+    vol_change_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mom_change_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    volat_change_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_change_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     cvd_slope: Mapped[float | None] = mapped_column(Float, nullable=True)
     vp_buy_avg: Mapped[float | None] = mapped_column(Float, nullable=True)
     vp_sell_avg: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -260,6 +300,21 @@ class PaperTrade(Base):
     volat_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     price_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     candle_kategori: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # 13 Ağu 2026 (migration 034): candle_kategori'nin sayısal kırılımı —
+    # önceden sadece hangi kısmın (gövde/üst fitil/alt fitil) baskın olduğu
+    # tutulup ham yüzdeler atılıyordu. wick_pct = üst+alt fitil toplamı
+    # (=100-body_pct) — Sinyal Mumu Ratioları'ndaki Body Ratio/Wick Length.
+    body_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    wick_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 13 Ağu 2026 (migration 035): Sinyal Mumu Ratioları'nın kalan
+    # metrikleri — RSI(14)/MFI(14)/RSI-of-MACD(12,26,9,14) sinyal barındaki
+    # bar-to-bar değişimi + OBV seviyesi. "signal_" önekiyle, df üzerindeki
+    # farklı-amaçlı rsi_change/macd_change kolonlarıyla (indicators/core.py)
+    # karışmasın diye.
+    signal_rsi_change: Mapped[float | None] = mapped_column(Float, nullable=True)
+    signal_mfi_change: Mapped[float | None] = mapped_column(Float, nullable=True)
+    signal_macd_change: Mapped[float | None] = mapped_column(Float, nullable=True)
+    signal_obv: Mapped[float | None] = mapped_column(Float, nullable=True)
     all_up: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     sl_multiplier: Mapped[float | None] = mapped_column(Float, nullable=True)
     tp_multiplier: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -302,7 +357,6 @@ class SignalPerformance(Base):
 
     is_calculated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     calculation_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    last_calculation_error: Mapped[str | None] = mapped_column(String, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.now)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

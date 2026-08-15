@@ -176,7 +176,10 @@ class Config:
     PAPER = {
         "ENABLED_STRATEGIES": [
             "ta_kovalama_live",
-        ],  # 24 Tem 2026: "didik didik" serisinin canlıya alınması (kullanıcı onayı) —
+            "totalamount_rank1",
+        ],  # 13 Ağu 2026: Totalamount Rank-1 / Devisso Döngüsü eklendi — bkz.
+        # signals/totalamount_rank1.py, live_data_manager.py::_totalamount_rank1_loop.
+        # 24 Tem 2026: "didik didik" serisinin canlıya alınması (kullanıcı onayı) —
         # RSI_Cross(9,24)+HA_Cross, Long+Short, all_up+TA-percentile/kovalama+HA
         # (Long'da), scale-in açık. Detay: signals/ta_kovalama_gate.py,
         # [[project_rsi_cross_ta_triple_combo_24tem]]. Diğer tüm stratejiler
@@ -198,6 +201,13 @@ class Config:
             # dolar bazında büyüyordu. Kâr garantisi değil, kuyruk-riski sınırı.
             "MAX_POSITION_USD": 1000.0,
             "MIN_LIQUIDITY_USD": 50_000.0,  # son 1 günün ort. 15m USD hacmi (volume*close)
+        },
+        "TOTALAMOUNT_RANK1": {
+            # Çıkış Supertrend ters sinyaliyle olduğu için TP yok (do_open_streak
+            # presedanı: "TP eklemek asıl kazandıran büyük hareketi erken kesiyordu").
+            # SL sadece güvenlik ağı — normal koşulda ters sinyal ondan önce tetiklenir.
+            "SL_ATR": 5.0,
+            "LOOP_INTERVAL_SEC": 90,  # _ranking_publish_loop ile aynı kademe
         },
     }
 

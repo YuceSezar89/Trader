@@ -196,7 +196,7 @@ async def daily_performance_update_task():
 
 
 async def periodic_gap_scan_task():
-    """Her 6 saatte bir tüm MTF intervallar için gap taraması yapar."""
+    """Her 1 saatte bir tüm MTF intervallar için gap taraması yapar."""
     gap_logger = get_logger("GapScanner")
     _INTERVAL_MS_MAP = {
         "1m": 60_000,

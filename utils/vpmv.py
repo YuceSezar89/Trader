@@ -6,7 +6,7 @@ Ağırlıklar: V=%35, M=%35, Vlt=%20, P=%10
 
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import pandas as pd
 
@@ -51,6 +51,21 @@ def _volume_by_mode(df: pd.DataFrame, side: float, volume_mode: str) -> pd.Serie
     return directional_volume(df, side)
 
 
+def _component_series(
+    df: pd.DataFrame, signal_type: str, volume_mode: str = "real"
+) -> Tuple[pd.Series, pd.Series, pd.Series, pd.Series]:
+    """4 bileşenin (vol, mom, vlt, prc) TAM serisini döner — compute_series/
+    compute_components/compute_pre_components'in ortak iç hesaplaması."""
+    side = 1.0 if signal_type == "Long" else -1.0
+    vol = normalize_volume_0_100(_volume_by_mode(df, side, volume_mode))
+    rsi = calculate_rsi(df, period=14)
+    mom = normalize_momentum_0_100(rsi.diff().fillna(0.0) * side)
+    atr = calculate_atr(df, period=Config.ATR_PERIOD)
+    vlt = normalize_volatility_0_100(atr)
+    prc = normalize_price_0_100(df["close"].pct_change().fillna(0.0) * 100.0 * side)
+    return vol, mom, vlt, prc
+
+
 def compute_components(
     df: pd.DataFrame, signal_type: str, volume_mode: str = "real"
 ) -> Tuple[float, float, float, float]:
@@ -58,28 +73,14 @@ def compute_components(
     (vol_score, momentum_score, vlt_score, price_score) — compute_series()'in
     ağırlıklı toplamının kırılımı. Anlık/canlı VPMV bileşen gösterimi için
     (ör. Aktif Sinyaller panelinde bir sinyale tıklandığında) kullanılır."""
-    side = 1.0 if signal_type == "Long" else -1.0
-    vol = normalize_volume_0_100(_volume_by_mode(df, side, volume_mode))
-    rsi = calculate_rsi(df, period=14)
-    mom = normalize_momentum_0_100(rsi.diff().fillna(0.0) * side)
-    atr = calculate_atr(df, period=Config.ATR_PERIOD)
-    vlt = normalize_volatility_0_100(atr)
-    prc = normalize_price_0_100(df["close"].pct_change().fillna(0.0) * 100.0 * side)
+    vol, mom, vlt, prc = _component_series(df, signal_type, volume_mode)
     return float(vol.iloc[-1]), float(mom.iloc[-1]), float(vlt.iloc[-1]), float(prc.iloc[-1])
 
 
 def compute_series(df: pd.DataFrame, signal_type: str, volume_mode: str = "real") -> pd.Series:
     """Tüm df için bar bazlı VPMV serisi döner (0-100).
     volume_mode: 'real' (taker) | 'proxy' (Pine vekili) | 'total' (yönsüz)."""
-    side = 1.0 if signal_type == "Long" else -1.0
-
-    vol = normalize_volume_0_100(_volume_by_mode(df, side, volume_mode))
-    rsi = calculate_rsi(df, period=14)
-    mom = normalize_momentum_0_100(rsi.diff().fillna(0.0) * side)
-    atr = calculate_atr(df, period=Config.ATR_PERIOD)
-    vlt = normalize_volatility_0_100(atr)
-    prc = normalize_price_0_100(df["close"].pct_change().fillna(0.0) * 100.0 * side)
-
+    vol, mom, vlt, prc = _component_series(df, signal_type, volume_mode)
     return (0.35 * vol + 0.35 * mom + 0.20 * vlt + 0.10 * prc).clip(0, 100)
 
 
@@ -103,6 +104,34 @@ def compute_pre(
     pre_avg = float(pre_slice.mean())
     slope = float(pre_slice.iloc[-1] - pre_slice.iloc[0])
     return pre_avg, slope, vpmv_signal
+
+
+def compute_raw_components(
+    df: pd.DataFrame,
+    signal_type: str,
+    volume_mode: str = "real",
+) -> Optional[Dict[str, float]]:
+    """4 bileşenin HAM (0-100'e normalize edilMEmiş, kendi doğal biriminde:
+    hacim, RSI seviyesi, ATR, kapanış fiyatı) değerini, df'nin SON barı
+    (sinyal barı) için döner. Bir önceki sinyalin aynı şekilde kaydedilmiş
+    ham değerleriyle kıyaslanıp % değişim hesaplanabilsin diye — bkz.
+    signals/signal_processor.py::_compute_component_change_pct (önceki
+    sinyal sorgusu DB'ye gittiği için burada değil, orada yapılıyor)."""
+    if len(df) < 15:  # RSI(14) + 1 ısınma payı
+        return None
+
+    side = 1.0 if signal_type == "Long" else -1.0
+    vol_raw = _volume_by_mode(df, side, volume_mode)
+    rsi_raw = calculate_rsi(df, period=14)
+    atr_raw = calculate_atr(df, period=Config.ATR_PERIOD)
+    price_raw = df["close"]
+
+    return {
+        "vol": float(vol_raw.iloc[-1]),
+        "mom": float(rsi_raw.iloc[-1]),
+        "vlt": float(atr_raw.iloc[-1]),
+        "prc": float(price_raw.iloc[-1]),
+    }
 
 
 def compute_post(

@@ -6,6 +6,7 @@ _compute_candle_pattern, _compute_devisso_score, _detect_fvg_in_df).
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from signals.signal_processor import (
     _classify_candle,
@@ -46,17 +47,23 @@ def test_trim_handles_none_and_empty():
 
 def test_classify_candle_body_dominant():
     last = pd.Series({"open": 100.0, "high": 110.0, "low": 95.0, "close": 108.0})
-    assert _classify_candle(last) == "govde"
+    kategori, body_pct, wick_pct = _classify_candle(last)
+    assert kategori == "govde"
+    assert body_pct == pytest.approx(53.33, abs=0.01)
+    assert wick_pct == pytest.approx(46.67, abs=0.01)
 
 
 def test_classify_candle_upper_wick_dominant():
     last = pd.Series({"open": 100.0, "high": 130.0, "low": 99.0, "close": 101.0})
-    assert _classify_candle(last) == "ust_fitil"
+    kategori, body_pct, wick_pct = _classify_candle(last)
+    assert kategori == "ust_fitil"
+    assert body_pct == pytest.approx(3.23, abs=0.01)
+    assert wick_pct == pytest.approx(96.77, abs=0.01)
 
 
 def test_classify_candle_zero_range_is_belirsiz():
     last = pd.Series({"open": 100.0, "high": 100.0, "low": 100.0, "close": 100.0})
-    assert _classify_candle(last) == "belirsiz"
+    assert _classify_candle(last) == ("belirsiz", None, None)
 
 
 # --- _compute_candle_pattern ---
