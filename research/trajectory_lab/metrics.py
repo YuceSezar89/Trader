@@ -145,6 +145,32 @@ def vpmv_series(df: pd.DataFrame, signal_type: str) -> pd.Series:
     return (0.35 * vol + 0.35 * mom + 0.20 * vlt + 0.10 * prc).clip(0, 100)
 
 
+def vpmv_components_series(df: pd.DataFrame, signal_type: str) -> pd.DataFrame:
+    """vpmv_series'in AYNI iç mantığı — yeni formül YOK, sadece ağırlıklı
+    tek skora indirgemeden ÖNCEKİ 4 bileşeni (vol/mom/vlt/prc) ayrı ayrı
+    döndürür (8 Ağustos, VPMV decomposition — bkz. CONTEXT_LAB_STATUS.md,
+    Mechanism aşaması). Ağırlıklar (0.35/0.35/0.20/0.10) BİLEREK
+    uygulanmıyor — "hangi bileşen VPMV'ye en çok katkı yapıyor" sorusuna
+    şimdilik girilmiyor, sadece "hangisi winner/loser'da farklı davranıyor"
+    sorusuna bakılıyor (kullanıcı notu, 8 Ağustos)."""
+    side = 1.0 if signal_type == "Long" else -1.0
+    has_dir = (
+        "buy_volume" in df.columns
+        and "sell_volume" in df.columns
+        and df["buy_volume"].notna().any()
+    )
+    volume_side = (df["buy_volume"] if side > 0 else df["sell_volume"]) if has_dir else df["volume"]
+
+    vol = _normalize_volume_0_100(volume_side)
+    rsi = _rsi(df, period=14)
+    mom = _normalize_momentum_0_100(rsi.diff().fillna(0.0) * side)
+    atr = _atr(df, period=14)
+    vlt = _normalize_volatility_0_100(atr)
+    prc = _normalize_price_0_100(df["close"].pct_change().fillna(0.0) * 100.0 * side)
+
+    return pd.DataFrame({"mom": mom, "vol": vol, "vlt": vlt, "prc": prc})
+
+
 def cvd_slope_series(df: pd.DataFrame, slope_window: int = 10) -> pd.Series:
     """market_context.py::compute_cvd_slope'un bağımsız, TAM SERİ kopyası."""
     if "buy_volume" in df.columns and df["buy_volume"].notna().any():
@@ -182,6 +208,169 @@ def volatility_pct_series(df: pd.DataFrame) -> pd.Series:
     z_score ile aynı (bkz. config.py WARMUP_BARS=220)."""
     atr = _atr(df, period=14)
     return _normalize_volatility_0_100(atr)
+
+
+def adx_series(df: pd.DataFrame, adxlen: int = 14, dilen: int = 14) -> pd.Series:
+    """indicators/core.py::calculate_adx'in bağımsız, vektörize kopyası
+    (Wilder RMA = ewm(alpha=1/period), production'ın Python-loop'lu
+    wilder_rma'sıyla matematiksel olarak AYNI, sadece hızlı). Trend
+    ailesi adayı — "trend GÜCÜNÜ" ölçer, yönü değil. Production kendi
+    içinde len(df)>=28 ısınma payı istiyor, WARMUP_BARS=220 fazlasıyla
+    yeterli."""
+    high, low, close = df["high"], df["low"], df["close"]
+    up = high.diff()
+    down = -low.diff()
+    plus_dm = up.where((up > down) & (up > 0), 0.0)
+    minus_dm = down.where((down > up) & (down > 0), 0.0)
+    tr1 = high - low
+    tr2 = (high - close.shift(1)).abs()
+    tr3 = (low - close.shift(1)).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+
+    def _wilder_rma(series: pd.Series, period: int) -> pd.Series:
+        return series.ewm(alpha=1 / period, adjust=False).mean()
+
+    truerange = _wilder_rma(tr, dilen)
+    plus = 100 * _wilder_rma(plus_dm, dilen) / truerange.replace(0.0, np.nan)
+    minus = 100 * _wilder_rma(minus_dm, dilen) / truerange.replace(0.0, np.nan)
+    dx = (plus - minus).abs() / (plus + minus).replace(0.0, 1.0)
+    return 100 * _wilder_rma(dx, adxlen)
+
+
+def ema_slope_series(df: pd.DataFrame, span: int = 50, lookback: int = 10) -> pd.Series:
+    """Trend ailesi adayı — EMA(50)'nin son `lookback` bardaki YÜZDE
+    değişimi (yön + hız birlikte). Sembolün fiyat mertebesinden bağımsız
+    olması için % olarak normalize edilir (ham nokta farkı değil)."""
+    ema = df["close"].astype(float).ewm(span=span, adjust=False).mean()
+    return (ema / ema.shift(lookback) - 1.0) * 100.0
+
+
+def hh_hl_series(df: pd.DataFrame, window: int = 10) -> pd.Series:
+    """Trend ailesi adayı — saf fiyat-yapısı (Dow teorisi): son `window`
+    barın en yükseği bir önceki `window` barın en yükseğinden büyük mü
+    (HH) VE en düşüğü bir önceki `window` barın en düşüğünden büyük mü
+    (HL). Skor -1 (LH+LL, düşüş yapısı) ile +1 (HH+HL, yükseliş yapısı)
+    arası, 0 karışık yapı."""
+    curr_high = df["high"].rolling(window).max()
+    prev_high = curr_high.shift(window)
+    curr_low = df["low"].rolling(window).min()
+    prev_low = curr_low.shift(window)
+    hh = (curr_high > prev_high).astype(float)
+    hl = (curr_low > prev_low).astype(float)
+    return hh + hl - 1.0
+
+
+def up_close_ratio_series(df: pd.DataFrame, window: int = 20) -> pd.Series:
+    """Trend ailesi adayı — en basit yön tutarlılığı ölçüsü: son `window`
+    barın yüzde kaçı bir önceki kapanıştan yüksek kapandı (0-100)."""
+    up = (df["close"].diff() > 0).astype(float)
+    return up.rolling(window).mean() * 100.0
+
+
+def price_accel_series(df: pd.DataFrame, window: int = 5) -> pd.Series:
+    """Davranış Ailesi #1, sub-soru #2 ("Fiyat hızlanıyor mu?") adayı —
+    `price_return_series`'in (pozisyon/hız) AYIRT EDEMEDİĞİ şeyi ölçmeyi
+    hedefler: sabit hızlı hareket (momentum sürüyor, B sınıfı) ile hızı
+    ARTAN hareket (sıkışmadan kırılım, A sınıfı) arasındaki fark. İkinci
+    türev: velocity(t) = t'den t-window'a % getiri (hız), price_accel(t)
+    = velocity(t) - velocity(t-window) (hızın kendi değişimi). B'de ~0'a
+    yakın, A'da pozitif ve büyüyen olması beklenir — henüz test edilmedi,
+    Stage 1a öncesi aday."""
+    velocity = (df["close"] / df["close"].shift(window) - 1.0) * 100.0
+    return velocity - velocity.shift(window)
+
+
+def price_vs_vwap_series(df: pd.DataFrame, lookback: int = 100) -> pd.Series:
+    """Davranış Ailesi #1, sub-soru #1 ("Fiyat önemli bir referans
+    seviyesini aşıyor mu?") adayı — takvim sınırı (günlük/haftalık/aylık
+    açılış) GEREKTİRMEYEN tek referans seviyesi: rolling/session VWAP.
+    Günlük/haftalık açılış ve önceki gün/hafta H-L kasıtlı olarak
+    DIŞARIDA tutuldu (6 Ağu kararı) — HA_Cross_Long sinyallerinin
+    çoğu 5m interval'de, mevcut WARMUP_BARS=220 penceresi (~20.8 saat)
+    günlük açılışı bile güvenilir kapsamıyor; hesaplanabilen sinyal
+    alt-kümesiyle sınırlı bir test yanlı olurdu. lookback=100,
+    WARMUP_BARS=220 içinde ISINMA payı bırakacak şekilde seçildi.
+
+    price_vs_vwap(t) = (close(t) - VWAP(t)) / VWAP(t) * 100 — fiyat
+    VWAP'ın kaç % üstünde/altında."""
+    typical_price = (df["high"] + df["low"] + df["close"]) / 3.0
+    pv = (typical_price * df["volume"]).rolling(lookback).sum()
+    v = df["volume"].rolling(lookback).sum()
+    vwap = pv / v.replace(0.0, np.nan)
+    return (df["close"] - vwap) / vwap * 100.0
+
+
+def body_size_series(df: pd.DataFrame) -> pd.Series:
+    """"Sıra dışılık" (sembol-içi göreceli) yönteminin ham girdisi (7
+    Ağu) — mum gövdesi büyüklüğü, |close-open|, HİÇBİR mühendislik yok.
+    Kendi başına test edilmiyor; amaç bunun sembol-içi percentile-
+    rank'ini almak (bkz. analiz scripti, CONTEXT_LAB_STATUS.md)."""
+    return (df["close"] - df["open"]).abs()
+
+
+def range_size_series(df: pd.DataFrame) -> pd.Series:
+    """"Sıra dışılık" yönteminin ham girdisi — bar aralığı, high-low,
+    ham (bkz. body_size_series docstring)."""
+    return df["high"] - df["low"]
+
+
+def volume_level_series(df: pd.DataFrame) -> pd.Series:
+    """"Sıra dışılık" yönteminin ham girdisi — ham hacim, normalize
+    edilmemiş (bkz. body_size_series docstring)."""
+    return df["volume"]
+
+
+def rsi_raw_series(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """"Sıra dışılık" yönteminin ham girdisi — RSI(14), ham, hiçbir ek
+    işlem yok (bkz. body_size_series docstring)."""
+    return _rsi(df, period=period)
+
+
+def atr_raw_series(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """"Sıra dışılık" yönteminin ham girdisi — ATR(14), ham (bkz.
+    body_size_series docstring)."""
+    return _atr(df, period=period)
+
+
+def roc_series(df: pd.DataFrame, window: int = 10) -> pd.Series:
+    """"Sıra dışılık" yönteminin ham girdisi — son `window` bardaki
+    yüzde değişim (rate of change), ham (bkz. body_size_series
+    docstring)."""
+    return (df["close"] / df["close"].shift(window) - 1.0) * 100.0
+
+
+def range_contraction_series(df: pd.DataFrame, window: int = 10) -> pd.Series:
+    """"Enerji Birikimi" hipotezi adayı (7 Ağu, objektif gözlem #5+#7:
+    son N mumun high-low mesafesi daralıyor mu / fiyat bir aralığın
+    dışına çıkamıyor mu) — son `window` barın (high-low) ortalaması,
+    `window` bar önceki AYNI ortalamaya göre yüzde kaç küçülmüş. Pozitif
+    = aralık daralıyor (sıkışma); negatif = genişliyor."""
+    rng = df["high"] - df["low"]
+    avg_now = rng.rolling(window).mean()
+    avg_before = avg_now.shift(window)
+    return (avg_before - avg_now) / avg_before.replace(0.0, np.nan) * 100.0
+
+
+def body_contraction_series(df: pd.DataFrame, window: int = 10) -> pd.Series:
+    """"Enerji Birikimi" hipotezi adayı (7 Ağu, objektif gözlem #4: mum
+    gövdesi küçülüyor mu) — `range_contraction_series` ile AYNI mantık,
+    ham girdi (high-low) yerine gövde büyüklüğü (|close-open|). Pozitif
+    = gövdeler küçülüyor."""
+    body = (df["close"] - df["open"]).abs()
+    avg_now = body.rolling(window).mean()
+    avg_before = avg_now.shift(window)
+    return (avg_before - avg_now) / avg_before.replace(0.0, np.nan) * 100.0
+
+
+def close_dispersion_series(df: pd.DataFrame, window: int = 10) -> pd.Series:
+    """"Enerji Birikimi" hipotezi adayı (7 Ağu, objektif gözlem #2+#6:
+    kapanışlar/açılışlar birbirine yakın bir bölgede kümeleniyor mu) —
+    son `window` kapanışın değişim katsayısı (std/mean, %). DİĞER İKİ
+    ADAYIN TERSİNE, burada DÜŞÜK değer sıkışmaya işaret eder (kapanışlar
+    az saçılmış)."""
+    std = df["close"].rolling(window).std()
+    mean = df["close"].rolling(window).mean()
+    return std / mean.replace(0.0, np.nan) * 100.0
 
 
 def cvd_level_series(df: pd.DataFrame, lookback: int = 500) -> pd.Series:
@@ -255,4 +444,19 @@ PROVIDERS = {
     "vp_score": lambda df, signal_type: vp_score_series(df),
     "z_score": lambda df, signal_type: z_score_series(df),
     "volatility_pct": lambda df, signal_type: volatility_pct_series(df),
+    "adx": lambda df, signal_type: adx_series(df),
+    "ema_slope": lambda df, signal_type: ema_slope_series(df),
+    "hh_hl": lambda df, signal_type: hh_hl_series(df),
+    "up_close_ratio": lambda df, signal_type: up_close_ratio_series(df),
+    "price_accel": lambda df, signal_type: price_accel_series(df),
+    "price_vs_vwap": lambda df, signal_type: price_vs_vwap_series(df),
+    "range_contraction": lambda df, signal_type: range_contraction_series(df),
+    "body_contraction": lambda df, signal_type: body_contraction_series(df),
+    "close_dispersion": lambda df, signal_type: close_dispersion_series(df),
+    "body_size": lambda df, signal_type: body_size_series(df),
+    "range_size": lambda df, signal_type: range_size_series(df),
+    "volume_level": lambda df, signal_type: volume_level_series(df),
+    "rsi_raw": lambda df, signal_type: rsi_raw_series(df),
+    "atr_raw": lambda df, signal_type: atr_raw_series(df),
+    "roc": lambda df, signal_type: roc_series(df),
 }

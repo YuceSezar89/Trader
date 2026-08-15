@@ -57,11 +57,59 @@ METRIC_PROVIDERS = {
     # analizinde SADECE regime_age hayatta kaldı (Research Archive — Stage 2
     # pratik eşiğini geçemedi), diğer ikisi Rejected/Redundant (bkz. README).
     "volatility_pct": {"active": False},
+    # Context Lab — Trend Gücü ailesi (5 Ağu): ADX/ema_slope/up_close_ratio
+    # test edildi, 3 sinyal ailesinde de (HA_Cross/RSI_Cross/Supertrend)
+    # |Cohen's d|<0.05 — Çapraz-Aile Doğrulama Kuralı'na göre "Genel
+    # Başarısız Temsil", aile kapandı (bkz. RESEARCH_SOP.md). Provider
+    # olarak kalıyor, active=False.
+    "adx": {"active": False},
+    "ema_slope": {"active": False},
+    "up_close_ratio": {"active": False},
+    # hh_hl: Trend Gücü ailesinden ÇIKARILDI (5 Ağu düzeltmesi) — "trend
+    # gücü" değil "piyasa yapısı" ölçüyor, ayrı bir Market Structure
+    # ailesinin adayı (BOS/Supertrend Break/Liquidity Sweep ile birlikte,
+    # henüz Stage -1 hipotezi yazılmadı). İlk implementasyonu kaba bir
+    # vekil (block max/min), gerçek swing-pivot değil.
+    "hh_hl": {"active": False},
+    # price_accel: Davranış Ailesi #1, sub-soru #2 ("Fiyat hızlanıyor mu?")
+    # adayı (6 Ağu) — büyük-örneklem göz testi (n=65.673, HA_Cross_Long)
+    # yapıldı: sinyal-öncesi (t<0) winner/loser TAMAMEN üst üste, ayrışma
+    # SADECE t=0 sonrası (price_return/ema_slope/up_close_ratio ile AYNI
+    # desen — 4. koşulsuz teyit). Stage 1a göz testi kapısında düştü,
+    # koşulsuz haliyle. active=False (bkz. CONTEXT_LAB_STATUS.md).
+    "price_accel": {"active": False},
+    # price_vs_vwap: Davranış Ailesi #1, sub-soru #1 ("Fiyat önemli bir
+    # referans seviyesini aşıyor mu?") adayı (6 Ağu) — büyük-örneklem göz
+    # testi (n=65.685, HA_Cross_Long) yapıldı: sinyal-öncesi winner/loser
+    # TAMAMEN üst üste (~VWAP'ın hafif altında, ikisi de), ayrışma SADECE
+    # t=0 sonrası (ema_slope/up_close_ratio/price_return/price_accel ile
+    # AYNI desen — 5. koşulsuz teyit). Stage 1a göz testinde düştü.
+    # active=False (bkz. CONTEXT_LAB_STATUS.md).
+    "price_vs_vwap": {"active": False},
+    # "Enerji Birikimi" hipotezi adayları (7 Ağu) — büyük-örneklem göz
+    # testi yapıldı (n=65.722, HA_Cross_Long): sinyal-öncesi winner/loser
+    # TAMAMEN üst üste (6/7/8. koşulsuz teyit) — AMA her ikisi de t=-2/-1
+    # civarında BİRLİKTE bir daralma gösteriyor (muhtemelen HA_Cross'un
+    # kendi tetikleme mekanizmasının artefaktı, winner'a özgü değil).
+    # Detay: CONTEXT_LAB_STATUS.md. active=False.
+    "range_contraction": {"active": False},
+    "body_contraction": {"active": False},
+    "close_dispersion": {"active": False},
+    # "Sıra dışılık" (sembol-içi göreceli) yönteminin ham girdileri (7 Ağu)
+    # — büyük-örneklem testi yapıldı (HA_Cross_Long + RSI_Cross_Long,
+    # 8 büyüklük), sonuçlar CONTEXT_LAB_STATUS.md'de. active=False.
+    "body_size": {"active": True},
+    "range_size": {"active": True},
+    "volume_level": {"active": True},
+    "rsi_raw": {"active": False},
+    "atr_raw": {"active": False},
+    "roc": {"active": True},
 }
 
 # Outcome etiketleme — Pattern Lab ile AYNI temiz hedef (signal_performance
 # tablosu), yeni bir "başarı" tanımı icat edilmiyor.
 OUTCOME_METRIC = "return_t5_pct"
+OUTCOME_HORIZON_BARS = 5  # OUTCOME_METRIC'in ölçüldüğü bar — winner/loser kararı SADECE bu barda
 WINNER_THRESHOLD = 0.5  # >= bu yüzde → winner
 LOSER_THRESHOLD = -0.5  # <= bu yüzde → loser
 # arası: neutral
