@@ -5,10 +5,12 @@ Dockable panel layout, menü/toolbar/status bar barındırır.
 
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import redis
 from PyQt6.QtCore import Qt, QTimer, pyqtSlot
 from PyQt6.QtGui import QAction, QKeySequence
 from PyQt6.QtWidgets import (
@@ -22,6 +24,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from config import Config
 from desktop.panels.active_signals_panel import ActiveSignalsPanel
 from desktop.panels.chart_panel import ChartPanel
 from desktop.panels.deviso_panel import DevisoPanel
@@ -85,6 +88,7 @@ class MainWindow(QMainWindow):
         self._setup_placeholder_panels()
         self._restore_layout()
         self._start_workers()
+        self._setup_heartbeat()
 
     # ── Pencere ───────────────────────────────────────────────────────────
 
@@ -675,6 +679,30 @@ class MainWindow(QMainWindow):
         QSettings("TRader", "Terminal").clear()
         self.statusBar().showMessage("Layout sıfırlandı — yeniden başlatın.", 3000)
 
+    # ── Heartbeat ─────────────────────────────────────────────────────────
+    # 16 Ağu 2026: panel donduğunda (05:03-12:11, 7 saat) kimse fark etmedi
+    # çünkü hiçbir izleme yoktu. QTimer ana thread'de çalıştığı için ana
+    # thread donarsa (senkron bir DB/IO çağrısında takılırsa) bu timer da
+    # ateşlenmeyi durdurur — donmanın kendisi tespit sinyali olur.
+    # run_services.py'deki heartbeat_watchdog_loop bu key'i izler, bayatlarsa
+    # Telegram'a alarm gönderir (panel'i otomatik yeniden başlatmaz, sadece
+    # haber verir — panel bilinçli olarak manuel açılıp kapatılıyor).
+
+    def _setup_heartbeat(self) -> None:
+        self._heartbeat_redis = redis.Redis.from_url(
+            Config.REDIS_URL, socket_timeout=2, socket_connect_timeout=2
+        )
+        self._heartbeat_timer = QTimer(self)
+        self._heartbeat_timer.timeout.connect(self._send_heartbeat)
+        self._heartbeat_timer.start(15_000)
+        self._send_heartbeat()
+
+    def _send_heartbeat(self) -> None:
+        try:
+            self._heartbeat_redis.set("heartbeat:desktop_panel", datetime.now().isoformat())
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
+
     # ── Kapat ─────────────────────────────────────────────────────────────
 
     def closeEvent(self, event) -> None:
@@ -682,4 +710,8 @@ class MainWindow(QMainWindow):
         self._log_panel.cleanup()
         for w in self._workers:
             w.stop()
+        try:
+            self._heartbeat_redis.delete("heartbeat:desktop_panel")
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
         event.accept()

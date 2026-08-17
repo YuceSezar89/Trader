@@ -29,7 +29,6 @@ from database.engine import get_session, run_with_db_timeout
 from indicators.core import add_all_indicators, calculate_atr, calculate_rsi, truncate_after_gap
 from indicators.incremental import RESYNC_INTERVAL, IndicatorState, bootstrap_state, update_state
 from signals.paper_trade_manager import (
-    PaperTradeManager,
     do_kirilimi_manager,
     do_open_streak_manager,
     ha_cross_manager,
@@ -37,7 +36,6 @@ from signals.paper_trade_manager import (
     paper_trade_manager,
     rsi_15m_manager,
     rsi_cross_live_manager,
-    totalamount_rank1_manager,
 )
 from signals.risk_manager import risk_manager
 from signals.signal_processor import (
@@ -46,7 +44,6 @@ from signals.signal_processor import (
     trim_to_closed_bar,
 )
 from signals.tf_alignment_gate import _heikin_ashi_bull
-from signals.totalamount_rank1 import net_ta_series
 from signals.vpm_calculator import VPMCalculator
 from utils.asyncio_ws_client import AsyncioBinanceStreamManager
 from utils.exceptions import BinanceAPIError, DatabaseError
@@ -399,10 +396,6 @@ class LiveDataManager:
         # signal_id -> son ~20 VPMV değeri (Redis'e "recent" olarak yayınlanır,
         # panelin grafik çizmesi için — DB'ye gidilmeden).
         self._vpmv_recent: Dict[int, deque] = {}
-        # Açık paper trade'lerin (symbol, interval) kümesi — _active_signal_symbols'tan
-        # KASITLI ayrı (bkz. _open_trade_registry_loop docstring), dinamik ATR trailing
-        # yayınının (_publish_atr_live) kapsamını belirler (15 Tem 2026 planı).
-        self._open_trade_symbols: set = set()
         # 18 Tem 2026: bar-kapanışı burst kontrolü — _handle_websocket_message tüm
         # sembollerin (aynı dakika sınırında near-simultaneous) kapanış coroutine'lerini
         # run_coroutine_threadsafe ile fire-and-forget başlatıyor; 15 Tem refaktörü
@@ -1060,10 +1053,11 @@ class LiveDataManager:
                 # varsa) her (symbol, interval) bar kapanışında yayınlanır.
                 if symbol in self._active_signal_symbols:
                     await self._publish_divergence_live(symbol, interval, merged)
-                # Dinamik ATR trailing yayını — açık paper trade'i olan (symbol,
-                # interval) çiftleri için (15 Tem 2026 planı: "trailing dinamik ATR").
-                if (symbol, interval) in self._open_trade_symbols:
-                    await self._publish_atr_live(symbol, interval, merged)
+                # Dinamik ATR trailing yayını + açık trade registry + manuel
+                # trade cache yenileme artık signal_service.py'de (17 Ağu 2026,
+                # bkz. signals/registry_loops.py — _publish_atr_live process-içi
+                # canlı buffer'a bağımlıydı, artık get_fresh_klines'ın zaten
+                # hesapladığı df'i kullanıyor).
                 # do_kirilimi/do_open_streak tetikleme artık signal_service.py'de
                 # (bkz. paper trading ayrıştırması, 10 Tem 2026 cutover).
 
@@ -1222,6 +1216,7 @@ class LiveDataManager:
         logger.info(f"   📦 Batch: {batch_size} sembol/batch, {total_batches} batch")
 
         # Sembolleri batch'lere böl
+        failed_symbols: list[str] = []
         for i in range(0, total_symbols, batch_size):
             batch = symbols_to_reload[i : i + batch_size]
             batch_num = (i // batch_size) + 1
@@ -1229,8 +1224,8 @@ class LiveDataManager:
             logger.info(f"📦 Batch {batch_num}/{total_batches}: {len(batch)} sembol yükleniyor...")
 
             # Batch timeout: 120s — takılı semboller iptal edilerek batch ilerler
-            batch_tasks = [asyncio.create_task(self._load_symbol_all_timeframes(s)) for s in batch]
-            done, pending = await asyncio.wait(batch_tasks, timeout=120)
+            batch_tasks = {s: asyncio.create_task(self._load_symbol_all_timeframes(s)) for s in batch}
+            _, pending = await asyncio.wait(batch_tasks.values(), timeout=120)
             for p in pending:
                 p.cancel()
                 try:
@@ -1240,16 +1235,57 @@ class LiveDataManager:
             if pending:
                 logger.warning(f"⚠️ Batch {batch_num}: {len(pending)} sembol timeout ile atlandı.")
 
-            results = [
-                t.result() if not t.cancelled() and t.exception() is None else None for t in done
-            ]
+            results = {
+                s: (t.result() if not t.cancelled() and t.exception() is None else None)
+                for s, t in batch_tasks.items()
+            }
+            for s, r in results.items():
+                if r is None or not r[0]:
+                    failed_symbols.append(s)
 
             # Başarı oranını hesapla
-            success_count = sum(1 for r in results if r is not None)
-            total_rest_calls = sum(r[1] for r in results if r is not None)
+            success_count = sum(1 for r in results.values() if r is not None and r[0])
+            total_rest_calls = sum(r[1] for r in results.values() if r is not None)
             logger.info(
                 f"✅ Batch {batch_num}/{total_batches} tamamlandı ({success_count}/{len(batch)} başarılı, {total_rest_calls} REST çağrısı)"
             )
+
+        # ── Başarısız sembolleri bir kez daha dene (16 Ağu 2026: restart sonrası
+        # max_locks_per_transaction/geçici DB baskısı yüzünden 129/550 sembol
+        # sessizce başarısız oluyordu, hiç retry/alarm yoktu — Telegram'da hiçbir
+        # iz bırakmadan saatlerce eksik buffer'la kalıyorlardı) ──────────────────
+        if failed_symbols:
+            logger.warning(
+                f"🔁 {len(failed_symbols)} sembol ilk denemede başarısız oldu, yeniden deneniyor: "
+                f"{', '.join(failed_symbols[:10])}{' ...' if len(failed_symbols) > 10 else ''}"
+            )
+            await asyncio.sleep(5)
+            retry_tasks = {s: asyncio.create_task(self._load_symbol_all_timeframes(s)) for s in failed_symbols}
+            _, pending = await asyncio.wait(retry_tasks.values(), timeout=120)
+            for p in pending:
+                p.cancel()
+                try:
+                    await p
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+            still_failed = [
+                s
+                for s, t in retry_tasks.items()
+                if t in pending or t.cancelled() or t.exception() is not None or not t.result()[0]
+            ]
+            if still_failed:
+                logger.error(
+                    f"❌ {len(still_failed)} sembol retry sonrası da başarısız: "
+                    f"{', '.join(still_failed[:20])}{' ...' if len(still_failed) > 20 else ''}"
+                )
+                await send_telegram_message(
+                    f"⚠️ MTF backfill: {len(still_failed)}/{total_symbols} sembol retry sonrası "
+                    f"da yüklenemedi (buffer eksik kalabilir): "
+                    f"{', '.join(still_failed[:15])}{' ...' if len(still_failed) > 15 else ''}"
+                )
+            else:
+                logger.info(f"✅ Retry başarılı: {len(failed_symbols)} sembolün tamamı yüklendi.")
 
         logger.info("🎉 MTF Batch Initialization tamamlandı! WebSocket canlı mod başlatılabilir.")
 
@@ -1261,7 +1297,7 @@ class LiveDataManager:
             symbol: Sembol adı
 
         Returns:
-            (bool, int): (REST kullanılmadıysa True, yapılan REST çağrı sayısı) —
+            (bool, int): (yükleme başarılıysa True, yapılan REST çağrı sayısı) —
             REST çağrı sayısı, batch gecikmesinin gerçek ağırlığa göre hesaplanması için.
         """
         rest_call_count = 0
@@ -1376,7 +1412,7 @@ class LiveDataManager:
                 f"✅ [{symbol}] {loaded_count} TF yüklendi (1m=DB, 30m={src}, "
                 "5m/15m/1h/4h/6h/8h/12h=CA, 1d=cache)"
             )
-            return not binance_call_made, rest_call_count
+            return True, rest_call_count
 
         except Exception as e:
             logger.error(f"❌ [{symbol}] Yükleme hatası: {e}", exc_info=False)
@@ -1892,6 +1928,38 @@ class LiveDataManager:
             replay_bars,
         )
 
+    async def _mtf_resync_loop(self) -> None:
+        """MTF buffer'ları (5m/15m/1h/4h/6h/8h/12h) periyodik olarak CA ile
+        yeniden senkronize eder (16 Ağu 2026).
+
+        _initialize_mtf_dataframes SADECE process başlangıcında çağrılıyordu.
+        Restart anında CA henüz güncel/tam materialize olmamışsa (refresh
+        job'ları henüz yetişmemişse) buffer eksik bir anlık görüntüyle
+        doluyor ve WS'nin incremental append'i bunu asla telafi edemiyordu
+        — canlı kanıt: bir heartbeat-testi restart'ı sonrası BTCUSDT 15m/1h
+        buffer'ı 250/250'den 47/13'e düştü, saatlerce öyle kaldı, grafik
+        boşluk gösterdi. _continuous_gap_heal_loop bunun price_data/1m
+        karşılığını çözüyor ama Redis'teki MTF katmanını hiç kapsamıyor —
+        bu döngü o boşluğu kapatır. _initialize_mtf_dataframes zaten kendi
+        içinde "Redis'te limit*0.5 üzerinde mi" kontrolü yapıp SADECE
+        eksik kalan sembolleri CA'dan yeniden çekiyor — sağlıklı semboller
+        için gereksiz Postgres/CA yükü oluşturmaz."""
+        _INTERVAL_SEC = 1800  # 30 dakikada bir
+
+        try:
+            await asyncio.wait_for(self._startup_complete_event.wait(), timeout=600)
+        except asyncio.TimeoutError:
+            pass
+
+        while True:
+            await asyncio.sleep(_INTERVAL_SEC)
+            if not self.mtf_enabled:
+                continue
+            try:
+                await self._initialize_mtf_dataframes(reload_symbols=None)
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.error("[MTFResync] Hata: %s", exc, exc_info=True)
+
     async def _continuous_gap_heal_loop(self) -> None:
         """Merkezi sürekli gap-doldurma mekanizması (12 Tem 2026 konsolidasyonu:
         eski _deferred_internal_gap_check/_post_init_catchup/_health_loop'un işlevini
@@ -2379,70 +2447,6 @@ class LiveDataManager:
                 reg_logger.warning("Yenileme hatası: %s", exc)
             await asyncio.sleep(_INTERVAL)
 
-    async def _open_trade_registry_loop(self) -> None:
-        """Her 60 saniyede bir açık paper trade'leri (TÜM stratejiler, TÜM
-        durumlar) DB'den çekip `self._open_trade_symbols`'ı tazeler — dinamik
-        trailing-stop'un (`_publish_atr_live`) hangi (symbol,interval)'lerde
-        çalışacağını bilmesi için. `_active_signal_registry`'den KASITLI
-        olarak AYRI: bir paper trade, kendi Signal'i kapansa/supersede olsa
-        bile SL/TP/trailing mantığıyla açık kalabiliyor (15 Tem 2026,
-        "trailing dinamik ATR" planı) — Signal.status='active' kapsamı bu
-        durumu KAÇIRIR."""
-        from sqlalchemy import select as _sel
-
-        from database.models import PaperTrade as _PT
-
-        _INTERVAL = 60
-        reg_logger = logging.getLogger("OpenTradeRegistry")
-
-        while True:
-            try:
-                async with get_session() as session:
-                    rows = (
-                        await run_with_db_timeout(
-                            session.execute(
-                                _sel(_PT.symbol, _PT.interval).where(_PT.status == "open")
-                            )
-                        )
-                    ).all()
-                self._open_trade_symbols = {(symbol, interval) for symbol, interval in rows}
-                reg_logger.debug(
-                    "%d açık trade, %d (sembol,TF) çifti",
-                    len(rows),
-                    len(self._open_trade_symbols),
-                )
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                reg_logger.warning("Yenileme hatası: %s", exc)
-            await asyncio.sleep(_INTERVAL)
-
-    _ATR_LIVE_TTL_BY_INTERVAL = {"1m": 180, "5m": 900, "15m": 2700, "1h": 10800, "4h": 43200}
-
-    async def _publish_atr_live(self, symbol: str, interval: str, df: pd.DataFrame) -> None:
-        """(symbol, interval) için GÜNCEL ATR'yi zaten bellekteki buffer'dan
-        (`df["atr"]`, incremental indikatör hesabından gelir) alıp Redis'e
-        yazar — `paper_trade_manager.py::_trail_distance`'ın trailing-stop
-        mesafesini pozisyon açılışındaki SABİT ATR yerine GÜNCEL volatiliteye
-        göre ayarlayabilmesi için (15 Tem 2026 planı: "trailing dinamik ATR").
-        VPMV-live ile AYNI ucuz desen — periyodik sweep DEĞİL, tek skaler,
-        sadece açık trade'i olan (symbol,interval) için bar kapanışında."""
-        if "atr" not in df.columns or df.empty:
-            return
-        try:
-            atr_val = float(df["atr"].iloc[-1])
-        except (ValueError, TypeError, IndexError):
-            return
-        if atr_val <= 0:
-            return
-        ttl = self._ATR_LIVE_TTL_BY_INTERVAL.get(interval, 900)
-        redis = RedisClient.get_client()
-        try:
-            await asyncio.wait_for(
-                redis.set(f"atr_live:{symbol}:{interval}", atr_val, ex=ttl),
-                timeout=SAFE_EXTERNAL_TIMEOUT,
-            )
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            logger.debug("[AtrLive] %s %s Redis yazımı başarısız: %s", symbol, interval, exc)
-
     _RANKING_TF_WEIGHTS: Dict[str, float] = {"5m": 0.35, "15m": 0.30, "1h": 0.20, "4h": 0.15}
     _RANKING_Z_LOOKBACK = 100
     _RANKING_R_PERIOD = 14
@@ -2697,278 +2701,6 @@ class LiveDataManager:
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 rank_logger.warning("Sıralama güncelleme hatası: %s", exc, exc_info=True)
             await asyncio.sleep(self._RANKING_INTERVAL)
-
-    _TOTALAMOUNT_RANK1_INTERVAL = Config.PAPER["TOTALAMOUNT_RANK1"]["LOOP_INTERVAL_SEC"]
-    _TOTALAMOUNT_RANK1_SL_ATR = Config.PAPER["TOTALAMOUNT_RANK1"]["SL_ATR"]
-    _TOTALAMOUNT_RANK1_INDICATOR = "Supertrend(10,3.0)"
-    _TOTALAMOUNT_WARMUP_MIN_COVERAGE = 0.7  # adayların en az %70'i için buffer hazır olmalı
-    _TOTALAMOUNT_RANK1_SIGNAL_INTERVAL = "5m"  # 13 Ağu bugfix: interval filtresi
-    # olmadan farklı TF'lerdeki (ör. 15m) eski Supertrend sinyalleri 5m'deki
-    # gerçek durumla karışıyordu (TRIAUSDT: 15m Long hâlâ aktifken 5m zaten
-    # Short'a dönmüştü — aynı turda aç+ters-sinyalle-kapat oldu, canlıda
-    # yakalandı).
-
-    async def _totalamount_rank1_loop(self) -> None:
-        """Devisso Döngüsü / Totalamount Rank-1 (13 Ağu 2026, bkz.
-        signals/totalamount_rank1.py): aktif Supertrend Long sinyali olan
-        semboller arasında Totalamount'ta (sinyalin AÇILIŞ FİYATINA göre
-        basit % değişim, per-signal reset) 1. sıraya çıkan sembole Long
-        paper trade açar — open_direct zaten açıksa kendi atlıyor. Ayrı bir
-        fazda, açık totalamount_rank1 pozisyonlarını o sembolde Supertrend
-        Short'a dönünce (ters sinyal) kapatır — sabit SL/TP değil, SL
-        sadece güvenlik ağı (bkz. Config.PAPER['TOTALAMOUNT_RANK1'])."""
-        rank1_logger = logging.getLogger("TotalamountRank1")
-
-        while True:
-            try:
-                from sqlalchemy import select as _sel  # pylint: disable=import-outside-toplevel
-
-                from database.models import (
-                    PaperTrade as _PT,  # pylint: disable=import-outside-toplevel
-                )
-                from database.models import (
-                    Signal as _Sig,  # pylint: disable=import-outside-toplevel
-                )
-
-                # ── Faz 1: aday havuzu + Totalamount hesabı, en yüksek olana aç ──
-                # Totalamount = sinyalin AÇILIŞ FİYATINA göre basit % değişim
-                # (per-signal reset, 13 Ağu düzeltmesi — bkz. Signal.open_price/
-                # opened_at, sabit UTC döngüsü DEĞİL).
-                async def _fetch_candidates() -> list:
-                    async with get_session() as session:
-                        result = await session.execute(
-                            _sel(_Sig.symbol, _Sig.open_price, _Sig.opened_at).where(
-                                _Sig.indicators == self._TOTALAMOUNT_RANK1_INDICATOR,
-                                _Sig.interval == self._TOTALAMOUNT_RANK1_SIGNAL_INTERVAL,
-                                _Sig.signal_type == "Long",
-                                _Sig.status == "active",
-                            )
-                        )
-                        return result.all()
-
-                candidates = await run_with_db_timeout(_fetch_candidates())
-
-                best_symbol: Optional[str] = None
-                best_ta: Optional[float] = None
-                best_df = None
-                ta_by_symbol: Dict[str, float] = {}
-                now = datetime.now()
-                for sym, open_price, opened_at in candidates:
-                    df = self.mtf_buffers.get(sym, {}).get("5m")
-                    if df is None or df.empty or "open_time" not in df.columns:
-                        continue
-                    if not open_price or opened_at is None:
-                        continue
-                    elapsed_sec = (now - opened_at).total_seconds()
-                    bars_since_signal = max(0, int(elapsed_sec // 300))  # 5m bar
-                    try:
-                        net = net_ta_series(df, open_price, bars_since_signal)
-                        if len(net) == 0:
-                            continue
-                        ta = float(net[-1])
-                    except Exception:  # pylint: disable=broad-exception-caught
-                        continue
-                    ta_by_symbol[sym] = ta
-                    await self._publish_totalamount_live(sym, df, net)
-                    if best_ta is None or ta > best_ta:
-                        best_ta = ta
-                        best_symbol = sym
-                        best_df = df
-
-                await self._publish_totalamount_snapshot(ta_by_symbol)
-
-                # Isınma koruması (13 Ağu 2026 bugfix): backend restart'ından hemen
-                # sonra self.mtf_buffers çoğu sembol için henüz dolu değil — DB'de
-                # 58 aktif aday olsa bile bunlardan sadece 2-3'ünün buffer'ı hazır
-                # olabilir, "en iyisi" o küçük eksik alt kümeden seçiliyordu (canlıda
-                # yakalandı: TA=-0.21/-0.37 gibi NEGATİF değerler "rank1/58" diye
-                # açılmıştı — 58, DB'deki ham aday sayısıydı, gerçekte hesaplanabilen
-                # çok daha azdı). Değerlendirilen/DB aday oranı eşiği geçmeden açma
-                # fazı atlanır, snapshot yine de yayınlanır (tablo yine dolar).
-                coverage = (len(ta_by_symbol) / len(candidates)) if candidates else 0.0
-                if (
-                    best_symbol is not None
-                    and best_df is not None
-                    and coverage >= self._TOTALAMOUNT_WARMUP_MIN_COVERAGE
-                ):
-                    try:
-                        price = float(best_df["close"].iloc[-1])
-                        atr_series = calculate_atr(best_df, period=Config.ATR_PERIOD)
-                        atr_val = float(atr_series.iloc[-1])
-                        if price > 0 and atr_val > 0:
-                            sl_price = price - self._TOTALAMOUNT_RANK1_SL_ATR * atr_val
-                            opened = await totalamount_rank1_manager.open_direct(
-                                symbol=best_symbol,
-                                signal_type="Long",
-                                interval="5m",
-                                price=price,
-                                atr=atr_val,
-                                sl_price=sl_price,
-                                tp_price=None,
-                                # PaperTrade.source VARCHAR(20) — 14 Ağu bugfix: önceki
-                                # format (DB= eklentili) 20 karakteri aşıp
-                                # StringDataRightTruncationError ile HER açma denemesini
-                                # sessizce başarısız kılıyordu (canlıda ~15:05'ten beri
-                                # tek bir işlem bile açılamamıştı).
-                                note=f"TA={best_ta:.2f} r1/{len(ta_by_symbol)}"[:20],
-                            )
-                            if opened:
-                                rank1_logger.info(
-                                    "★ AÇILDI %s TA=%.2f (hesaplanan=%d/DB=%d)",
-                                    best_symbol,
-                                    best_ta,
-                                    len(ta_by_symbol),
-                                    len(candidates),
-                                )
-                    except Exception as exc:  # pylint: disable=broad-exception-caught
-                        rank1_logger.warning("[%s] açma hatası: %s", best_symbol, exc)
-                elif best_symbol is not None and candidates:
-                    rank1_logger.info(
-                        "Isınma bekleniyor: %d/%d aday hazır (%.0f%%), açma atlandı",
-                        len(ta_by_symbol),
-                        len(candidates),
-                        coverage * 100,
-                    )
-
-                # ── Faz 2: pozisyonun DAYANDIĞI Long sinyali artık aktif değilse kapat ──
-                # (13 Ağu 2026 bugfix: sadece "aktif Short belirdi mi" diye bakmak
-                # yetmiyordu — XPLUSDT'de Long sinyali reversal'la değil
-                # reconciliation'la (duplikat sinyal temizliği,
-                # signal_lifecycle_manager.py) sessizce kapanmıştı, hiç Short
-                # oluşmadığından pozisyon havada asılı kaldı, canlıda yakalandı.
-                # Artık kural: pozisyonun sembolünde aktif bir Long sinyali
-                # KALMAMIŞSA (sebebi ters sinyal, reconciliation, timeout, manuel
-                # kapatma — hepsi) pozisyon da kapanır.)
-                async def _fetch_reversed_open() -> list:
-                    async with get_session() as session:
-                        open_result = await session.execute(
-                            _sel(_PT.id, _PT.symbol).where(
-                                _PT.strategy == "totalamount_rank1",
-                                _PT.status == "open",
-                            )
-                        )
-                        open_trades = open_result.all()
-                        if not open_trades:
-                            return []
-                        symbols = [row.symbol for row in open_trades]
-                        still_valid_result = await session.execute(
-                            _sel(_Sig.symbol).where(
-                                _Sig.indicators == self._TOTALAMOUNT_RANK1_INDICATOR,
-                                _Sig.interval == self._TOTALAMOUNT_RANK1_SIGNAL_INTERVAL,
-                                _Sig.signal_type == "Long",
-                                _Sig.status == "active",
-                                _Sig.symbol.in_(symbols),
-                            )
-                        )
-                        still_valid = {row[0] for row in still_valid_result.all()}
-                        return [row for row in open_trades if row.symbol not in still_valid]
-
-                to_close = await run_with_db_timeout(_fetch_reversed_open())
-                for row in to_close:
-                    try:
-                        df = self.mtf_buffers.get(row.symbol, {}).get("5m")
-                        if df is None or df.empty:
-                            continue
-                        exit_price = float(df["close"].iloc[-1])
-                        await self._totalamount_rank1_close(row.id, exit_price)
-                        rank1_logger.info(
-                            "✕ KAPANDI %s @ %.6f (sinyal artık aktif değil)", row.symbol, exit_price
-                        )
-                    except Exception as exc:  # pylint: disable=broad-exception-caught
-                        rank1_logger.warning("[%s] kapatma hatası: %s", row.symbol, exc)
-
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                rank1_logger.warning("Döngü hatası: %s", exc, exc_info=True)
-            await asyncio.sleep(self._TOTALAMOUNT_RANK1_INTERVAL)
-
-    @staticmethod
-    async def _totalamount_rank1_close(trade_id: int, exit_price: float) -> None:
-        """Bir totalamount_rank1 PaperTrade'ini ters sinyal sebebiyle kapatır
-        — PaperTradeManager._apply_close ile AYNI mantık (fee/PnL/portfolio),
-        tekrar yazılmadı."""
-        from sqlalchemy import select as _sel  # pylint: disable=import-outside-toplevel
-
-        from database.models import PaperPortfolio as _PP  # pylint: disable=import-outside-toplevel
-        from database.models import PaperTrade as _PT  # pylint: disable=import-outside-toplevel
-
-        async def _do_close() -> None:
-            async with get_session() as session:
-                result = await session.execute(_sel(_PT).where(_PT.id == trade_id))
-                trade = result.scalars().first()
-                if trade is None or trade.status != "open":
-                    return
-                pf_result = await session.execute(_sel(_PP).where(_PP.strategy == trade.strategy))
-                portfolio = pf_result.scalars().first()
-                PaperTradeManager._apply_close(trade, exit_price, "reversal", portfolio)
-                if portfolio:
-                    session.add(portfolio)
-                await session.commit()
-
-        await run_with_db_timeout(_do_close())
-
-    _TOTALAMOUNT_LIVE_TTL = 300  # döngü ~90sn'de bir yayınlıyor, 3x pay
-    _TOTALAMOUNT_SERIES_LEN = 100
-
-    async def _publish_totalamount_live(
-        self, symbol: str, df: pd.DataFrame, net: np.ndarray
-    ) -> None:
-        """(symbol) için önceden hesaplanmış Totalamount serisini (net,
-        bkz. signals/totalamount_rank1.py::net_ta_series) Redis'e yazar —
-        _totalamount_rank1_loop'ta ZATEN hesaplanmış diziyi alır, burada
-        tekrar hesaplamaz (13 Ağu bugfix: sembol başına çift hesaplama
-        kaldırıldı). desktop/workers/totalamount_worker.py'nin okuduğu,
-        divergence_live:{symbol}:{interval} ile AYNI desende."""
-        redis = RedisClient.get_client()
-        try:
-            net_tail = net[-self._TOTALAMOUNT_SERIES_LEN :]
-            ts_tail = (
-                (df["open_time"].tail(len(net_tail)) / 1000.0).tolist()
-                if "open_time" in df.columns
-                else []
-            )
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            logger.debug("[TotalamountLive] %s hesaplanamadı: %s", symbol, exc)
-            return
-
-        payload = {
-            "value_now": round(float(net_tail[-1]), 4),
-            "recent": [round(float(v), 4) for v in net_tail.tolist()],
-            "ts_recent": ts_tail,
-            "ts": int(time.time()),
-        }
-        try:
-            await asyncio.wait_for(
-                redis.set(
-                    f"totalamount_live:{symbol}:5m",
-                    json.dumps(payload),
-                    ex=self._TOTALAMOUNT_LIVE_TTL,
-                ),
-                timeout=SAFE_EXTERNAL_TIMEOUT,
-            )
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            logger.debug("[TotalamountLive] %s Redis yazımı başarısız: %s", symbol, exc)
-
-    async def _publish_totalamount_snapshot(self, ta_by_symbol: Dict[str, float]) -> None:
-        """Tüm adayların GÜNCEL Totalamount değerini + sıralarını tek bir
-        Redis key'ine yazar (Rank panelinin tablo/rozet ihtiyacı için — tam
-        seri gerekmez, sadece "şu an kim kaçıncı sırada")."""
-        if not ta_by_symbol:
-            return
-        ordered = sorted(ta_by_symbol.items(), key=lambda kv: kv[1], reverse=True)
-        result = [
-            {"symbol": sym, "value": round(val, 4), "rank": idx + 1}
-            for idx, (sym, val) in enumerate(ordered)
-        ]
-        redis = RedisClient.get_client()
-        try:
-            await asyncio.wait_for(
-                redis.set(
-                    "totalamount_rank1:snapshot", json.dumps(result), ex=self._TOTALAMOUNT_LIVE_TTL
-                ),
-                timeout=SAFE_EXTERNAL_TIMEOUT,
-            )
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            logger.debug("[TotalamountLive] snapshot yazılamadı: %s", exc)
 
     _HA_ALIGNMENT_TFS = ("4h", "6h", "8h", "12h")
     _HA_ALIGNMENT_INTERVAL = 90  # ranking ile aynı kademe
@@ -3297,23 +3029,6 @@ class LiveDataManager:
                 xray_logger.warning("Yayın hatası: %s", exc, exc_info=True)
             await asyncio.sleep(self._TRADE_XRAY_INTERVAL)
 
-    async def _manual_refresh_loop(self) -> None:
-        """UI'dan açılan manuel işlemleri algılayıp manual_manager cache'ini yeniler."""
-        redis = RedisClient.get_client()
-        while True:
-            await asyncio.sleep(10)
-            try:
-                val = await redis.get("manual_trade:refresh")
-                if val:
-                    await manual_manager.load_open_symbols()
-                    await redis.delete("manual_trade:refresh")
-                    logger.info(
-                        "[ManualTrade] Cache yenilendi: %d açık sembol",
-                        len(manual_manager._open_symbols),
-                    )  # noqa: SLF001
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.debug("[ManualTrade] refresh kontrolü başarısız: %s", exc)
-
     async def _startup_signal_reconciliation(self) -> None:
         """MTF buffer'lar hazır olduktan sonra aktif sinyalleri kontrol eder.
 
@@ -3429,16 +3144,14 @@ class LiveDataManager:
             # metodun docstring'i)
             self._bg_tasks: list[asyncio.Task] = [
                 asyncio.create_task(self._continuous_gap_heal_loop()),
+                asyncio.create_task(self._mtf_resync_loop()),
                 asyncio.create_task(self._ticker_refresh_loop()),
                 asyncio.create_task(self._oi_refresh_loop()),
                 asyncio.create_task(self._price_publish_loop()),
                 asyncio.create_task(self._vpmv_post_loop()),
-                asyncio.create_task(self._manual_refresh_loop()),
                 asyncio.create_task(self._active_signal_registry_loop()),
-                asyncio.create_task(self._open_trade_registry_loop()),
                 asyncio.create_task(self._ranking_publish_loop()),
                 asyncio.create_task(self._ha_alignment_publish_loop()),
-                asyncio.create_task(self._totalamount_rank1_loop()),
                 asyncio.create_task(self._trade_xray_publish_loop()),
             ]
 

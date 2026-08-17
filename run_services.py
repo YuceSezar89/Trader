@@ -5,7 +5,6 @@ import os
 import resource
 import signal
 import socket
-import subprocess
 import time
 from datetime import datetime, timedelta
 
@@ -27,88 +26,32 @@ from utils.logger import get_logger
 logger = get_logger("ServiceRunner")
 
 
-def start_pgbouncer():  # pylint: disable=too-many-branches,too-many-statements
-    """PgBouncer'ı başlatır ve hazır olmasını bekler."""
+def start_pgbouncer():
+    """PgBouncer'ın hazır olmasını bekler.
 
-    # Önce PgBouncer'ın zaten çalışıp çalışmadığını kontrol et
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(1)
-        result = sock.connect_ex(("localhost", 6432))
-        sock.close()
-        if result == 0:
-            logger.info("PgBouncer zaten çalışıyor ve hazır")
-            return True
-    except OSError:
-        pass
-
-    # Eğer mevcut dizinde bir pidfile varsa, kontrol et ve stale (çalışmayan) ise yedekle
-    pidfile = os.path.join(os.getcwd(), "pgbouncer.pid")
-    if os.path.exists(pidfile):
+    PgBouncer artık homebrew.mxcl.pgbouncer LaunchAgent'ı (KeepAlive+RunAtLoad)
+    tarafından tek instance olarak yönetiliyor. Burada ayrıca bir instance
+    spawn ETMİYORUZ — aynı portu/unix socket'i kullanan ikinci bir pgbouncer
+    "unix socket is in use" ile sürekli çöküp restart oluyordu (16 Ağu 2026,
+    disk dolması + sistem donmasına katkıda bulunan zincirin bir parçasıydı).
+    """
+    for _ in range(30):  # homebrew LaunchAgent'ın ayağa kalkması için bekle
         try:
-            with open(pidfile, "r", encoding="utf-8") as f:
-                existing_pid = int(f.read().strip())
-        except (OSError, ValueError):
-            existing_pid = None
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(1)
+            result = sock.connect_ex(("localhost", 6432))
+            sock.close()
+            if result == 0:
+                logger.info("PgBouncer hazır (homebrew.mxcl.pgbouncer)")
+                return True
+        except OSError:
+            pass
+        time.sleep(1)
 
-        if existing_pid:
-            try:
-                # `ps -p <pid> -o comm=` ile süreç adını al
-                out = subprocess.run(
-                    ["ps", "-p", str(existing_pid), "-o", "comm="],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                proc_name = out.stdout.strip()
-                if "pgbouncer" not in proc_name.lower():
-                    # pidfile stale görünüyorsa yedekle ve devam et
-                    bak = pidfile + ".bak"
-                    try:
-                        os.replace(pidfile, bak)
-                        logger.warning(
-                            "Stale pidfile bulundu (PID=%s). Yedeklendi: %s",
-                            existing_pid,
-                            bak,
-                        )
-                    except OSError:
-                        logger.warning(
-                            "Stale pidfile bulundu, fakat yedekleme başarısız. El ile kontrol edin."
-                        )
-                else:
-                    logger.info("PgBouncer zaten çalışıyor (pidfile işaret ediyor).")
-                    return True
-            except OSError:
-                logger.warning("pidfile okundu fakat süreç doğrulanamadı; pidfile taşınacak")
-                try:
-                    os.replace(pidfile, pidfile + ".bak")
-                except OSError:
-                    pass
-
-    logger.info("PgBouncer başlatılıyor...")
-    try:
-        # PgBouncer'ı başlat
-        subprocess.run(["pgbouncer", "-d", "pgbouncer.ini"], check=True, cwd=os.getcwd())
-
-        # PgBouncer'ın hazır olmasını bekle (basit port kontrolü)
-        for _ in range(10):  # 10 saniye bekle
-            try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(1)
-                result = sock.connect_ex(("localhost", 6432))
-                sock.close()
-                if result == 0:
-                    logger.info("PgBouncer başarıyla başlatıldı ve hazır")
-                    return True
-            except OSError:
-                pass
-            time.sleep(1)
-
-        logger.error("PgBouncer başlatılamadı veya hazır değil")
-        return False
-    except Exception as e:  # pylint: disable=broad-exception-caught
-        logger.error(f"PgBouncer başlatma hatası: {e}")
-        return False
+    logger.error(
+        "PgBouncer 30 saniye içinde hazır olmadı (homebrew.mxcl.pgbouncer servisini kontrol edin)"
+    )
+    return False
 
 
 def _run_performance_update(perf_logger) -> None:
@@ -386,7 +329,17 @@ async def run_all_services():
     # 7. Heartbeat watchdog: bileşenler bayatlarsa Telegram'a bildirir
     heartbeat_task = asyncio.create_task(
         _supervised(
-            heartbeat_watchdog_loop(max_age_seconds={"redis_batch_flush": 60, "ws_ingestion": 120}),
+            heartbeat_watchdog_loop(
+                max_age_seconds={
+                    "redis_batch_flush": 60,
+                    "ws_ingestion": 120,
+                    # 16 Ağu 2026: masaüstü panel donduğunda (05:03-12:11, 7 saat)
+                    # hiçbir izleme yoktu. Panel manuel açılıp kapatıldığı için
+                    # key yoksa (watchdog_loop last is None → skip) alarm YOK —
+                    # sadece panel açıkken donarsa alarm üretir.
+                    "desktop_panel": 60,
+                }
+            ),
             "heartbeat_watchdog",
         ),
         name="heartbeat_watchdog",

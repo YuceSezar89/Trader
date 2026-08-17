@@ -310,7 +310,7 @@ async def _count_ha_ultra_confirm(
             if symbol_buffers is not None:
                 df = symbol_buffers.get(tf)
             else:
-                df = await RedisClient.get_mtf_klines(symbol, tf)
+                df = await RedisClient.get_fresh_klines(symbol, tf)
             if df is None or len(df) < 2:
                 return None
             closed = df.iloc[:-1]
@@ -341,7 +341,7 @@ async def _count_htf_ha_bullish(
             if symbol_buffers is not None:
                 df = symbol_buffers.get(tf)
             else:
-                df = await RedisClient.get_mtf_klines(symbol, tf)
+                df = await RedisClient.get_fresh_klines(symbol, tf)
             if df is None or df.empty:
                 continue
             if "ha_open" not in df.columns or "ha_close" not in df.columns:
@@ -378,7 +378,7 @@ async def _compute_mtf_score(
             if symbol_buffers is not None:
                 df = symbol_buffers.get(tf)
             else:
-                df = await RedisClient.get_mtf_klines(symbol, tf)
+                df = await RedisClient.get_fresh_klines(symbol, tf)
             if df is None or df.empty or "st_direction" not in df.columns:
                 continue
             valid = df["st_direction"].dropna()
@@ -558,7 +558,7 @@ async def _compute_fvg(symbol: str, sig_type: str, entry_price: float) -> str:
     try:
         for tf in _FVG_TIMEFRAMES:
             try:
-                df_tf = await RedisClient.get_mtf_klines(symbol, tf)
+                df_tf = await RedisClient.get_fresh_klines(symbol, tf)
                 if df_tf is None or df_tf.empty:
                     continue
                 if not {"open", "high", "low", "close", "volume"}.issubset(df_tf.columns):

@@ -27,6 +27,7 @@ try:
 except (ValueError, OSError):
     pass
 
+import signals.registry_loops as registry_loops
 from config import Config
 from indicators.financial_metrics import calculate_metrics
 from signals.do_open_streak import do_open_streak_detector
@@ -41,9 +42,11 @@ from signals.paper_trade_manager import (
     ta_kovalama_live_manager,
     tf_alignment_live_manager,
 )
+from signals.registry_loops import manual_refresh_loop, open_trade_registry_loop
 from signals.risk_manager import risk_manager
 from signals.signal_processor import process_and_enrich_signals, trim_to_closed_bar
 from signals.tf_alignment_gate import load_pending_from_db, tf_alignment_eval_loop
+from signals.totalamount_rank1_loop import totalamount_rank1_loop
 from signals.trade_snapshot import trade_snapshot_loop
 from utils.data_health import data_health_loop
 from utils.heartbeat import beat, record_activity, throughput_watchdog_loop, watchdog_loop
@@ -192,7 +195,7 @@ async def _get_ref_df_cached(interval: str) -> "pd.DataFrame | None":
     now = time.monotonic()
     if cached is not None and (now - cached[0]) < _REF_DF_CACHE_TTL:
         return cached[1]
-    ref_df = await RedisClient.get_mtf_klines(Config.MARKET_REFERENCE_SYMBOL, interval)
+    ref_df = await RedisClient.get_fresh_klines(Config.MARKET_REFERENCE_SYMBOL, interval)
     if ref_df is not None:
         _ref_df_cache[interval] = (now, ref_df)
     return ref_df
@@ -216,12 +219,18 @@ async def _process_event(fields: dict) -> None:
         await _incr_metric("metrics:sigsvc:idempotency_skip")
         return
 
-    df = await RedisClient.get_mtf_klines(symbol, interval)
+    df = await RedisClient.get_fresh_klines(symbol, interval)
     ref_df = await _get_ref_df_cached(interval)
     if df is None or ref_df is None or df.empty or ref_df.empty:
         logger.debug("[%s] %s buffer eksik, atlanıyor", symbol, interval)
         await _incr_metric("metrics:sigsvc:buffer_eksik")
         return
+
+    # Dinamik ATR trailing yayını — açık paper trade'i olan (symbol, interval)
+    # çiftleri için (bkz. signals/registry_loops.py). df zaten get_fresh_klines
+    # ile alındığı için ekstra sorgu gerekmez.
+    if (symbol, interval) in registry_loops.open_trade_symbols:
+        await registry_loops.publish_atr_live(symbol, interval, df)
 
     try:
         closed_open_time = int(open_time)
@@ -562,6 +571,15 @@ async def run_all() -> None:
         _supervised(data_health_loop(), "signal_service_data_health"),
         name="signal_service_data_health",
     )
+    totalamount_task = asyncio.create_task(
+        _supervised(totalamount_rank1_loop(), "totalamount_rank1"), name="totalamount_rank1"
+    )
+    open_trade_registry_task = asyncio.create_task(
+        _supervised(open_trade_registry_loop(), "open_trade_registry"), name="open_trade_registry"
+    )
+    manual_refresh_task = asyncio.create_task(
+        _supervised(manual_refresh_loop(), "manual_refresh"), name="manual_refresh"
+    )
     tasks = {
         consume_task,
         risk_check_task,
@@ -573,6 +591,9 @@ async def run_all() -> None:
         tf_alignment_task,
         trade_snapshot_task,
         data_health_task,
+        totalamount_task,
+        open_trade_registry_task,
+        manual_refresh_task,
     }
 
     def _handler(sig_name: str) -> None:

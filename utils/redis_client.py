@@ -22,6 +22,14 @@ _ARROW_MAGIC = b"ARDF"
 # 8 thread gereksiz GIL çekişmesi yaratıyordu (bkz. live_data_manager.py yorumu).
 _ARROW_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="arrow")
 
+# get_fresh_klines'ın add_all_indicators çağrısı için AYRI havuz (17 Ağu 2026)
+# — _ARROW_EXECUTOR'ı (yukarıdaki not: bilerek küçük tutuluyor, Arrow
+# serialize hafif bir iş) paylaşmak canlıda kanıtlandı ki YANLIŞ: bar-kapanışı
+# burst'ünde (550 sembol aynı anda) add_all_indicators (~18ms, gerçekten
+# CPU-yoğun) bu 4 worker'lı küçük havuzu doldurup kuyruk oluşturuyor, bazı
+# sinyal kontrolleri 1-2 saniyeye kadar gecikiyordu.
+_INDICATOR_EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="mtf_indicator")
+
 # Ana pool'un (BlockingConnectionPool) bağlantı-edinme timeout'u. Dıştan bu pool'a
 # karşı asyncio.wait_for ile sarılan HER çağrı, SAFE_EXTERNAL_TIMEOUT'tan kısa bir
 # süre kullanmamalı — aksi halde pool kendi temiz ConnectionError'ını fırlatamadan
@@ -50,6 +58,17 @@ class RedisClient:
     _pending_publishes: Set[str] = set()  # "symbol:tf"
     _pending_kline_closed: List[Dict[str, Any]] = []  # XADD kline_closed için birikmiş event'ler
     _flusher_task: Optional[asyncio.Task] = None
+
+    # get_mtf_klines kendi kendini onarma state'i (16 Ağu 2026) — bkz. o metodun
+    # docstring'i: bayat/eksik bir buffer görülünce arka planda CA'dan tazeler.
+    _mtf_refresh_inflight: Set[str] = set()
+    _mtf_refresh_last_attempt: Dict[str, float] = {}
+    _MTF_REFRESH_COOLDOWN_SEC = 60
+
+    # get_fresh_klines'ın doğrudan Postgres/CA'dan okuyabildiği TF'ler (17 Ağu
+    # 2026) — bkz. o metodun docstring'i. 1m/30m/1d bu kümede yok: 1m/30m CA
+    # karşılığı yok veya WS zaten sürekli taze tutuyor, 1d için de CA yok.
+    _CAGG_TIMEFRAMES = {"5m", "15m", "1h", "4h", "6h", "8h", "12h"}
 
     @classmethod
     def _get_write_semaphore(cls) -> asyncio.Semaphore:
@@ -485,32 +504,131 @@ class RedisClient:
         """
         Multi-timeframe kline verilerini cache'den okur.
         Önce in-memory _pending_klines'a bakar (Redis round-trip yok).
-        """
+
+        16 Ağu 2026: dönen buffer istenen limit'in yarısından azsa (eskiden
+        restart anında bir kez dolup bir daha hiç tazelenmeyen, saatlerce
+        eksik kalabilen buffer'lar — bkz. proje hafızası, aynı gün) arka
+        planda (bloklamadan) CA'dan tazeleme tetiklenir. Bu fonksiyonu
+        çağıran HER yer (tüm stratejiler, sinyal üretimi, masaüstü panel)
+        otomatik kendi kendini onarır — tek tek strateji taşımaya gerek
+        kalmaz."""
         key = cls._get_mtf_key(symbol, timeframe, "live_kline_data")
+        df: Optional[pd.DataFrame] = None
 
         cached = cls._pending_klines.get(key)
         if cached is not None:
             arrow_bytes, _ = cached
             try:
                 loop = asyncio.get_running_loop()
-                df = await loop.run_in_executor(
+                raw_df = await loop.run_in_executor(
                     _ARROW_EXECUTOR, cls._arrow_bytes_to_df, arrow_bytes
                 )
-                if df is not None and not df.empty:
-                    return df.tail(limit) if limit else df
+                if raw_df is not None and not raw_df.empty:
+                    df = raw_df.tail(limit) if limit else raw_df
             except Exception:
                 pass
 
+        if df is None:
+            try:
+                raw_df = await cls.get_df(key)
+                if raw_df is not None and not raw_df.empty:
+                    df = raw_df.tail(limit) if limit else raw_df
+            except Exception as e:
+                logger.error("MTF klines okuma hatası [%s:%s]: %s", symbol, timeframe, e)
+
+        # 16 Ağu 2026 düzeltmesi: gerçek çağıranların HİÇBİRİ limit vermiyor
+        # (signal_service.py, signal_processor.py — hepsi limit=None ile
+        # çağırıyor), yani yukarıdaki kontrol limit=None ile hiç tetiklenmezdi.
+        # limit verilmemişse config'teki standart hedefi kullan.
+        check_limit = limit or Config.MTF_BUFFER_LIMITS.get(timeframe)
+        if check_limit and (df is None or len(df) < check_limit * 0.5):
+            cls._maybe_trigger_mtf_refresh(symbol, timeframe, check_limit)
+
+        return df
+
+    @classmethod
+    async def get_fresh_klines(
+        cls, symbol: str, timeframe: str, limit: Optional[int] = None
+    ) -> Optional[pd.DataFrame]:
+        """Kritik karar noktaları (sinyal üretimi) için — CA'da olan TF'ler
+        (bkz. _CAGG_TIMEFRAMES) HER ZAMAN doğrudan Postgres'ten okunur, asla
+        bayat olamaz (~25ms: CA sorgusu + gösterge hesabı, thread pool'da —
+        ana event loop'u bloke etmez). Diğer TF'ler (1m/30m/1d — CA
+        karşılığı yok veya WS zaten sürekli taze tutuyor, DB'ye her turda
+        gitmek gereksiz yük+gecikme olurdu) get_mtf_klines'ın kendi kendini
+        onaran Redis okumasına düşer.
+
+        17 Ağu 2026: signal_service.py/signal_processor.py'nin gerçek karar
+        anlarında bayat önbelleğe bağımlı kalmaması için eklendi — bkz.
+        proje hafızası (RedisClient'in "kritik yol Redis'e hiç bağımlı
+        olmamalı" ilkesi)."""
+        if timeframe in cls._CAGG_TIMEFRAMES:
+            target_limit = limit or Config.MTF_BUFFER_LIMITS.get(timeframe, 250)
+            try:
+                from database.crud import (  # pylint: disable=import-outside-toplevel
+                    get_cagg_klines,
+                )
+                from indicators.core import (  # pylint: disable=import-outside-toplevel
+                    add_all_indicators,
+                )
+
+                raw = await get_cagg_klines(symbol, timeframe, target_limit)
+                if raw is not None and not raw.empty:
+                    loop = asyncio.get_running_loop()
+                    return await loop.run_in_executor(_INDICATOR_EXECUTOR, add_all_indicators, raw)
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                logger.debug(
+                    "get_fresh_klines CA okuma başarısız [%s:%s]: %s", symbol, timeframe, e
+                )
+        return await cls.get_mtf_klines(symbol, timeframe, limit)
+
+    @classmethod
+    def _maybe_trigger_mtf_refresh(cls, symbol: str, timeframe: str, limit: int) -> None:
+        """Bayat/eksik bir get_mtf_klines sonucunu arka planda CA'dan tazeler
+        — aynı anda tekrar tetiklenmesin (inflight) ve CA'nın kendisi de
+        gerçekten eksikse (ör. sembol top-550'den düşmüş) her çağrıda
+        boşuna Postgres'e gitmesin (cooldown) diye korumalı."""
+        refresh_key = f"{symbol}:{timeframe}"
+        now = time.time()
+        if refresh_key in cls._mtf_refresh_inflight:
+            return
+        if now - cls._mtf_refresh_last_attempt.get(refresh_key, 0) < cls._MTF_REFRESH_COOLDOWN_SEC:
+            return
+        cls._mtf_refresh_last_attempt[refresh_key] = now
+        cls._mtf_refresh_inflight.add(refresh_key)
+        asyncio.create_task(cls._background_mtf_refresh(symbol, timeframe, limit, refresh_key))
+
+    @classmethod
+    async def _background_mtf_refresh(
+        cls, symbol: str, timeframe: str, limit: int, refresh_key: str
+    ) -> None:
+        """16 Ağu 2026 düzeltmesi: get_cagg_klines HAM OHLCV döndürür
+        (st_direction/ha_open/rsi vb. gösterge kolonları YOK) — bunları
+        add_all_indicators ile hesaplamadan Redis'e yazmak, o sembolün
+        Supertrend/HA_Cross tabanlı sinyallerini SESSİZCE kırardı (kolon
+        yok → None/continue, hata bile vermez). add_all_indicators CPU
+        işidir, ana event loop'u bloke etmemesi için thread pool'da
+        çalıştırılır (live_data_manager.py::_load_symbol_all_timeframes
+        ile aynı desen)."""
         try:
-            df = await cls.get_df(key)
-            if df is not None and not df.empty:
-                if limit:
-                    df = df.tail(limit)
-                return df
-            return None
-        except Exception as e:
-            logger.error("MTF klines okuma hatası [%s:%s]: %s", symbol, timeframe, e)
-            return None
+            from database.crud import (  # pylint: disable=import-outside-toplevel
+                get_cagg_klines,
+            )
+            from indicators.core import (  # pylint: disable=import-outside-toplevel
+                add_all_indicators,
+            )
+
+            fresh = await get_cagg_klines(symbol, timeframe, limit)
+            if fresh is not None and not fresh.empty:
+                loop = asyncio.get_running_loop()
+                enriched = await loop.run_in_executor(
+                    _INDICATOR_EXECUTOR, add_all_indicators, fresh
+                )
+                await cls.set_mtf_klines(symbol, timeframe, enriched, already_owned=True)
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.debug("MTF arka plan tazeleme başarısız [%s:%s]: %s", symbol, timeframe, e)
+        finally:
+            cls._mtf_refresh_inflight.discard(refresh_key)
 
     @classmethod
     async def set_mtf_indicators(
