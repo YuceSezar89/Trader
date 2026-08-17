@@ -16,10 +16,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-# 14 Ağu 2026: --disable-gpu KALDIRILDI (deneme) — yazılım compositing'in
-# (CPU/RAM üzerinde render) 42-53GB'lık native bellek patlamalarının kaynağı
-# olabileceği şüphesiyle. GPU hızlandırma açıldığında sorun tekrarlanırsa
-# geri alınacak.
+# 14 Ağu 2026'da "yazılım compositing 42-53GB'lık patlamaların kaynağı
+# olabilir" şüphesiyle kaldırılmıştı. 17 Ağu 2026: ölçüldü, şüphe TERS
+# çıktı — GPU AÇIKKEN renderer boşta bile dakikada ~65-90MB büyüyor
+# (10dk'da 127MB->940MB+), GPU KAPALIYKEN aynı sürede +5MB (gürültü
+# seviyesi). Geri eklendi.
+os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu")
 
 # basicConfig hiç çağrılmıyordu — root logger varsayılan (WARNING) seviyede
 # kalıp tüm .info() çağrıları (JS console köprüsü dahil) sessizce yutuluyordu
