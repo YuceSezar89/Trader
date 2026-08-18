@@ -19,9 +19,14 @@ from database.engine import get_session, run_with_db_timeout
 from database.models import PaperTrade
 from database.signal_repository import build_trade_snapshot
 from signals.market_context import (
+    calculate_metrics_via_pool,
+    classify_candle,
     compute_cvd_slope,
+    compute_signal_extras,
     compute_smc_market_structure,
     compute_vp_score,
+    get_ref_df_cached,
+    prepare_for_metrics,
 )
 from signals.vpm_calculator import VPMCalculator
 from utils.vpmv import compute_components
@@ -52,9 +57,7 @@ async def _snapshot_one(
         price = float(df["close"].iloc[-1])
         side = 1.0 if signal_type == "Long" else -1.0
         price_since_entry_pct = (
-            round((price - entry_price) / entry_price * 100.0 * side, 4)
-            if entry_price
-            else None
+            round((price - entry_price) / entry_price * 100.0 * side, 4) if entry_price else None
         )
         cvd = compute_cvd_slope(df)
         vp_buy, vp_sell = compute_vp_score(df)
@@ -65,9 +68,33 @@ async def _snapshot_one(
         vpmv_combined = VPMCalculator.calculate(
             vol_score=vol_s, momentum_score=mom_s, vlt_score=vlt_s, price_score=prc_s
         )
+        _, body_pct, wick_pct = classify_candle(df.iloc[-1])  # kategori değil, sadece oranlar
+        extras = compute_signal_extras(df) or {}
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.debug("[%s] snapshot hesaplanamadı: %s", symbol, exc)
         return
+
+    # 17 Ağu 2026 (migration 036): alpha/beta + finansal oranlar — BTC referansı
+    # gerektiriyor, ayrı bir try bloğunda (başarısız olursa snapshot'ın geri
+    # kalanı YİNE de yazılsın, bu aile opsiyonel/best-effort).
+    alpha = beta = sharpe = sortino = calmar = treynor = information = None
+    try:
+        ref_df = await get_ref_df_cached(interval)
+        if ref_df is not None and not ref_df.empty and "open_time" in df.columns:
+            df_prepared, ref_df_prepared = prepare_for_metrics(df, ref_df)
+            df_with_metrics = await calculate_metrics_via_pool(
+                df_prepared, ref_df_prepared, interval
+            )
+            last = df_with_metrics.iloc[-1]
+            alpha = last.get("alpha")
+            beta = last.get("beta")
+            sharpe = last.get("sharpe_ratio")
+            sortino = last.get("sortino_ratio")
+            calmar = last.get("calmar_ratio")
+            treynor = last.get("treynor_ratio")
+            information = last.get("information_ratio")
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.debug("[%s] alpha/beta/finansal oran hesaplanamadı: %s", symbol, exc)
 
     try:
         # 2 Ağu 2026 (Fable 5 mimari denetimi, Kademe 3): kuruluş build_trade_
@@ -88,6 +115,19 @@ async def _snapshot_one(
             price_since_entry_pct=price_since_entry_pct,
             vpmv_combined=vpmv_combined,
             smc_market_structure=smc_struct,
+            alpha=alpha,
+            beta=beta,
+            sharpe_ratio=sharpe,
+            sortino_ratio=sortino,
+            calmar_ratio=calmar,
+            treynor_ratio=treynor,
+            information_ratio=information,
+            signal_rsi_change=extras.get("rsi_change"),
+            signal_mfi_change=extras.get("mfi_change"),
+            signal_macd_change=extras.get("macd_change"),
+            signal_obv=extras.get("obv"),
+            body_pct=body_pct,
+            wick_pct=wick_pct,
         )
         async with get_session() as session:
             session.add(snapshot)

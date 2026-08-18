@@ -287,10 +287,26 @@ def build_trade_snapshot(
     price_since_entry_pct: Optional[float],
     vpmv_combined: Optional[float],
     smc_market_structure: Optional[str],
+    alpha: Optional[float] = None,
+    beta: Optional[float] = None,
+    sharpe_ratio: Optional[float] = None,
+    sortino_ratio: Optional[float] = None,
+    calmar_ratio: Optional[float] = None,
+    treynor_ratio: Optional[float] = None,
+    information_ratio: Optional[float] = None,
+    signal_rsi_change: Optional[float] = None,
+    signal_mfi_change: Optional[float] = None,
+    signal_macd_change: Optional[float] = None,
+    signal_obv: Optional[float] = None,
+    body_pct: Optional[float] = None,
+    wick_pct: Optional[float] = None,
 ) -> TradeSnapshot:
     """Açık bir paper trade için periyodik piyasa-bağlamı anlık görüntüsü
     kurar — dönen nesne HENÜZ session'a eklenmemiştir. trade_snapshot.py'nin
-    tek yazma noktasıydı, kopya riski yoktu — sadece tutarlılık için taşındı."""
+    tek yazma noktasıydı, kopya riski yoktu — sadece tutarlılık için taşındı.
+
+    17 Ağu 2026 (migration 036): alpha/beta/finansal oranlar/mum oranları
+    eklendi — hepsi opsiyonel (varsayılan None), eski çağrı yerleri bozulmaz."""
     # Orijinal kod SADECE vp_buy is not None kontrolü yapıyordu (vp_sell'i
     # değil) — birebir aynı davranış korunuyor, "iyileştirme" yapılmadı.
     vp_score = round(vp_buy - vp_sell, 2) if vp_buy is not None else None
@@ -310,6 +326,21 @@ def build_trade_snapshot(
         price_since_entry_pct=price_since_entry_pct,
         vpmv_combined=round(vpmv_combined, 2) if vpmv_combined is not None else None,
         smc_market_structure=smc_market_structure,
+        alpha=round(alpha, 4) if alpha is not None else None,
+        beta=round(beta, 4) if beta is not None else None,
+        sharpe_ratio=round(sharpe_ratio, 4) if sharpe_ratio is not None else None,
+        sortino_ratio=round(sortino_ratio, 4) if sortino_ratio is not None else None,
+        calmar_ratio=round(calmar_ratio, 4) if calmar_ratio is not None else None,
+        treynor_ratio=round(treynor_ratio, 4) if treynor_ratio is not None else None,
+        information_ratio=(round(information_ratio, 4) if information_ratio is not None else None),
+        signal_rsi_change=(round(signal_rsi_change, 4) if signal_rsi_change is not None else None),
+        signal_mfi_change=(round(signal_mfi_change, 4) if signal_mfi_change is not None else None),
+        signal_macd_change=(
+            round(signal_macd_change, 4) if signal_macd_change is not None else None
+        ),
+        signal_obv=round(signal_obv, 2) if signal_obv is not None else None,
+        body_pct=round(body_pct, 2) if body_pct is not None else None,
+        wick_pct=round(wick_pct, 2) if wick_pct is not None else None,
     )
 
 

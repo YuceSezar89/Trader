@@ -393,6 +393,25 @@ class TradeSnapshot(Base):
     vpmv_combined: Mapped[float | None] = mapped_column(Float, nullable=True)
     smc_market_structure: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
+    # 17 Ağu 2026 (migration 036): alpha/beta + finansal oranlar (HAM, normalize
+    # edilmemiş — normalized_composite/scaled_avg_normalized'ın "50'ye yapışma"
+    # bug'ı burada YOK) + Sinyal Mumu Ratioları. totalamount_rank1 (signal_id'siz
+    # açılan tek aktif strateji) için bu ailenin TEK kaynağı — bkz.
+    # memory/project_financial_metrics_pine_mismatch_10agu.md.
+    alpha: Mapped[float | None] = mapped_column(Float, nullable=True)
+    beta: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sharpe_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sortino_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
+    calmar_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
+    treynor_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
+    information_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
+    signal_rsi_change: Mapped[float | None] = mapped_column(Float, nullable=True)
+    signal_mfi_change: Mapped[float | None] = mapped_column(Float, nullable=True)
+    signal_macd_change: Mapped[float | None] = mapped_column(Float, nullable=True)
+    signal_obv: Mapped[float | None] = mapped_column(Float, nullable=True)
+    body_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    wick_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+
 
 class PaperPortfolio(Base):
     __tablename__ = "paper_portfolio"

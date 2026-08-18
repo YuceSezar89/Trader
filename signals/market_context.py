@@ -12,12 +12,29 @@ VPMV bileşenleri BURADA DEĞİL — zaten utils/vpmv.py::compute_components'te
 modüler, oradan doğrudan import edilmeli.
 """
 
+import asyncio
+import functools
+import time
+from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from typing import Optional
 
 import numpy as np
 import pandas as pd
 
-from indicators.core import truncate_after_gap
+from config import Config
+from indicators.core import (
+    calculate_macd,
+    calculate_mfi,
+    calculate_obv,
+    calculate_rsi,
+    truncate_after_gap,
+)
+from indicators.financial_metrics import calculate_metrics
+from utils.logger import get_logger
+from utils.redis_client import RedisClient
+
+logger = get_logger("MarketContext")
 
 
 def compute_cvd_slope(df: pd.DataFrame) -> Optional[float]:
@@ -126,3 +143,130 @@ def compute_smc_market_structure(df: pd.DataFrame, sig_type: str, lookback: int 
         return "-"
     except Exception:  # pylint: disable=broad-exception-caught
         return "-"
+
+
+# 2 Ağu 2026 (Fable 5 performans denetimi): get_mtf_klines'ın in-process cache'i
+# sadece veriyi YAZAN process'te (live_data_manager) dolu — signal_service.py
+# ayrı bir process olduğu için BTC referansı her _process_event çağrısında
+# gerçek bir Redis GET + Arrow deserialize'a düşüyordu. Bir bar-kapanışı
+# burst'ünde (ör. 5m'de 548 sembol) hepsi AYNI BTC verisini istiyor — kısa
+# TTL'li (2sn) interval-bazlı bir cache, aynı burst içindeki tekrarları eler.
+# 17 Ağu 2026: signal_service.py'den buraya taşındı — trade_snapshot.py da
+# (alpha/beta/finansal oranlar için) aynı BTC referansına ihtiyaç duyunca
+# signal_service.py'ye dairesel import olmadan erişebilsin diye.
+_REF_DF_CACHE_TTL = 2.0
+_ref_df_cache: dict[str, tuple[float, pd.DataFrame]] = {}
+
+# calculate_metrics CPU-yoğun (rolling regresyon + çok sayıda normalize_series
+# çağrısı) — ayrı bir process pool'da çalıştırılıyor ki event loop bloklanmasın.
+# 17 Ağu 2026: signal_service.py'den buraya taşındı — trade_snapshot.py da
+# (alpha/beta/finansal oranların periyodik izlemesi için) AYNI havuzu
+# kullanmalı, iki ayrı pool açmak gereksiz process/bellek maliyeti olurdu.
+_METRICS_POOL_WORKERS = 5
+_metrics_pool = ProcessPoolExecutor(max_workers=_METRICS_POOL_WORKERS)
+
+
+def prepare_for_metrics(
+    df: pd.DataFrame, ref_df: pd.DataFrame
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """calculate_metrics'in beklediği DatetimeIndex'e çevirir (open_time ms ->
+    index) — signal_processor.py VE trade_snapshot.py AYNI hazırlığı yapıyordu
+    (17 Ağu 2026, pylint duplicate-code uyarısı), buraya toplandı."""
+    df_prepared = df.copy()
+    df_prepared.index = pd.Index(pd.to_datetime(df_prepared["open_time"], unit="ms"))
+    ref_df_prepared = ref_df.copy()
+    ref_df_prepared.index = pd.Index(pd.to_datetime(ref_df_prepared["open_time"], unit="ms"))
+    return df_prepared, ref_df_prepared
+
+
+async def calculate_metrics_via_pool(
+    df_prepared: pd.DataFrame, ref_df_prepared: pd.DataFrame, interval: str
+) -> pd.DataFrame:
+    """calculate_metrics'i ProcessPoolExecutor'da çalıştırır. Pool çökerse (BrokenProcessPool)
+    pool yeniden oluşturulur VE aynı event senkron olarak (yavaş ama veri kaybetmeden)
+    hesaplanır — process_and_enrich_signals gerçek DB yazımı/paper trade tetiklemesi
+    içerdiği için bu event'in sessizce kaybolması kabul edilebilir değil (dry_run/gölge
+    dönemindeki eski davranıştan bilinçli fark)."""
+    global _metrics_pool  # pylint: disable=global-statement
+    loop = asyncio.get_running_loop()
+    fn = functools.partial(calculate_metrics, df_prepared, ref_df_prepared, interval=interval)
+    try:
+        return await loop.run_in_executor(_metrics_pool, fn)
+    except BrokenProcessPool as e:
+        logger.warning(
+            "ENDİŞE: Metrics process pool çöktü — pool yeniden oluşturuluyor, "
+            "bu event senkron fallback ile hesaplanıyor (yavaş yol): %s",
+            e,
+        )
+        _metrics_pool.shutdown(wait=False)
+        _metrics_pool = ProcessPoolExecutor(max_workers=_METRICS_POOL_WORKERS)
+        return calculate_metrics(df_prepared, ref_df_prepared, interval=interval)
+
+
+async def get_ref_df_cached(interval: str) -> "pd.DataFrame | None":
+    cached = _ref_df_cache.get(interval)
+    now = time.monotonic()
+    if cached is not None and (now - cached[0]) < _REF_DF_CACHE_TTL:
+        return cached[1]
+    ref_df = await RedisClient.get_fresh_klines(Config.MARKET_REFERENCE_SYMBOL, interval)
+    if ref_df is not None:
+        _ref_df_cache[interval] = (now, ref_df)
+    return ref_df
+
+
+def classify_candle(last: pd.Series) -> tuple[str, "float | None", "float | None"]:
+    """Son mumun gövde/üst fitil/alt fitil oranına göre baskın kısmını VE
+    sayısal gövde/fitil yüzdelerini döner: (kategori, body_pct, wick_pct).
+    wick_pct = üst+alt fitil toplamı (=100-body_pct) — Hoca'nın Sinyal Mumu
+    Ratioları'ndaki Body Ratio/Wick Length metriklerinin sayısal karşılığı
+    (13 Ağu 2026 — önceden sadece kategori tutulup sayı atılıyordu; 17 Ağu
+    2026: signal_processor.py'den buraya taşındı, trade_snapshot.py da
+    kullanıyor)."""
+    rng = last["high"] - last["low"]
+    if rng <= 0:
+        return "belirsiz", None, None
+    upper = max(last["open"], last["close"])
+    lower = min(last["open"], last["close"])
+    body = abs(last["close"] - last["open"]) / rng * 100
+    upper_wick = (last["high"] - upper) / rng * 100
+    lower_wick = (lower - last["low"]) / rng * 100
+    parts = {"govde": body, "ust_fitil": upper_wick, "alt_fitil": lower_wick}
+    kategori = max(parts, key=parts.get)
+    return kategori, round(body, 2), round(upper_wick + lower_wick, 2)
+
+
+def compute_signal_extras(df: pd.DataFrame) -> Optional[dict]:
+    """Sinyal Mumu Ratioları'nın (Hoca Telegram külliyatı, S29 — orijinal
+    Pine dosyası) kalan metrikleri: RSI(14)/MFI(14)/RSI-of-MACD(12,26,9,14)
+    bar-to-bar değişimi + OBV seviyesi, df'nin SON barında. VPMV'nin 4
+    bileşeninden (vol/mom/vlt/prc) BAĞIMSIZ, kendi ham hesabı — isim
+    çakışmasın diye "signal_" önekiyle (13 Ağu 2026; 17 Ağu 2026:
+    signal_processor.py'den buraya taşındı — bar-to-bar değişim tanımı
+    "sinyal anı" kavramına bağımlı değil, periyodik izlemede de aynı
+    anlamı taşıyor, trade_snapshot.py da kullanıyor)."""
+    if len(df) < 35:  # MACD(26) + üstüne RSI(14) ısınma payı
+        return None
+
+    out: dict = {"rsi_change": None, "mfi_change": None, "macd_change": None, "obv": None}
+    try:
+        rsi = calculate_rsi(df, period=14)
+        out["rsi_change"] = float(rsi.diff().iloc[-1])
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+    try:
+        mfi = calculate_mfi(df, period=14)
+        out["mfi_change"] = float(mfi.diff().iloc[-1])
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+    try:
+        macd_line, _, _ = calculate_macd(df, fast=12, slow=26, signal=9)
+        macd_rsi = calculate_rsi(pd.DataFrame({"macd": macd_line}), period=14, price_col="macd")
+        out["macd_change"] = float(macd_rsi.diff().iloc[-1])
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+    try:
+        obv = calculate_obv(df)
+        out["obv"] = float(obv.iloc[-1])
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+    return out

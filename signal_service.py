@@ -7,14 +7,10 @@ tamamen kaldırıldı.
 """
 
 import asyncio
-import functools
 import json
 import os
 import resource
 import signal
-import time
-from concurrent.futures import ProcessPoolExecutor
-from concurrent.futures.process import BrokenProcessPool
 
 import pandas as pd
 
@@ -29,8 +25,8 @@ except (ValueError, OSError):
 
 import signals.registry_loops as registry_loops
 from config import Config
-from indicators.financial_metrics import calculate_metrics
 from signals.do_open_streak import do_open_streak_detector
+from signals.market_context import calculate_metrics_via_pool, get_ref_df_cached
 from signals.paper_trade_manager import (
     do_kirilimi_manager,
     do_open_streak_manager,
@@ -62,7 +58,6 @@ _STREAM = "kline_closed"
 _GROUP = "signal_service"
 _CONSUMER = "signal_service-1"
 _PID_FILE = "signal_service.pid"
-_METRICS_POOL_WORKERS = 5
 _IDEMPOTENCY_TTL = (
     3600  # saniye — aynı bar'ın crash/redelivery sonrası tekrar işlenmesini bu pencerede engeller
 )
@@ -77,32 +72,7 @@ _CLAIM_IDLE_MS = (
 )
 _CLAIM_CHECK_INTERVAL = 30  # saniye
 
-_metrics_pool = ProcessPoolExecutor(max_workers=_METRICS_POOL_WORKERS)
 _process_semaphore = asyncio.Semaphore(_CONCURRENCY)
-
-
-async def _calculate_metrics_via_pool(
-    df_prepared: pd.DataFrame, ref_df_prepared: pd.DataFrame, interval: str
-) -> pd.DataFrame:
-    """calculate_metrics'i ProcessPoolExecutor'da çalıştırır. Pool çökerse (BrokenProcessPool)
-    pool yeniden oluşturulur VE aynı event senkron olarak (yavaş ama veri kaybetmeden)
-    hesaplanır — process_and_enrich_signals artık gerçek DB yazımı/paper trade tetiklemesi
-    içerdiği için bu event'in sessizce kaybolması kabul edilebilir değil (dry_run/gölge
-    dönemindeki eski davranıştan bilinçli fark)."""
-    global _metrics_pool  # pylint: disable=global-statement
-    loop = asyncio.get_running_loop()
-    fn = functools.partial(calculate_metrics, df_prepared, ref_df_prepared, interval=interval)
-    try:
-        return await loop.run_in_executor(_metrics_pool, fn)
-    except BrokenProcessPool as e:
-        logger.warning(
-            "ENDİŞE: Metrics process pool çöktü — pool yeniden oluşturuluyor, "
-            "bu event senkron fallback ile hesaplanıyor (yavaş yol): %s",
-            e,
-        )
-        _metrics_pool.shutdown(wait=False)
-        _metrics_pool = ProcessPoolExecutor(max_workers=_METRICS_POOL_WORKERS)
-        return calculate_metrics(df_prepared, ref_df_prepared, interval=interval)
 
 
 async def _queue_lag_loop() -> None:
@@ -180,27 +150,6 @@ async def _incr_metric(key: str) -> None:
         pass
 
 
-# 2 Ağu 2026 (Fable 5 performans denetimi): get_mtf_klines'ın in-process cache'i
-# sadece veriyi YAZAN process'te (live_data_manager) dolu — signal_service.py
-# ayrı bir process olduğu için BTC referansı her _process_event çağrısında
-# gerçek bir Redis GET + Arrow deserialize'a düşüyordu. Bir bar-kapanışı
-# burst'ünde (ör. 5m'de 548 sembol) hepsi AYNI BTC verisini istiyor — kısa
-# TTL'li (2sn) interval-bazlı bir cache, aynı burst içindeki tekrarları eler.
-_REF_DF_CACHE_TTL = 2.0
-_ref_df_cache: dict[str, tuple[float, pd.DataFrame]] = {}
-
-
-async def _get_ref_df_cached(interval: str) -> "pd.DataFrame | None":
-    cached = _ref_df_cache.get(interval)
-    now = time.monotonic()
-    if cached is not None and (now - cached[0]) < _REF_DF_CACHE_TTL:
-        return cached[1]
-    ref_df = await RedisClient.get_fresh_klines(Config.MARKET_REFERENCE_SYMBOL, interval)
-    if ref_df is not None:
-        _ref_df_cache[interval] = (now, ref_df)
-    return ref_df
-
-
 async def _process_event(fields: dict) -> None:
     symbol = fields["symbol"]
     interval = fields["interval"]
@@ -220,7 +169,7 @@ async def _process_event(fields: dict) -> None:
         return
 
     df = await RedisClient.get_fresh_klines(symbol, interval)
-    ref_df = await _get_ref_df_cached(interval)
+    ref_df = await get_ref_df_cached(interval)
     if df is None or ref_df is None or df.empty or ref_df.empty:
         logger.debug("[%s] %s buffer eksik, atlanıyor", symbol, interval)
         await _incr_metric("metrics:sigsvc:buffer_eksik")
@@ -262,7 +211,7 @@ async def _process_event(fields: dict) -> None:
         ref_df,
         interval,
         oi_data=oi_data_json,
-        metrics_calculator=_calculate_metrics_via_pool,
+        metrics_calculator=calculate_metrics_via_pool,
         dry_run=dry_run,
     )
     elapsed_ms = (loop.time() - t0) * 1000

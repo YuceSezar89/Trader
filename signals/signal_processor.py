@@ -1,7 +1,7 @@
 import asyncio
 import json
 import time
-from typing import Awaitable, Callable, Optional, Tuple
+from typing import Awaitable, Callable, Optional
 
 import numpy as np
 import pandas as pd
@@ -13,18 +13,18 @@ from database.models import Signal
 from indicators.core import (
     calculate_adx,
     calculate_atr,
-    calculate_macd,
-    calculate_mfi,
-    calculate_obv,
     calculate_rsi,
     truncate_after_gap,
 )
 from indicators.financial_metrics import calculate_metrics
 from signals import ta_kovalama_gate, tf_alignment_gate
 from signals.market_context import (
+    classify_candle,
     compute_cvd_slope,
+    compute_signal_extras,
     compute_smc_market_structure,
     compute_vp_score,
+    prepare_for_metrics,
 )
 from signals.paper_trade_manager import (
     ha_cross_manager,
@@ -458,59 +458,6 @@ def _compute_candle_pattern(df: pd.DataFrame) -> str:
         return "-"
 
 
-def _classify_candle(last: pd.Series) -> Tuple[str, Optional[float], Optional[float]]:
-    """Son mumun gövde/üst fitil/alt fitil oranına göre baskın kısmını VE
-    sayısal gövde/fitil yüzdelerini döner: (kategori, body_pct, wick_pct).
-    wick_pct = üst+alt fitil toplamı (=100-body_pct) — Hoca'nın Sinyal Mumu
-    Ratioları'ndaki Body Ratio/Wick Length metriklerinin sayısal karşılığı
-    (13 Ağu 2026 — önceden sadece kategori tutulup sayı atılıyordu)."""
-    rng = last["high"] - last["low"]
-    if rng <= 0:
-        return "belirsiz", None, None
-    upper = max(last["open"], last["close"])
-    lower = min(last["open"], last["close"])
-    body = abs(last["close"] - last["open"]) / rng * 100
-    upper_wick = (last["high"] - upper) / rng * 100
-    lower_wick = (lower - last["low"]) / rng * 100
-    parts = {"govde": body, "ust_fitil": upper_wick, "alt_fitil": lower_wick}
-    kategori = max(parts, key=parts.get)
-    return kategori, round(body, 2), round(upper_wick + lower_wick, 2)
-
-
-def _compute_signal_extras(df: pd.DataFrame) -> Optional[dict]:
-    """Sinyal Mumu Ratioları'nın (Hoca Telegram külliyatı, S29 — orijinal
-    Pine dosyası) kalan metrikleri: RSI(14)/MFI(14)/RSI-of-MACD(12,26,9,14)
-    bar-to-bar değişimi + OBV seviyesi, sinyal barında. VPMV'nin 4
-    bileşeninden (vol/mom/vlt/prc) BAĞIMSIZ, kendi ham hesabı — isim
-    çakışmasın diye "signal_" önekiyle (13 Ağu 2026)."""
-    if len(df) < 35:  # MACD(26) + üstüne RSI(14) ısınma payı
-        return None
-
-    out: dict = {"rsi_change": None, "mfi_change": None, "macd_change": None, "obv": None}
-    try:
-        rsi = calculate_rsi(df, period=14)
-        out["rsi_change"] = float(rsi.diff().iloc[-1])
-    except Exception as exc:  # pylint: disable=broad-exception-caught
-        logger.debug("signal_extras rsi_change hesaplanamadı: %s", exc)
-    try:
-        mfi = calculate_mfi(df, period=14)
-        out["mfi_change"] = float(mfi.diff().iloc[-1])
-    except Exception as exc:  # pylint: disable=broad-exception-caught
-        logger.debug("signal_extras mfi_change hesaplanamadı: %s", exc)
-    try:
-        macd_line, _, _ = calculate_macd(df, fast=12, slow=26, signal=9)
-        macd_rsi = calculate_rsi(pd.DataFrame({"macd": macd_line}), period=14, price_col="macd")
-        out["macd_change"] = float(macd_rsi.diff().iloc[-1])
-    except Exception as exc:  # pylint: disable=broad-exception-caught
-        logger.debug("signal_extras macd_change hesaplanamadı: %s", exc)
-    try:
-        obv = calculate_obv(df)
-        out["obv"] = float(obv.iloc[-1])
-    except Exception as exc:  # pylint: disable=broad-exception-caught
-        logger.debug("signal_extras obv hesaplanamadı: %s", exc)
-    return out
-
-
 _FVG_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
 _FVG_LOOKBACK = 30
 
@@ -623,12 +570,7 @@ async def process_and_enrich_signals(
     alpha, beta, latest_metrics = None, None, {}
     try:
         if len(df) >= 50 and len(ref_df) >= 50:
-            df_prepared = df.copy()
-            df_prepared.index = pd.Index(pd.to_datetime(df_prepared["open_time"], unit="ms"))
-            ref_df_prepared = ref_df.copy()
-            ref_df_prepared.index = pd.Index(
-                pd.to_datetime(ref_df_prepared["open_time"], unit="ms")
-            )
+            df_prepared, ref_df_prepared = prepare_for_metrics(df, ref_df)
 
             if metrics_calculator is not None:
                 df_with_metrics = await metrics_calculator(df_prepared, ref_df_prepared, interval)
@@ -750,7 +692,7 @@ async def process_and_enrich_signals(
                 vpms_score: Optional[float] = None
                 vol_s = mom_s = vlt_s = prc_s = None
                 if len(df) >= 1:
-                    candle_kategori, body_pct, wick_pct = _classify_candle(df.iloc[-1])
+                    candle_kategori, body_pct, wick_pct = classify_candle(df.iloc[-1])
                 else:
                     candle_kategori, body_pct, wick_pct = None, None, None
                 try:
@@ -954,16 +896,22 @@ async def process_and_enrich_signals(
                 enriched_signal["signal_macd_change"] = None
                 enriched_signal["signal_obv"] = None
                 try:
-                    _extras = _compute_signal_extras(df)
+                    _extras = compute_signal_extras(df)
                     if _extras is not None:
                         enriched_signal["signal_rsi_change"] = (
-                            round(_extras["rsi_change"], 4) if _extras["rsi_change"] is not None else None
+                            round(_extras["rsi_change"], 4)
+                            if _extras["rsi_change"] is not None
+                            else None
                         )
                         enriched_signal["signal_mfi_change"] = (
-                            round(_extras["mfi_change"], 4) if _extras["mfi_change"] is not None else None
+                            round(_extras["mfi_change"], 4)
+                            if _extras["mfi_change"] is not None
+                            else None
                         )
                         enriched_signal["signal_macd_change"] = (
-                            round(_extras["macd_change"], 4) if _extras["macd_change"] is not None else None
+                            round(_extras["macd_change"], 4)
+                            if _extras["macd_change"] is not None
+                            else None
                         )
                         enriched_signal["signal_obv"] = (
                             round(_extras["obv"], 2) if _extras["obv"] is not None else None
