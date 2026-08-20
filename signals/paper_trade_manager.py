@@ -291,10 +291,23 @@ class PaperTradeManager:
         tp_price: Optional[float],
         note: str = "",
         position_usd: Optional[float] = None,
+        vol_raw: Optional[float] = None,
+        mom_raw: Optional[float] = None,
+        volat_raw: Optional[float] = None,
+        price_raw: Optional[float] = None,
     ) -> bool:
-        """Sinyal tablosundan bağımsız pozisyon açar (dedektör tabanlı stratejiler)."""
+        """Sinyal tablosundan bağımsız pozisyon açar (dedektör tabanlı stratejiler).
+
+        20 Ağu 2026: vol_raw/mom_raw/volat_raw/price_raw opsiyonel — giriş anındaki
+        VPMV ham bileşenleri, trade_snapshot.py'nin girişe göre %değişim hesaplayabilmesi
+        için build_paper_trade_direct'e aktarılır. Açılış başarılıysa, trade_snapshots'a
+        bir "t=0" (giriş anı, %değişim≈0) satırı da yazılır — aksi halde seri ilk kez
+        periyodik döngünün 60sn'lik ilk turunda başlardı, gerçek bir başlangıç çapası
+        olmadan (kullanıcı sorusu: 'bir sonraki sinyalde vpmv 0 kabul edilmiyor mu')."""
         if self.strategy not in Config.PAPER.get("ENABLED_STRATEGIES", []):
             return False
+
+        _opened_trade_id: list[int] = []
 
         async def _do_open_direct() -> bool:
             async with get_session() as session:
@@ -337,9 +350,14 @@ class PaperTradeManager:
                         sl_price=sl_price,
                         tp_price=tp_price,
                         atr=atr,
+                        vol_raw=vol_raw,
+                        mom_raw=mom_raw,
+                        volat_raw=volat_raw,
+                        price_raw=price_raw,
                     )
                     session.add(trade)
                     await session.commit()
+                    _opened_trade_id.append(trade.id)
                     self._open_symbols.add(symbol)
                     tp_str = f"{tp_price:.6f}" if tp_price is not None else "yok"
                     logger.info(
@@ -382,7 +400,20 @@ class PaperTradeManager:
         # retry çift pozisyon AÇMAZ (zaten açık bulur, False döner).
         for attempt in range(2):
             try:
-                return await run_with_db_timeout(_do_open_direct())
+                result = await run_with_db_timeout(_do_open_direct())
+                if result and _opened_trade_id:
+                    await self._snapshot_entry_baseline(
+                        _opened_trade_id[0],
+                        symbol,
+                        signal_type,
+                        interval,
+                        price,
+                        vol_raw,
+                        mom_raw,
+                        volat_raw,
+                        price_raw,
+                    )
+                return result
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 if attempt == 0:
                     logger.warning(
@@ -401,6 +432,44 @@ class PaperTradeManager:
                     )
                     return False
         return False
+
+    @staticmethod
+    async def _snapshot_entry_baseline(
+        trade_id: int,
+        symbol: str,
+        signal_type: str,
+        interval: str,
+        entry_price: float,
+        vol_raw: Optional[float],
+        mom_raw: Optional[float],
+        volat_raw: Optional[float],
+        price_raw: Optional[float],
+    ) -> None:
+        """open_direct() başarılı olduktan HEMEN sonra trade_snapshots'a bir
+        't=0' satırı yazar (%değişim≈0) — aksi halde seri ilk kez periyodik
+        döngünün 60sn'lik ilk turunda, gerçek bir başlangıç çapası olmadan
+        başlardı (20 Ağu 2026). Best-effort: hata açma işlemini etkilemez,
+        gecikmeli import döngüsel bağımlılığı önler (trade_snapshot.py bu
+        modülü import etmiyor, ama tembel import zaten bu dosyada yerleşik
+        bir desen — bkz. _snapshot_all_open_trades'teki select import'u)."""
+        try:
+            from signals.trade_snapshot import (  # pylint: disable=import-outside-toplevel
+                _snapshot_one,
+            )
+
+            await _snapshot_one(
+                trade_id,
+                symbol,
+                signal_type,
+                interval,
+                entry_price,
+                entry_vol_raw=vol_raw,
+                entry_mom_raw=mom_raw,
+                entry_volat_raw=volat_raw,
+                entry_price_raw=price_raw,
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.debug("[PaperTrade] %s giriş-anı snapshot'ı yazılamadı: %s", symbol, exc)
 
     async def check_all_prices(self, prices: dict[str, float]) -> None:
         if not self._open_symbols:

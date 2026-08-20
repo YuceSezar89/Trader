@@ -412,6 +412,15 @@ class TradeSnapshot(Base):
     body_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     wick_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
 
+    # 20 Ağu 2026 (migration 037): VPMV'nin 4 ham bileşeninin (hacim/momentum/
+    # volatilite/fiyat) GİRİŞE göre (paper_trades.vol_raw/mom_raw/volat_raw/
+    # price_raw) ayrı ayrı %değişimi — signal_processor.py::_compute_component_
+    # change_pct ile aynı formül, kıyas noktası "bir önceki sinyal" değil "kendi girişimiz".
+    vol_change_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mom_change_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    volat_change_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_change_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+
 
 class PaperPortfolio(Base):
     __tablename__ = "paper_portfolio"

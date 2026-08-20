@@ -300,13 +300,18 @@ def build_trade_snapshot(
     signal_obv: Optional[float] = None,
     body_pct: Optional[float] = None,
     wick_pct: Optional[float] = None,
+    vol_change_pct: Optional[float] = None,
+    mom_change_pct: Optional[float] = None,
+    volat_change_pct: Optional[float] = None,
+    price_change_pct: Optional[float] = None,
 ) -> TradeSnapshot:
     """Açık bir paper trade için periyodik piyasa-bağlamı anlık görüntüsü
     kurar — dönen nesne HENÜZ session'a eklenmemiştir. trade_snapshot.py'nin
     tek yazma noktasıydı, kopya riski yoktu — sadece tutarlılık için taşındı.
 
     17 Ağu 2026 (migration 036): alpha/beta/finansal oranlar/mum oranları
-    eklendi — hepsi opsiyonel (varsayılan None), eski çağrı yerleri bozulmaz."""
+    eklendi — hepsi opsiyonel (varsayılan None), eski çağrı yerleri bozulmaz.
+    20 Ağu 2026 (migration 037): VPMV bileşenlerinin GİRİŞE göre %değişimi eklendi."""
     # Orijinal kod SADECE vp_buy is not None kontrolü yapıyordu (vp_sell'i
     # değil) — birebir aynı davranış korunuyor, "iyileştirme" yapılmadı.
     vp_score = round(vp_buy - vp_sell, 2) if vp_buy is not None else None
@@ -341,6 +346,10 @@ def build_trade_snapshot(
         signal_obv=round(signal_obv, 2) if signal_obv is not None else None,
         body_pct=round(body_pct, 2) if body_pct is not None else None,
         wick_pct=round(wick_pct, 2) if wick_pct is not None else None,
+        vol_change_pct=(round(vol_change_pct, 2) if vol_change_pct is not None else None),
+        mom_change_pct=(round(mom_change_pct, 2) if mom_change_pct is not None else None),
+        volat_change_pct=(round(volat_change_pct, 2) if volat_change_pct is not None else None),
+        price_change_pct=(round(price_change_pct, 2) if price_change_pct is not None else None),
     )
 
 
@@ -356,12 +365,22 @@ def build_paper_trade_direct(
     tp_price: Optional[float],
     atr: Optional[float],
     source: Optional[str] = None,
+    vol_raw: Optional[float] = None,
+    mom_raw: Optional[float] = None,
+    volat_raw: Optional[float] = None,
+    price_raw: Optional[float] = None,
 ) -> PaperTrade:
     """Sinyal tablosundan BAĞIMSIZ pozisyon açan yol (dedektör-tabanlı
-    stratejiler: do_kirilimi/do_open_streak) için PaperTrade kurar — dönen
-    nesne HENÜZ session'a eklenmemiştir. build_paper_trade()'den farklı
-    olarak enriched_signal dict'i YOK, sadece ham parametreler var — tek
-    yazma noktasıydı, sadece tutarlılık için taşındı."""
+    stratejiler: do_kirilimi/do_open_streak/totalamount_rank1) için PaperTrade
+    kurar — dönen nesne HENÜZ session'a eklenmemiştir. build_paper_trade()'den
+    farklı olarak enriched_signal dict'i YOK, sadece ham parametreler var —
+    tek yazma noktasıydı, sadece tutarlılık için taşındı.
+
+    20 Ağu 2026: vol_raw/mom_raw/volat_raw/price_raw eklendi (opsiyonel) —
+    VPMV'nin GİRİŞ ANINDAKİ ham bileşen değerleri (utils/vpmv.py::
+    compute_raw_components), trade_snapshot.py'nin sonradan bunlara göre
+    %değişim hesaplayabilmesi için (totalamount_rank1 hiç Signal satırı
+    oluşturmadığından bu değerler başka hiçbir yerde kaydedilmiyordu)."""
     return PaperTrade(
         signal_id=None,
         strategy=strategy,
@@ -380,5 +399,9 @@ def build_paper_trade_direct(
         take_profit_price=tp_price,
         status="open",
         opened_at=datetime.now(),
+        vol_raw=vol_raw,
+        mom_raw=mom_raw,
+        volat_raw=volat_raw,
+        price_raw=price_raw,
         atr=atr,
     )

@@ -31,6 +31,7 @@ from indicators.core import calculate_atr
 from signals.paper_trade_manager import totalamount_rank1_manager
 from signals.totalamount_rank1 import net_ta_series
 from utils.redis_client import SAFE_EXTERNAL_TIMEOUT, RedisClient
+from utils.vpmv import compute_raw_components
 
 logger = logging.getLogger("TotalamountRank1")
 
@@ -176,17 +177,25 @@ async def totalamount_rank1_loop() -> None:
             # Isınma koruması: CA'dan hesaplanabilen aday oranı eşiği geçmeden
             # açma fazı atlanır (snapshot yine de yayınlanır, tablo dolar).
             coverage = (len(ta_by_symbol) / len(candidates)) if candidates else 0.0
-            if (
-                best_symbol is not None
-                and best_df is not None
-                and coverage >= _WARMUP_MIN_COVERAGE
-            ):
+            if best_symbol is not None and best_df is not None and coverage >= _WARMUP_MIN_COVERAGE:
                 try:
                     price = float(best_df["close"].iloc[-1])
                     atr_series = calculate_atr(best_df, period=Config.ATR_PERIOD)
                     atr_val = float(atr_series.iloc[-1])
                     if price > 0 and atr_val > 0:
                         sl_price = price - _SL_ATR * atr_val
+                        # 20 Ağu 2026: giriş anındaki VPMV ham bileşenleri — trade_
+                        # snapshot.py'nin sonradan bunlara göre GİRİŞE göre %değişim
+                        # hesaplayabilmesi için (bu strateji hiç Signal oluşturmadığından
+                        # başka hiçbir yerde kaydedilmiyordu). Başarısız olursa None'lar
+                        # geçilir, açma engellenmez (best-effort).
+                        raw_components = None
+                        try:
+                            raw_components = compute_raw_components(best_df, "Long")
+                        except Exception as _rce:  # pylint: disable=broad-exception-caught
+                            logger.debug(
+                                "[%s] VPMV ham bileşen hesaplanamadı: %s", best_symbol, _rce
+                            )
                         opened = await totalamount_rank1_manager.open_direct(
                             symbol=best_symbol,
                             signal_type="Long",
@@ -196,6 +205,10 @@ async def totalamount_rank1_loop() -> None:
                             sl_price=sl_price,
                             tp_price=None,
                             note=f"TA={best_ta:.2f} r1/{len(ta_by_symbol)}"[:20],
+                            vol_raw=raw_components.get("vol") if raw_components else None,
+                            mom_raw=raw_components.get("mom") if raw_components else None,
+                            volat_raw=raw_components.get("vlt") if raw_components else None,
+                            price_raw=raw_components.get("prc") if raw_components else None,
                         )
                         if opened:
                             logger.info(

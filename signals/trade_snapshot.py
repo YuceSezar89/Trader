@@ -29,7 +29,7 @@ from signals.market_context import (
     prepare_for_metrics,
 )
 from signals.vpm_calculator import VPMCalculator
-from utils.vpmv import compute_components
+from utils.vpmv import compute_components, compute_raw_components
 
 logger = logging.getLogger("TradeSnapshot")
 
@@ -42,8 +42,24 @@ _KLINE_LIMIT = 500
 _MIN_BARS = 60
 
 
-async def _snapshot_one(
-    trade_id: int, symbol: str, signal_type: str, interval: str, entry_price: float
+def _entry_change_pct(current: "float | None", entry: "float | None") -> "float | None":
+    """signal_processor.py::_compute_component_change_pct ile AYNI formül —
+    kıyas noktası 'bir önceki sinyal' değil 'kendi girişimiz'."""
+    if current is None or entry is None or abs(entry) < 1e-8:
+        return None
+    return (current - entry) / abs(entry) * 100.0
+
+
+async def _snapshot_one(  # pylint: disable=too-many-locals
+    trade_id: int,
+    symbol: str,
+    signal_type: str,
+    interval: str,
+    entry_price: float,
+    entry_vol_raw: "float | None" = None,
+    entry_mom_raw: "float | None" = None,
+    entry_volat_raw: "float | None" = None,
+    entry_price_raw: "float | None" = None,
 ) -> None:
     try:
         df = await get_cagg_klines(symbol, interval, _KLINE_LIMIT)
@@ -70,6 +86,17 @@ async def _snapshot_one(
         )
         _, body_pct, wick_pct = classify_candle(df.iloc[-1])  # kategori değil, sadece oranlar
         extras = compute_signal_extras(df) or {}
+
+        # 20 Ağu 2026 (migration 037): VPMV ham bileşenlerinin GİRİŞE göre
+        # %değişimi — sadece giriş anındaki ham değerler kaydedilmişse
+        # (totalamount_rank1 gibi Signal'siz açılan stratejiler) hesaplanabilir.
+        raw_now = compute_raw_components(df, signal_type)
+        vol_change_pct = mom_change_pct = volat_change_pct = price_change_pct = None
+        if raw_now is not None:
+            vol_change_pct = _entry_change_pct(raw_now.get("vol"), entry_vol_raw)
+            mom_change_pct = _entry_change_pct(raw_now.get("mom"), entry_mom_raw)
+            volat_change_pct = _entry_change_pct(raw_now.get("vlt"), entry_volat_raw)
+            price_change_pct = _entry_change_pct(raw_now.get("prc"), entry_price_raw)
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.debug("[%s] snapshot hesaplanamadı: %s", symbol, exc)
         return
@@ -128,6 +155,10 @@ async def _snapshot_one(
             signal_obv=extras.get("obv"),
             body_pct=body_pct,
             wick_pct=wick_pct,
+            vol_change_pct=vol_change_pct,
+            mom_change_pct=mom_change_pct,
+            volat_change_pct=volat_change_pct,
+            price_change_pct=price_change_pct,
         )
         async with get_session() as session:
             session.add(snapshot)
@@ -149,13 +180,37 @@ async def _snapshot_all_open_trades() -> None:
                         PaperTrade.signal_type,
                         PaperTrade.interval,
                         PaperTrade.entry_price,
+                        PaperTrade.vol_raw,
+                        PaperTrade.mom_raw,
+                        PaperTrade.volat_raw,
+                        PaperTrade.price_raw,
                     ).where(PaperTrade.status == "open")
                 )
             )
         ).all()
 
-    for trade_id, symbol, signal_type, interval, entry_price in rows:
-        await _snapshot_one(trade_id, symbol, signal_type, interval, entry_price)
+    for (
+        trade_id,
+        symbol,
+        signal_type,
+        interval,
+        entry_price,
+        vol_raw,
+        mom_raw,
+        volat_raw,
+        price_raw,
+    ) in rows:
+        await _snapshot_one(
+            trade_id,
+            symbol,
+            signal_type,
+            interval,
+            entry_price,
+            entry_vol_raw=vol_raw,
+            entry_mom_raw=mom_raw,
+            entry_volat_raw=volat_raw,
+            entry_price_raw=price_raw,
+        )
 
 
 async def trade_snapshot_loop() -> None:
