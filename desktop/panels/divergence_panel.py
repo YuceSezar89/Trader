@@ -146,6 +146,8 @@ class DivergencePanel(QWidget):
         self._last_result: Optional[dict] = None
         self._prev_pos_ranks: dict[str, int] = {}
         self._prev_neg_ranks: dict[str, int] = {}
+        self._pos_symbol_to_row: dict[str, int] = {}
+        self._neg_symbol_to_row: dict[str, int] = {}
         self._ranking: dict[str, int] = {}
         self._pos_search = ""
         self._neg_search = ""
@@ -432,6 +434,7 @@ class DivergencePanel(QWidget):
             vpmv_map,
             positive=True,
             rank_deltas=pos_deltas,
+            symbol_to_row=self._pos_symbol_to_row,
         )
         self._fill_table(
             self._neg_table,
@@ -440,9 +443,18 @@ class DivergencePanel(QWidget):
             vpmv_map,
             positive=False,
             rank_deltas=neg_deltas,
+            symbol_to_row=self._neg_symbol_to_row,
         )
         self._apply_filter(self._pos_table, self._pos_search)
         self._apply_filter(self._neg_table, self._neg_search)
+
+    @staticmethod
+    def _get_item(table: QTableWidget, row: int, col: int, item_cls) -> QTableWidgetItem:
+        item = table.item(row, col)
+        if item is None:
+            item = item_cls("")
+            table.setItem(row, col, item)
+        return item
 
     def _fill_table(  # pylint: disable=too-many-locals
         self,
@@ -452,9 +464,20 @@ class DivergencePanel(QWidget):
         vpmv_map: dict,
         positive: bool,
         rank_deltas: Optional[dict] = None,
+        symbol_to_row: Optional[dict[str, int]] = None,
     ) -> None:
+        # 27 Ağu 2026: setRowCount(len(rows)) + tam yeniden inşa her satır için
+        # yeni QTableWidgetItem yaratıp eskisini yok ediyordu — ranking_panel.py
+        # ile AYNI kök nedenle panel 87.9GB'a çıkıp kernel tarafından durduruldu
+        # (bkz. ranking_panel.py::_render). Artık var olan satır/hücreler
+        # YERİNDE güncelleniyor, sadece evrenden çıkan/giren semboller için
+        # satır silinip/ekleniyor. Satır SIRASI (skora göre) artık POZİSYONEL
+        # olarak garanti edilmiyor — sembol hep aynı satırda kalır, kullanıcı
+        # bir sütuna tıklayarak (setSortingEnabled) istediği kritere göre
+        # sıralayabilir (ranking_panel'deki davranışla tutarlı).
         table.setSortingEnabled(False)
-        table.setRowCount(len(rows))
+        if symbol_to_row is None:
+            symbol_to_row = {}
 
         mono = QFont("Courier New", 11)
         bold = QFont("Courier New", 11, QFont.Weight.Bold)
@@ -463,7 +486,25 @@ class DivergencePanel(QWidget):
         if rank_deltas is None:
             rank_deltas = {}
 
-        for row_idx, (symbol, z) in enumerate(rows):
+        incoming = {symbol for symbol, _ in rows}
+        removed = set(symbol_to_row) - incoming
+        if removed:
+            rows_to_remove = sorted(
+                (symbol_to_row[s] for s in removed if s in symbol_to_row), reverse=True
+            )
+            for r in rows_to_remove:
+                table.removeRow(r)
+
+        for symbol, z in rows:
+            row_idx = symbol_to_row.get(symbol)
+            if (
+                row_idx is None
+                or row_idx >= table.rowCount()
+                or table.item(row_idx, _COL_SYMBOL) is None
+            ):
+                row_idx = table.rowCount()
+                table.insertRow(row_idx)
+
             delta = rank_deltas.get(symbol, 0)
             if delta > 0:
                 sym_text = f"{symbol} ↑{delta}"
@@ -474,12 +515,13 @@ class DivergencePanel(QWidget):
             else:
                 sym_text = symbol
                 sym_color = z_color
-            sym_item = QTableWidgetItem(sym_text)
+            sym_item = self._get_item(table, row_idx, _COL_SYMBOL, QTableWidgetItem)
+            sym_item.setText(sym_text)
             sym_item.setFont(bold)
             sym_item.setForeground(sym_color)
-            table.setItem(row_idx, _COL_SYMBOL, sym_item)
 
-            z_item = _NumericItem(f"{z:+.2f}")
+            z_item = self._get_item(table, row_idx, _COL_ZSCORE, _NumericItem)
+            z_item.setText(f"{z:+.2f}")
             z_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             z_item.setFont(mono)
             z_item.setData(Qt.ItemDataRole.UserRole, z)
@@ -491,10 +533,10 @@ class DivergencePanel(QWidget):
                 z_item.setBackground(_BG_GREEN_SOFT if positive else _BG_RED_SOFT)
             else:
                 z_item.setBackground(_C_TRANSPARENT)
-            table.setItem(row_idx, _COL_ZSCORE, z_item)
 
             vpmv = vpmv_map.get(symbol) or 0.0
-            vpmv_item = _NumericItem(f"{vpmv:.0f}")
+            vpmv_item = self._get_item(table, row_idx, _COL_VPMV, _NumericItem)
+            vpmv_item.setText(f"{vpmv:.0f}")
             vpmv_item.setData(Qt.ItemDataRole.UserRole, vpmv)
             vpmv_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             vpmv_item.setFont(mono)
@@ -504,15 +546,14 @@ class DivergencePanel(QWidget):
                 vpmv_item.setForeground(_C_VPMV_MID)
             else:
                 vpmv_item.setForeground(_C_VPMV_LOW)
-            table.setItem(row_idx, _COL_VPMV, vpmv_item)
 
             rank = self._ranking.get(symbol)
-            rank_item = _NumericItem(str(rank) if rank is not None else "—")
+            rank_item = self._get_item(table, row_idx, _COL_RANK, _NumericItem)
+            rank_item.setText(str(rank) if rank is not None else "—")
             rank_item.setData(Qt.ItemDataRole.UserRole, rank if rank is not None else 9999)
             rank_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             rank_item.setFont(mono)
             rank_item.setForeground(_C_MUTED)
-            table.setItem(row_idx, _COL_RANK, rank_item)
 
             ts = diverge_since.get(symbol)
             if ts:
@@ -522,11 +563,17 @@ class DivergencePanel(QWidget):
                 )
             else:
                 time_str = "—"
-            t_item = QTableWidgetItem(time_str)
+            t_item = self._get_item(table, row_idx, _COL_TIME, QTableWidgetItem)
+            t_item.setText(time_str)
             t_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             t_item.setFont(mono)
             t_item.setForeground(_C_MUTED)
-            table.setItem(row_idx, _COL_TIME, t_item)
+
+        symbol_to_row.clear()
+        for r in range(table.rowCount()):
+            it = table.item(r, _COL_SYMBOL)
+            if it is not None:
+                symbol_to_row[it.text().split()[0]] = r
 
         table.setSortingEnabled(True)
         table.resizeColumnsToContents()

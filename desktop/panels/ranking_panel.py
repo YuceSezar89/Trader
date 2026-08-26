@@ -103,6 +103,7 @@ class RankingPanel(QWidget):
         self._search_text = ""
         self._last_result: list = []
         self._prev_ranks: dict[str, int] = {}
+        self._symbol_to_row: dict[str, int] = {}
         self._setup_ui()
         self._connect_worker()
         self._worker.start()
@@ -237,6 +238,14 @@ class RankingPanel(QWidget):
         self._render(result)
 
     def _render(self, result: list) -> None:
+        # 27 Ağu 2026: setRowCount(0) + tam yeniden inşa (her satır için yeni
+        # QTableWidgetItem) her 30sn'de ~550 sembol × 12 sütun = ~6600 nesne
+        # yok edip yeniden yaratıyordu — sample ile ölçüldü, CPU'nun %87'si
+        # QTableWidget::setItem->dataChanged zincirinde, panel 14 dakikada
+        # 87.9GB'a çıkıp "swap exhaustion" ile kernel tarafından durduruldu.
+        # Artık var olan satır/hücreler YERİNDE güncelleniyor (paper_trade_
+        # panel.py::_refresh_price_cells ile aynı desen) — sadece evrenden
+        # çıkan/giren semboller için satır silinip/eklenıyor.
         if self._pine_filter:
             result = [r for r in result if r["symbol"] in _PINE_20]
 
@@ -249,11 +258,27 @@ class RankingPanel(QWidget):
         self._prev_ranks = {r["symbol"]: r["rank"] for r in result}
 
         self._table.setSortingEnabled(False)
-        self._table.setRowCount(0)
+
+        incoming = {r["symbol"] for r in result}
+        removed = set(self._symbol_to_row) - incoming
+        if removed:
+            rows_to_remove = sorted(
+                (self._symbol_to_row[s] for s in removed if s in self._symbol_to_row),
+                reverse=True,
+            )
+            for r in rows_to_remove:
+                self._table.removeRow(r)
 
         for row_data in result:
-            row = self._table.rowCount()
-            self._table.insertRow(row)
+            sym = row_data["symbol"]
+            row = self._symbol_to_row.get(sym)
+            if (
+                row is None
+                or row >= self._table.rowCount()
+                or self._table.item(row, _COL_SYMBOL) is None
+            ):
+                row = self._table.rowCount()
+                self._table.insertRow(row)
 
             rank_score = row_data.get("rank_score", 50)
             direction = row_data.get("direction", "long")
@@ -271,7 +296,6 @@ class RankingPanel(QWidget):
             self._set_num(row, _COL_RANK, row_data["rank"], bg)
 
             # Sembol + sıra değişimi
-            sym = row_data["symbol"]
             delta = rank_deltas.get(sym, 0)
             if delta > 0:
                 sym_text = f"{sym} ↑{delta}"
@@ -282,11 +306,10 @@ class RankingPanel(QWidget):
             else:
                 sym_text = sym
                 sym_color = _C_WHITE
-            sym_item = QTableWidgetItem(sym_text)
+            sym_item = self._get_item(row, _COL_SYMBOL, QTableWidgetItem)
+            sym_item.setText(sym_text)
             sym_item.setForeground(sym_color)
-            if bg:
-                sym_item.setBackground(bg)
-            self._table.setItem(row, _COL_SYMBOL, sym_item)
+            self._apply_bg(sym_item, bg)
 
             # TF skorları
             for col, key in (
@@ -315,15 +338,22 @@ class RankingPanel(QWidget):
             tf_count = row_data.get("tf_count", 0)
             aligned = row_data.get("aligned", False)
             align_text = f"{'✓' if aligned else '~'} {align_count}/{tf_count}"
-            align_item = QTableWidgetItem(align_text)
+            align_item = self._get_item(row, _COL_ALIGN, QTableWidgetItem)
+            align_item.setText(align_text)
             align_item.setForeground(_C_GREEN if aligned else _C_YELLOW)
-            if bg:
-                align_item.setBackground(bg)
-            self._table.setItem(row, _COL_ALIGN, align_item)
+            self._apply_bg(align_item, bg)
 
             # VS BTC
             vs_btc = row_data.get("vs_btc")
             self._set_vs_btc(row, vs_btc, bg)
+
+        # Harita gerçek tablo durumuna göre yeniden kurulur — silme/ekleme
+        # sonrası satır index'leri kaymış olabilir.
+        self._symbol_to_row = {}
+        for r in range(self._table.rowCount()):
+            it = self._table.item(r, _COL_SYMBOL)
+            if it is not None:
+                self._symbol_to_row[it.text().split()[0]] = r
 
         self._table.setSortingEnabled(True)
         self._table.resizeColumnsToContents()
@@ -334,18 +364,32 @@ class RankingPanel(QWidget):
         self._status.setText(msg)
 
     # ------------------------------------------------------------------
+    # 27 Ağu 2026: get-or-create deseni — hücre zaten varsa YENİDEN
+    # KULLANILIR (yeni QTableWidgetItem yaratılmaz), sadece text/renk
+    # güncellenir. bg=None ise önceki turdan kalan arka plan temizlenir
+    # (aksi halde eskiden geçerli bg, artık geçerli olmasa bile kalırdı).
+    def _get_item(self, row: int, col: int, item_cls) -> QTableWidgetItem:
+        item = self._table.item(row, col)
+        if item is None:
+            item = item_cls("")
+            self._table.setItem(row, col, item)
+        return item
+
+    @staticmethod
+    def _apply_bg(item: QTableWidgetItem, bg: Optional[QColor]) -> None:
+        item.setBackground(bg if bg is not None else QColor(0, 0, 0, 0))
+
     def _set_num(self, row: int, col: int, val: Optional[float], bg) -> None:
-        item = _NumericItem(str(int(val)) if val is not None else "—")
+        item = self._get_item(row, col, _NumericItem)
+        item.setText(str(int(val)) if val is not None else "—")
         item.setData(Qt.ItemDataRole.UserRole, val if val is not None else 0)
         item.setForeground(_C_MUTED)
         item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-        if bg:
-            item.setBackground(bg)
-        self._table.setItem(row, col, item)
+        self._apply_bg(item, bg)
 
     def _set_score(self, row: int, col: int, val: Optional[float], bg, bold: bool = False) -> None:
-        text = f"{val:.0f}" if val is not None else "—"
-        item = _NumericItem(text)
+        item = self._get_item(row, col, _NumericItem)
+        item.setText(f"{val:.0f}" if val is not None else "—")
         item.setData(Qt.ItemDataRole.UserRole, val if val is not None else 0)
         item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
         if val is not None:
@@ -356,31 +400,31 @@ class RankingPanel(QWidget):
             f = item.font()
             f.setBold(True)
             item.setFont(f)
-        if bg:
-            item.setBackground(bg)
-        self._table.setItem(row, col, item)
+        self._apply_bg(item, bg)
 
     def _set_rscore(self, row: int, val: Optional[float], bg) -> None:
+        item = self._get_item(row, _COL_RSCORE, _NumericItem)
         if val is None:
-            item = QTableWidgetItem("—")
+            item.setText("—")
+            item.setData(Qt.ItemDataRole.UserRole, 0)
             item.setForeground(_C_MUTED)
         else:
             sign = "+" if val > 0 else ""
-            item = _NumericItem(f"{sign}{val:.3f}")
+            item.setText(f"{sign}{val:.3f}")
             item.setData(Qt.ItemDataRole.UserRole, val)
             item.setForeground(_C_GREEN if val > 0 else _C_RED)
         item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-        if bg:
-            item.setBackground(bg)
-        self._table.setItem(row, _COL_RSCORE, item)
+        self._apply_bg(item, bg)
 
     def _set_zconf(self, row: int, val: Optional[float], bg) -> None:
+        item = self._get_item(row, _COL_ZCONF, _NumericItem)
         if val is None:
-            item = QTableWidgetItem("—")
+            item.setText("—")
+            item.setData(Qt.ItemDataRole.UserRole, 0)
             item.setForeground(_C_MUTED)
         else:
             sign = "+" if val > 0 else ""
-            item = _NumericItem(f"{sign}{val:.2f}")
+            item.setText(f"{sign}{val:.2f}")
             item.setData(Qt.ItemDataRole.UserRole, val)
             if val >= 1.5:
                 item.setForeground(_C_GREEN)
@@ -393,23 +437,21 @@ class RankingPanel(QWidget):
             else:
                 item.setForeground(_C_MUTED)
         item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-        if bg:
-            item.setBackground(bg)
-        self._table.setItem(row, _COL_ZCONF, item)
+        self._apply_bg(item, bg)
 
     def _set_vs_btc(self, row: int, val: Optional[float], bg) -> None:
+        item = self._get_item(row, _COL_VSBTC, _NumericItem)
         if val is None:
-            item = QTableWidgetItem("—")
+            item.setText("—")
+            item.setData(Qt.ItemDataRole.UserRole, 0)
             item.setForeground(_C_MUTED)
         else:
             sign = "+" if val > 0 else ""
-            item = _NumericItem(f"{sign}{val:.1f}")
+            item.setText(f"{sign}{val:.1f}")
             item.setData(Qt.ItemDataRole.UserRole, val)
             item.setForeground(_C_GREEN if val > 0 else _C_RED if val < 0 else _C_MUTED)
         item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-        if bg:
-            item.setBackground(bg)
-        self._table.setItem(row, _COL_VSBTC, item)
+        self._apply_bg(item, bg)
 
     def closeEvent(self, event) -> None:
         self._worker.stop()
