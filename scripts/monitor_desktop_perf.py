@@ -5,6 +5,16 @@ süreçlerinin bellek/CPU büyüme trendini sürekli takip eder. 13 Tem 2026'dak
 2026'daki 96GB tekrarı (PC kilitlenmesine yol açtı) sonrası eklendi — artık
 sadece pasif CSV loglamıyor, eşik aşılınca Telegram'a da uyarı atıyor.
 
+27 Ağu 2026: script bugüne kadar launchd'ye hiç kaydedilmemişti (elle
+başlatılması gerekiyordu) — bu yüzden 87.9GB'a çıkıp kernel'in "swap
+exhaustion" nedeniyle durdurduğu masaüstü panel olayı hiç Telegram'a
+düşmedi, günlerce fark edilmedi. Artık com.trader.desktop_perf_monitor
+LaunchAgent'ı ile sürekli çalışıyor. Ayrıca: desktop.main (SADECE bu —
+backend'ler ASLA) kritik eşiği aşınca artık sadece uyarmıyor, GERÇEKTEN
+sonlandırıyor — bir UI bug'ının tüm sistemi (swap'ı tüketip Postgres'in
+arka plan job'larını etkileyerek) felç etmesini önlemek için (bulkhead
+izolasyonu, bkz. proje CLAUDE.md "Backend Hesaplar, Arayüz Okur" ilkesi).
+
 Kullanım:
     .venv/bin/python scripts/monitor_desktop_perf.py &
 
@@ -36,6 +46,15 @@ _WATCHED: dict[str, dict[str, float]] = {
     "run_services.py": {"warn_mb": 6000, "critical_mb": 10000},
     "signal_service.py": {"warn_mb": 3000, "critical_mb": 6000},
 }
+
+# 27 Ağu 2026: SADECE desktop.main (bir UI süreci, kapanması güvenli/geri
+# dönüşü kolay — kullanıcı tekrar açabilir) kritik eşikte GERÇEKTEN
+# sonlandırılıyor. run_services.py/signal_service.py KESİNLİKLE bu kümede
+# OLMAMALI — bunlar kritik-iş backend'leri, otomatik öldürme paper trade
+# pozisyon yönetimini/sinyal üretimini sessizce durdurup gerçek karar
+# kaybına yol açar.
+_KILL_ON_CRITICAL = {"desktop.main"}
+_KILL_GRACE_SEC = 5  # terminate() sonrası kill()'e geçmeden önce bekleme
 
 # 14 Ağu 2026 bugfix: desktop.main gerçek bir olayda (~42-66GB, PC kilitlendi)
 # RSS'i psutil/ps'te 54+ dakika boyunca 37-40MB'DE SABİT gösterdi — macOS
@@ -83,6 +102,35 @@ def _alert(text: str) -> None:
         asyncio.run(send_telegram_message(f"⚠️ Bellek uyarısı\n{text}"))
     except Exception as exc:  # pylint: disable=broad-exception-caught
         print(f"[UYARI] Telegram gönderilemedi: {exc}")
+
+
+def _kill_process(proc: psutil.Process, name: str, effective_mb: float) -> None:
+    """SADECE _KILL_ON_CRITICAL kümesindeki süreçler için çağrılır — önce
+    nazikçe (terminate/SIGTERM) kapatmayı dener, _KILL_GRACE_SEC içinde
+    kapanmazsa zorla (kill/SIGKILL) sonlandırır. Amaç: 27 Ağu 2026'daki
+    87.9GB swap-exhaustion olayının tekrarında, bu sürecin sistemin geri
+    kalanını (Postgres arka plan job'ları dahil) etkilemesine izin
+    vermeden, kendi kendine sessizce sonlanmasını sağlamak."""
+    try:
+        proc.terminate()
+        proc.wait(timeout=_KILL_GRACE_SEC)
+        _alert(
+            f"{name} (PID {proc.pid}) bellek {effective_mb:.0f}MB nedeniyle "
+            f"OTOMATİK KAPATILDI (terminate) — sistemin geri kalanını korumak için."
+        )
+    except psutil.TimeoutExpired:
+        try:
+            proc.kill()
+            _alert(
+                f"{name} (PID {proc.pid}) bellek {effective_mb:.0f}MB nedeniyle "
+                f"ZORLA SONLANDIRILDI (kill, terminate yanıt vermedi)."
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            _alert(f"{name} (PID {proc.pid}) sonlandırılamadı: {exc}")
+    except psutil.NoSuchProcess:
+        pass  # zaten kapanmış
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        _alert(f"{name} (PID {proc.pid}) sonlandırma denemesi başarısız: {exc}")
 
 
 def main() -> None:
@@ -168,6 +216,8 @@ def main() -> None:
                             f"{elapsed_min:.0f} dk çalışıyor."
                         )
                         alerted[name].add("critical")
+                        if name in _KILL_ON_CRITICAL:
+                            _kill_process(proc, name, effective_mb)
                     elif effective_mb >= thresholds["warn_mb"] and "warn" not in alerted[name]:
                         _alert(
                             f"{name} (PID {proc.pid}) bellek {effective_mb:.0f}MB "
