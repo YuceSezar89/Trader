@@ -86,45 +86,79 @@ class _DirectionTable(QTableWidget):
         hh = self.horizontalHeader()
         hh.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         hh.setSectionResizeMode(_COL_SYMBOL, QHeaderView.ResizeMode.Stretch)
+        self._symbol_to_row: dict[str, int] = {}
+
+    @staticmethod
+    def _get_item(table: QTableWidget, row: int, col: int, item_cls=QTableWidgetItem):
+        item = table.item(row, col)
+        if item is None or (item_cls is _NumericItem and not isinstance(item, _NumericItem)):
+            item = item_cls("")
+            table.setItem(row, col, item)
+        return item
 
     def render(self, rows: list, search_text: str) -> None:
         self.setSortingEnabled(False)
-        self.setRowCount(len(rows))
 
-        for row_idx, row_data in enumerate(rows):
-            sym_item = QTableWidgetItem(row_data.get("symbol", ""))
+        # Kullanıcı iki render() arasında bir sütun başlığına tıklayıp tabloyu
+        # yeniden sıralayabilir — saklı harita bu durumda BAYATLAR (paper_trade_
+        # panel.py'de "P&L önce 31 sonra -2" bug'ının kök nedeniyle aynı sınıf,
+        # 27 Ağu 2026). Her render() başında haritayı tablonun GERÇEK anlık
+        # durumundan yeniden kurup bu riski tamamen ortadan kaldırıyoruz.
+        self._symbol_to_row = {
+            self.item(r, _COL_SYMBOL).text(): r
+            for r in range(self.rowCount())
+            if self.item(r, _COL_SYMBOL) is not None
+        }
+
+        incoming = {r.get("symbol", ""): r for r in rows}
+        for symbol in list(self._symbol_to_row):
+            if symbol not in incoming:
+                row = self._symbol_to_row.pop(symbol)
+                self.removeRow(row)
+                for sym, r in self._symbol_to_row.items():
+                    if r > row:
+                        self._symbol_to_row[sym] = r - 1
+
+        for symbol, row_data in incoming.items():
+            row_idx = self._symbol_to_row.get(symbol)
+            if row_idx is None:
+                row_idx = self.rowCount()
+                self.insertRow(row_idx)
+                self._symbol_to_row[symbol] = row_idx
+
+            sym_item = self._get_item(self, row_idx, _COL_SYMBOL)
+            sym_item.setText(symbol)
             sym_item.setForeground(_C_WHITE)
-            self.setItem(row_idx, _COL_SYMBOL, sym_item)
 
-            tf_item = QTableWidgetItem(row_data.get("interval", ""))
+            tf_item = self._get_item(self, row_idx, _COL_TF)
+            tf_item.setText(row_data.get("interval", ""))
             tf_item.setForeground(_C_MUTED)
             tf_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.setItem(row_idx, _COL_TF, tf_item)
 
-            ind_item = QTableWidgetItem(row_data.get("indicators", ""))
+            ind_item = self._get_item(self, row_idx, _COL_INDICATOR)
+            ind_item.setText(row_data.get("indicators", ""))
             ind_item.setForeground(_C_MUTED)
             ind_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.setItem(row_idx, _COL_INDICATOR, ind_item)
 
             open_price = row_data.get("open_price")
-            price_item = _NumericItem(f"{open_price:.6g}" if open_price is not None else "—")
+            price_item = self._get_item(self, row_idx, _COL_OPEN_PRICE, _NumericItem)
+            price_item.setText(f"{open_price:.6g}" if open_price is not None else "—")
             price_item.setData(Qt.ItemDataRole.UserRole, open_price or 0)
             price_item.setForeground(_C_MUTED)
             price_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.setItem(row_idx, _COL_OPEN_PRICE, price_item)
 
             early_pct = row_data.get("early_pct")
+            early_item = self._get_item(self, row_idx, _COL_EARLY_PCT, _NumericItem)
             if early_pct is None:
-                early_item = QTableWidgetItem("—")
-                early_item.setForeground(_C_MUTED)
+                early_item.setText("—")
                 early_item.setData(Qt.ItemDataRole.UserRole, 0)
+                early_item.setForeground(_C_MUTED)
             else:
                 sign = "+" if early_pct > 0 else ""
-                early_item = _NumericItem(f"{sign}{early_pct:.3f}")
+                early_item.setText(f"{sign}{early_pct:.3f}")
                 early_item.setData(Qt.ItemDataRole.UserRole, early_pct)
                 early_item.setForeground(_C_GREEN if early_pct > 0 else _C_RED)
             early_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.setItem(row_idx, _COL_EARLY_PCT, early_item)
 
             # Mevcut satırda buton varsa YENİDEN KULLAN — her render()'da
             # setCellWidget ile yeni QPushButton yaratmak, her birinin

@@ -88,6 +88,7 @@ class RankPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._search = ""
+        self._symbol_to_row: dict[str, int] = {}
         self._setup_ui()
 
     # ── UI ────────────────────────────────────────────────────────────────
@@ -157,38 +158,83 @@ class RankPanel(QWidget):
 
     # ── Tablo doldurma ────────────────────────────────────────────────────
 
+    def _get_item(self, row: int, col: int, item_cls=QTableWidgetItem):
+        item = self._table.item(row, col)
+        if item is None or (item_cls is _NumericItem and not isinstance(item, _NumericItem)):
+            item = item_cls("")
+            self._table.setItem(row, col, item)
+        return item
+
+    def _rebuild_symbol_to_row(self) -> None:
+        self._symbol_to_row = {}
+        for r in range(self._table.rowCount()):
+            it = self._table.item(r, _COL_SYMBOL)
+            if it is not None:
+                self._symbol_to_row[it.text()] = r
+
     def _populate(self, current: dict, ranking: dict) -> None:
         rows = sorted(current.items(), key=lambda kv: kv[1], reverse=True)
 
         self._table.setSortingEnabled(False)
-        self._table.setRowCount(len(rows))
+
+        # Kullanıcı iki _populate() çağrısı arasında bir sütun başlığına
+        # tıklayıp tabloyu yeniden sıralayabilir — harita bu durumda bayatlar
+        # (paper_trade_panel.py'deki "P&L önce 31 sonra -2" bug'ıyla aynı kök
+        # neden sınıfı, 27 Ağu 2026). Her çağrı başında haritayı tablonun
+        # GERÇEK anlık durumundan yeniden kuruyoruz.
+        self._rebuild_symbol_to_row()
+
         mono = QFont("Courier New", 11)
         bold = QFont("Courier New", 11, QFont.Weight.Bold)
 
+        incoming = {symbol for symbol, _ in rows}
+        removed = set(self._symbol_to_row) - incoming
+        if removed:
+            rows_to_remove = sorted(
+                (self._symbol_to_row[s] for s in removed if s in self._symbol_to_row),
+                reverse=True,
+            )
+            for row in rows_to_remove:
+                self._table.removeRow(row)
+            # removeRow altındaki satırların index'ini kaydırır — haritayı hemen
+            # yeniden kurmazsak kalan semboller YANLIŞ (kaymış) satırı işaret
+            # edebilir (27 Ağu 2026, deviso_panel.py'de bulundu).
+            self._rebuild_symbol_to_row()
+
         for row_idx, (symbol, value) in enumerate(rows):
+            row = self._symbol_to_row.get(symbol)
+            if (
+                row is None
+                or row >= self._table.rowCount()
+                or self._table.item(row, _COL_SYMBOL) is None
+            ):
+                row = self._table.rowCount()
+                self._table.insertRow(row)
+
             color = _C_GREEN if value >= 0 else _C_RED
 
-            sym_item = QTableWidgetItem(symbol)
+            sym_item = self._get_item(row, _COL_SYMBOL)
+            sym_item.setText(symbol)
             sym_item.setFont(bold if row_idx == 0 else mono)
             sym_item.setForeground(color if row_idx == 0 else _C_MUTED)
-            self._table.setItem(row_idx, _COL_SYMBOL, sym_item)
 
-            val_item = _NumericItem(f"{value:+.2f}")
+            val_item = self._get_item(row, _COL_VALUE, _NumericItem)
+            val_item.setText(f"{value:+.2f}")
             val_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             val_item.setFont(mono)
             val_item.setData(Qt.ItemDataRole.UserRole, value)
             val_item.setForeground(color)
             val_item.setBackground(QColor(0, 120, 40, 90) if row_idx == 0 else _C_TRANSPARENT)
-            self._table.setItem(row_idx, _COL_VALUE, val_item)
 
             rank = ranking.get(symbol, row_idx + 1)
-            rank_item = _NumericItem(str(rank))
+            rank_item = self._get_item(row, _COL_RANK, _NumericItem)
+            rank_item.setText(str(rank))
             rank_item.setData(Qt.ItemDataRole.UserRole, rank)
             rank_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             rank_item.setFont(mono)
             rank_item.setForeground(_C_MUTED)
-            self._table.setItem(row_idx, _COL_RANK, rank_item)
 
+        self._rebuild_symbol_to_row()
         self._table.setSortingEnabled(True)
         self._table.resizeColumnsToContents()
         self._apply_filter()

@@ -183,6 +183,7 @@ class TradeXRayPanel(QWidget):
         self._side_buttons: dict[str, QPushButton] = {}
         self._list_worker: Optional[_TradeListWorker] = None
         self._snap_worker: Optional[_SnapshotWorker] = None
+        self._id_to_row: dict[int, int] = {}
         self._setup_ui()
         self.refresh()
 
@@ -460,55 +461,100 @@ class TradeXRayPanel(QWidget):
         self._filtered_trades = trades
         self._render_table()
 
+    def _get_item(self, row: int, col: int, item_cls=QTableWidgetItem):
+        item = self._table.item(row, col)
+        if item is None or (item_cls is _NumericItem and not isinstance(item, _NumericItem)):
+            item = item_cls("")
+            self._table.setItem(row, col, item)
+        return item
+
+    def _rebuild_id_to_row(self) -> None:
+        self._id_to_row = {}
+        for r in range(self._table.rowCount()):
+            it = self._table.item(r, _COL_SYMBOL)
+            trade_id = it.data(Qt.ItemDataRole.UserRole) if it is not None else None
+            if trade_id is not None:
+                self._id_to_row[trade_id] = r
+
     def _render_table(self) -> None:
         selected_id = self._selected_trade_id()
 
         self._table.setSortingEnabled(False)
-        self._table.setRowCount(len(self._filtered_trades))
 
-        for row_idx, t in enumerate(self._filtered_trades):
-            sym_item = QTableWidgetItem(t["symbol"])
+        # Kullanıcı iki _render_table() çağrısı arasında bir sütun başlığına
+        # tıklayıp tabloyu yeniden sıralayabilir — harita bu durumda bayatlar
+        # (paper_trade_panel.py'deki "P&L önce 31 sonra -2" bug'ıyla aynı kök
+        # neden sınıfı, 27 Ağu 2026). Her çağrı başında haritayı tablonun
+        # GERÇEK anlık durumundan yeniden kuruyoruz.
+        self._rebuild_id_to_row()
+
+        incoming_ids = {t["id"] for t in self._filtered_trades}
+        removed = set(self._id_to_row) - incoming_ids
+        if removed:
+            rows_to_remove = sorted(
+                (self._id_to_row[tid] for tid in removed if tid in self._id_to_row),
+                reverse=True,
+            )
+            for row in rows_to_remove:
+                self._table.removeRow(row)
+            # removeRow altındaki satırların index'ini kaydırır — haritayı hemen
+            # yeniden kurmazsak kalan id'ler YANLIŞ (kaymış) satırı işaret
+            # edebilir (27 Ağu 2026, deviso_panel.py'de bulundu).
+            self._rebuild_id_to_row()
+
+        for t in self._filtered_trades:
+            row_idx = self._id_to_row.get(t["id"])
+            if (
+                row_idx is None
+                or row_idx >= self._table.rowCount()
+                or self._table.item(row_idx, _COL_SYMBOL) is None
+            ):
+                row_idx = self._table.rowCount()
+                self._table.insertRow(row_idx)
+
+            sym_item = self._get_item(row_idx, _COL_SYMBOL)
+            sym_item.setText(t["symbol"])
             sym_item.setForeground(_C_WHITE)
             sym_item.setData(Qt.ItemDataRole.UserRole, t["id"])
-            self._table.setItem(row_idx, _COL_SYMBOL, sym_item)
 
-            strat_item = QTableWidgetItem(t["strategy"])
+            strat_item = self._get_item(row_idx, _COL_STRATEGY)
+            strat_item.setText(t["strategy"])
             strat_item.setForeground(_C_MUTED)
-            self._table.setItem(row_idx, _COL_STRATEGY, strat_item)
 
             side = t.get("signal_type", "")
             side_color = _C_GREEN if side == "Long" else _C_RED if side == "Short" else _C_MUTED
-            side_item = QTableWidgetItem(side)
+            side_item = self._get_item(row_idx, _COL_SIDE)
+            side_item.setText(side)
             side_item.setForeground(side_color)
             side_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self._table.setItem(row_idx, _COL_SIDE, side_item)
 
             status = t.get("status", "")
-            status_item = QTableWidgetItem(
+            status_item = self._get_item(row_idx, _COL_STATUS)
+            status_item.setText(
                 "Açık" if status == "open" else "Kapalı" if status == "closed" else status
             )
             status_item.setForeground(_C_GREEN if status == "open" else _C_MUTED)
             status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self._table.setItem(row_idx, _COL_STATUS, status_item)
 
-            opened_item = QTableWidgetItem(t.get("opened_at_str") or "—")
+            opened_item = self._get_item(row_idx, _COL_OPENED)
+            opened_item.setText(t.get("opened_at_str") or "—")
             opened_item.setForeground(_C_MUTED)
             opened_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self._table.setItem(row_idx, _COL_OPENED, opened_item)
 
             pnl = t.get("pnl_pct")
+            pnl_item = self._get_item(row_idx, _COL_PNL, _NumericItem)
             if pnl is None:
-                pnl_item = QTableWidgetItem("—")
+                pnl_item.setText("—")
                 pnl_item.setForeground(_C_MUTED)
                 pnl_item.setData(Qt.ItemDataRole.UserRole, 0)
             else:
                 sign = "+" if pnl > 0 else ""
-                pnl_item = _NumericItem(f"{sign}{pnl:.2f}")
+                pnl_item.setText(f"{sign}{pnl:.2f}")
                 pnl_item.setData(Qt.ItemDataRole.UserRole, pnl)
                 pnl_item.setForeground(_C_GREEN if pnl > 0 else _C_RED)
             pnl_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self._table.setItem(row_idx, _COL_PNL, pnl_item)
 
+        self._rebuild_id_to_row()
         self._table.setSortingEnabled(True)
         self._table.resizeColumnsToContents()
 

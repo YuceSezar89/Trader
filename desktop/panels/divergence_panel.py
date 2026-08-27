@@ -456,6 +456,14 @@ class DivergencePanel(QWidget):
             table.setItem(row, col, item)
         return item
 
+    @staticmethod
+    def _rebuild_symbol_to_row(table: QTableWidget, symbol_to_row: dict[str, int]) -> None:
+        symbol_to_row.clear()
+        for r in range(table.rowCount()):
+            it = table.item(r, _COL_SYMBOL)
+            if it is not None:
+                symbol_to_row[it.text().split()[0]] = r
+
     def _fill_table(  # pylint: disable=too-many-locals
         self,
         table: QTableWidget,
@@ -479,6 +487,14 @@ class DivergencePanel(QWidget):
         if symbol_to_row is None:
             symbol_to_row = {}
 
+        # Kullanıcı iki _fill_table() çağrısı arasında bir sütun başlığına
+        # tıklayıp tabloyu yeniden sıralayabilir — harita sadece fonksiyon
+        # SONUNDA kurulduğu için bu durumda bayatlar (paper_trade_panel.py'deki
+        # "P&L önce 31 sonra -2" bug'ıyla aynı kök neden sınıfı, 27 Ağu 2026).
+        # Her çağrı başında haritayı tablonun GERÇEK anlık durumundan yeniden
+        # kurup bu riski tamamen ortadan kaldırıyoruz.
+        self._rebuild_symbol_to_row(table, symbol_to_row)
+
         mono = QFont("Courier New", 11)
         bold = QFont("Courier New", 11, QFont.Weight.Bold)
         now = datetime.now()
@@ -494,6 +510,11 @@ class DivergencePanel(QWidget):
             )
             for r in rows_to_remove:
                 table.removeRow(r)
+            # removeRow altındaki satırların index'ini kaydırır — haritayı hemen
+            # yeniden kurmazsak kalan semboller YANLIŞ (kaymış) satırı işaret
+            # eder, bir sonraki sembolün verisi o satıra yazılabilir (27 Ağu
+            # 2026, deviso_panel.py'de bulundu, aynı desen burada da geçerli).
+            self._rebuild_symbol_to_row(table, symbol_to_row)
 
         for symbol, z in rows:
             row_idx = symbol_to_row.get(symbol)
@@ -569,11 +590,7 @@ class DivergencePanel(QWidget):
             t_item.setFont(mono)
             t_item.setForeground(_C_MUTED)
 
-        symbol_to_row.clear()
-        for r in range(table.rowCount()):
-            it = table.item(r, _COL_SYMBOL)
-            if it is not None:
-                symbol_to_row[it.text().split()[0]] = r
+        self._rebuild_symbol_to_row(table, symbol_to_row)
 
         table.setSortingEnabled(True)
         table.resizeColumnsToContents()

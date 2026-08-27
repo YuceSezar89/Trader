@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional
 
 import psycopg2
 import psycopg2.extras
@@ -203,7 +203,8 @@ class PaperTradePanel(QWidget):
         self._open_rows: list[dict] = []
         self._open_rows_by_id: dict[int, dict] = {}
         self._hist_rows_by_id: dict[int, dict] = {}
-        self._symbol_to_rows: dict[str, list[int]] = {}
+        self._open_id_to_row: dict[int, int] = {}
+        self._hist_id_to_row: dict[int, int] = {}
         self._open_filter: dict[str, str] = {
             "side": "Tümü",
             "tf": "Tümü",
@@ -577,9 +578,19 @@ class PaperTradePanel(QWidget):
         if not id_to_row:
             return
 
-        for t_idx in self._symbol_to_rows.get(symbol, []):
+        # 27 Ağu 2026: self._symbol_to_rows sadece _fill_open'de (5sn'de bir)
+        # yeniden kuruluyordu — ama _open_table'da setSortingEnabled(True)
+        # açık olduğu için (kullanıcı bir sütuna tıklayıp sıralayabiliyor,
+        # ya da bu fonksiyonun kendisi aktif sıralama sütununu güncellerken
+        # Qt satırı otomatik yer değiştiriyor) tablo satırları HARİTADAN
+        # BAĞIMSIZ olarak yer değiştirebiliyordu. Bayat harita, YANLIŞ
+        # trade'in verisini YANLIŞ satıra yazıyordu — "P&L önce 31 sonra -2
+        # sonra başka bir şey" şikayetinin kök nedeni. Artık her çağrıda
+        # tablo TARANIP sembol gerçek satırından bulunuyor, haritaya
+        # güvenilmiyor (açık pozisyon sayısı küçük, tarama ucuz).
+        for t_idx in range(self._open_table.rowCount()):
             sym_item = self._open_table.item(t_idx, 0)
-            if not sym_item:
+            if sym_item is None or sym_item.text() != symbol:
                 continue
             trade_id = sym_item.data(Qt.ItemDataRole.UserRole)
             row = id_to_row.get(trade_id)
@@ -678,20 +689,74 @@ class PaperTradePanel(QWidget):
     # OPEN_COLS = [Sembol0, Yön1, TF2, Strateji3, Giriş$4, Fiyat$5, P&L$6, P&L%7, SL%8, TP%9, Trail$10, VPMS11, Kolaylık12, Süre13]
     _OPEN_NUM_COLS = {4, 5, 6, 7, 8, 9, 10, 11, 12}  # numerik sıralama gereken kolonlar
 
+    @staticmethod
+    def _get_row_item(
+        table: QTableWidget, row: int, col: int, text: str, sort_val: Optional[float] = None
+    ) -> QTableWidgetItem:
+        existing = table.item(row, col)
+        if sort_val is not None:
+            if isinstance(existing, _NumItem):
+                existing.setText(text)
+                existing._sort_val = sort_val  # pylint: disable=protected-access
+                return existing
+            it = _NumItem(text, sort_val)
+            table.setItem(row, col, it)
+            return it
+        if existing is not None and not isinstance(existing, _NumItem):
+            existing.setText(text)
+            return existing
+        it = _item(text)
+        table.setItem(row, col, it)
+        return it
+
+    def _rebuild_open_id_to_row(self) -> None:
+        self._open_id_to_row = {}
+        for r in range(self._open_table.rowCount()):
+            it = self._open_table.item(r, 0)
+            tid = it.data(Qt.ItemDataRole.UserRole) if it is not None else None
+            if tid is not None:
+                self._open_id_to_row[tid] = r
+
     def _fill_open(self, rows: list[dict]) -> float:
         self._open_table.setSortingEnabled(False)
-        self._open_table.setRowCount(len(rows))
+
+        # Kullanıcı iki _fill_open() çağrısı (5sn'de bir) arasında bir sütun
+        # başlığına tıklayıp tabloyu yeniden sıralayabilir — harita bu durumda
+        # bayatlar (27 Ağu 2026, ranking_panel.py/deviso_panel.py'de bulunan
+        # aynı kök neden sınıfı). Her çağrı başında haritayı tablonun GERÇEK
+        # anlık durumundan yeniden kuruyoruz.
+        self._rebuild_open_id_to_row()
+
+        incoming_ids = {r["id"] for r in rows}
+        removed = set(self._open_id_to_row) - incoming_ids
+        if removed:
+            rows_to_remove = sorted(
+                (self._open_id_to_row[tid] for tid in removed if tid in self._open_id_to_row),
+                reverse=True,
+            )
+            for row in rows_to_remove:
+                self._open_table.removeRow(row)
+            # removeRow altındaki satırların index'ini kaydırır — haritayı
+            # hemen yeniden kurmazsak kalan id'ler YANLIŞ (kaymış) satırı
+            # işaret edebilir (27 Ağu 2026, deviso_panel.py'de bulundu).
+            self._rebuild_open_id_to_row()
+
         self._stat_value(self._lbl_open, str(len(rows)))
         self._open_ids = [r["id"] for r in rows]
         self._open_rows = rows
         self._open_rows_by_id = {r["id"]: r for r in rows}
-        self._symbol_to_rows = {}
-        for r_idx, row in enumerate(rows):
-            self._symbol_to_rows.setdefault(row["symbol"], []).append(r_idx)
 
         total_unrealized = 0.0
         strategies: set[str] = set()
-        for r_idx, row in enumerate(rows):
+        for row in rows:
+            r_idx = self._open_id_to_row.get(row["id"])
+            if (
+                r_idx is None
+                or r_idx >= self._open_table.rowCount()
+                or self._open_table.item(r_idx, 0) is None
+            ):
+                r_idx = self._open_table.rowCount()
+                self._open_table.insertRow(r_idx)
             sym = row["symbol"]
             side = row["signal_type"]
             tf = row["interval"]
@@ -762,11 +827,13 @@ class PaperTradePanel(QWidget):
             ]
 
             for c_idx, (text, sort_val) in enumerate(cell_data):
-                it = _NumItem(text, sort_val) if sort_val is not None else _item(text)
+                it = self._get_row_item(self._open_table, r_idx, c_idx, text, sort_val)
                 if c_idx == 0:
                     it.setData(Qt.ItemDataRole.UserRole, row["id"])
-                if sl_danger:
-                    it.setBackground(QColor("#3d1515"))
+                # Get-or-create ile item yeniden kullanıldığı için önceki turdan
+                # kalan arka plan/renk "hayalet" olarak kalmasın diye her dal
+                # koşulsuz (else ile) sıfırlanıyor (27 Ağu 2026).
+                it.setBackground(QColor("#3d1515") if sl_danger else QColor(0, 0, 0, 0))
                 if c_idx == 1:
                     it.setForeground(
                         QColor(COLORS["green"]) if side == "Long" else QColor(COLORS["red"])
@@ -777,9 +844,10 @@ class PaperTradePanel(QWidget):
                     it.setForeground(QColor("#ff4444") if sl_danger else QColor(COLORS["red"]))
                 if c_idx == 9:
                     it.setForeground(QColor(COLORS["green"]))
-                if c_idx == 10 and trail:
-                    it.setForeground(QColor(COLORS["accent"]))
-                self._open_table.setItem(r_idx, c_idx, it)
+                if c_idx == 10:
+                    it.setForeground(
+                        QColor(COLORS["accent"]) if trail else QColor(COLORS["text_muted"])
+                    )
 
         # Strateji dropdown'ını güncelle
         cur_strategy = self._open_cb_strategy.currentText()
@@ -790,20 +858,52 @@ class PaperTradePanel(QWidget):
         self._open_cb_strategy.setCurrentIndex(max(0, idx))
         self._open_cb_strategy.blockSignals(False)
 
+        self._rebuild_open_id_to_row()
         self._open_table.setSortingEnabled(True)
         self._apply_open_filter()
         return total_unrealized
 
     # HIST_COLS = [Sembol0, Yön1, TF2, Strateji3, Giriş$4, Çıkış$5, P&L$6, P&L%7, Neden8, Kapatma9]
 
+    def _rebuild_hist_id_to_row(self) -> None:
+        self._hist_id_to_row = {}
+        for r in range(self._hist_table.rowCount()):
+            it = self._hist_table.item(r, 0)
+            tid = it.data(Qt.ItemDataRole.UserRole) if it is not None else None
+            if tid is not None:
+                self._hist_id_to_row[tid] = r
+
     def _fill_hist(self, rows: list[dict]) -> None:
         self._hist_table.setSortingEnabled(False)
-        self._hist_table.setRowCount(len(rows))
+
+        # Aynı sıralama-bayatlığı riski _fill_open() ile aynı (27 Ağu 2026) —
+        # her çağrı başında haritayı tablonun GERÇEK anlık durumundan kuruyoruz.
+        self._rebuild_hist_id_to_row()
+
+        incoming_ids = {r["id"] for r in rows}
+        removed = set(self._hist_id_to_row) - incoming_ids
+        if removed:
+            rows_to_remove = sorted(
+                (self._hist_id_to_row[tid] for tid in removed if tid in self._hist_id_to_row),
+                reverse=True,
+            )
+            for row in rows_to_remove:
+                self._hist_table.removeRow(row)
+            self._rebuild_hist_id_to_row()
+
         self._hist_rows_by_id = {r["id"]: r for r in rows}
 
         reasons: set[str] = set()
         strategies: set[str] = set()
-        for r_idx, row in enumerate(rows):
+        for row in rows:
+            r_idx = self._hist_id_to_row.get(row["id"])
+            if (
+                r_idx is None
+                or r_idx >= self._hist_table.rowCount()
+                or self._hist_table.item(r_idx, 0) is None
+            ):
+                r_idx = self._hist_table.rowCount()
+                self._hist_table.insertRow(r_idx)
             pnl_usd = float(row["pnl_usd"]) if row["pnl_usd"] else 0.0
             pnl_pct = float(row["pnl_pct"]) if row["pnl_pct"] else 0.0
             closed = row["closed_at"]
@@ -832,7 +932,7 @@ class PaperTradePanel(QWidget):
                 (closed.strftime("%d/%m %H:%M") if closed else "—", None),
             ]
             for c_idx, (text, sort_val) in enumerate(cell_data):
-                it = _NumItem(text, sort_val) if sort_val is not None else _item(text)
+                it = self._get_row_item(self._hist_table, r_idx, c_idx, text, sort_val)
                 if c_idx == 0:
                     it.setData(Qt.ItemDataRole.UserRole, row["id"])
                 if c_idx == 1:
@@ -843,7 +943,6 @@ class PaperTradePanel(QWidget):
                     )
                 if c_idx in (6, 7):
                     it.setForeground(_pnl_color(pnl_usd))
-                self._hist_table.setItem(r_idx, c_idx, it)
 
         # Neden dropdown'ını güncelle
         cur_reason = self._hist_cb_reason.currentText()
@@ -863,6 +962,7 @@ class PaperTradePanel(QWidget):
         self._hist_cb_strategy.setCurrentIndex(max(0, idx))
         self._hist_cb_strategy.blockSignals(False)
 
+        self._rebuild_hist_id_to_row()
         self._hist_table.setSortingEnabled(True)
         self._apply_hist_filter()
 

@@ -237,6 +237,13 @@ class RankingPanel(QWidget):
         self._last_result = result
         self._render(result)
 
+    def _rebuild_symbol_to_row(self) -> None:
+        self._symbol_to_row = {}
+        for r in range(self._table.rowCount()):
+            it = self._table.item(r, _COL_SYMBOL)
+            if it is not None:
+                self._symbol_to_row[it.text().split()[0]] = r
+
     def _render(self, result: list) -> None:
         # 27 Ağu 2026: setRowCount(0) + tam yeniden inşa (her satır için yeni
         # QTableWidgetItem) her 30sn'de ~550 sembol × 12 sütun = ~6600 nesne
@@ -259,6 +266,14 @@ class RankingPanel(QWidget):
 
         self._table.setSortingEnabled(False)
 
+        # Kullanıcı iki _render() arasında bir sütun başlığına tıklayıp tabloyu
+        # yeniden sıralayabilir — harita sadece fonksiyon SONUNDA kurulduğu için
+        # bu durumda bayatlar (paper_trade_panel.py'deki "P&L önce 31 sonra -2"
+        # bug'ıyla aynı kök neden sınıfı, 27 Ağu 2026). Her render başında
+        # haritayı tablonun GERÇEK anlık durumundan yeniden kurup bu riski
+        # tamamen ortadan kaldırıyoruz.
+        self._rebuild_symbol_to_row()
+
         incoming = {r["symbol"] for r in result}
         removed = set(self._symbol_to_row) - incoming
         if removed:
@@ -268,6 +283,11 @@ class RankingPanel(QWidget):
             )
             for r in rows_to_remove:
                 self._table.removeRow(r)
+            # removeRow altındaki satırların index'ini kaydırır — haritayı hemen
+            # yeniden kurmazsak kalan semboller YANLIŞ (kaymış) satırı işaret
+            # eder, bir sonraki sembolün verisi o satıra yazılabilir (27 Ağu
+            # 2026, deviso_panel.py'de bulundu, aynı desen burada da geçerli).
+            self._rebuild_symbol_to_row()
 
         for row_data in result:
             sym = row_data["symbol"]
@@ -349,11 +369,7 @@ class RankingPanel(QWidget):
 
         # Harita gerçek tablo durumuna göre yeniden kurulur — silme/ekleme
         # sonrası satır index'leri kaymış olabilir.
-        self._symbol_to_row = {}
-        for r in range(self._table.rowCount()):
-            it = self._table.item(r, _COL_SYMBOL)
-            if it is not None:
-                self._symbol_to_row[it.text().split()[0]] = r
+        self._rebuild_symbol_to_row()
 
         self._table.setSortingEnabled(True)
         self._table.resizeColumnsToContents()

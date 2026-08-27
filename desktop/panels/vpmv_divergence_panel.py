@@ -138,6 +138,8 @@ class VpmvDivergencePanel(QWidget):
         self._curves: dict[str, pg.PlotDataItem] = {}
         self._labels: dict[str, pg.TextItem] = {}
         self._sym_colors: dict[str, tuple] = {}
+        self._pos_symbol_to_row: dict[str, int] = {}
+        self._neg_symbol_to_row: dict[str, int] = {}
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -371,6 +373,7 @@ class VpmvDivergencePanel(QWidget):
             time_map,
             median_vpmv,
             positive=True,
+            symbol_to_row=self._pos_symbol_to_row,
         )
         self._fill_table(
             self._neg_table,
@@ -381,9 +384,26 @@ class VpmvDivergencePanel(QWidget):
             time_map,
             median_vpmv,
             positive=False,
+            symbol_to_row=self._neg_symbol_to_row,
         )
         self._apply_filter(self._pos_table, self._pos_search)
         self._apply_filter(self._neg_table, self._neg_search)
+
+    @staticmethod
+    def _get_item(table: QTableWidget, row: int, col: int, item_cls=QTableWidgetItem):
+        item = table.item(row, col)
+        if item is None or (item_cls is _NumericItem and not isinstance(item, _NumericItem)):
+            item = item_cls("")
+            table.setItem(row, col, item)
+        return item
+
+    @staticmethod
+    def _rebuild_symbol_to_row(table: QTableWidget, symbol_to_row: dict) -> None:
+        symbol_to_row.clear()
+        for r in range(table.rowCount()):
+            it = table.item(r, _COL_SYMBOL)
+            if it is not None:
+                symbol_to_row[it.text()] = r
 
     def _fill_table(  # pylint: disable=too-many-arguments,too-many-locals
         self,
@@ -395,22 +415,52 @@ class VpmvDivergencePanel(QWidget):
         time_map: dict,
         median_vpmv: float,
         positive: bool,
+        symbol_to_row: dict,
     ) -> None:
         table.setSortingEnabled(False)
-        table.setRowCount(len(rows))
+
+        # Kullanıcı iki _fill_table() çağrısı arasında bir sütun başlığına
+        # tıklayıp tabloyu yeniden sıralayabilir — harita bu durumda bayatlar
+        # (paper_trade_panel.py'deki "P&L önce 31 sonra -2" bug'ıyla aynı kök
+        # neden sınıfı, 27 Ağu 2026). Her çağrı başında haritayı tablonun
+        # GERÇEK anlık durumundan yeniden kuruyoruz.
+        self._rebuild_symbol_to_row(table, symbol_to_row)
 
         mono = QFont("Courier New", 11)
         bold = QFont("Courier New", 11, QFont.Weight.Bold)
         d_color = _C_GREEN if positive else _C_RED
         now = datetime.now()
 
-        for row_idx, (symbol, delta) in enumerate(rows):
-            sym_item = QTableWidgetItem(symbol)
+        incoming = {symbol for symbol, _ in rows}
+        removed = set(symbol_to_row) - incoming
+        if removed:
+            rows_to_remove = sorted(
+                (symbol_to_row[s] for s in removed if s in symbol_to_row), reverse=True
+            )
+            for row in rows_to_remove:
+                table.removeRow(row)
+            # removeRow altındaki satırların index'ini kaydırır — haritayı hemen
+            # yeniden kurmazsak kalan semboller YANLIŞ (kaymış) satırı işaret
+            # edebilir (27 Ağu 2026, deviso_panel.py'de bulundu).
+            self._rebuild_symbol_to_row(table, symbol_to_row)
+
+        for symbol, delta in rows:
+            row_idx = symbol_to_row.get(symbol)
+            if (
+                row_idx is None
+                or row_idx >= table.rowCount()
+                or table.item(row_idx, _COL_SYMBOL) is None
+            ):
+                row_idx = table.rowCount()
+                table.insertRow(row_idx)
+
+            sym_item = self._get_item(table, row_idx, _COL_SYMBOL)
+            sym_item.setText(symbol)
             sym_item.setFont(bold)
             sym_item.setForeground(d_color)
-            table.setItem(row_idx, _COL_SYMBOL, sym_item)
 
-            d_item = _NumericItem(f"{delta:+.1f}")
+            d_item = self._get_item(table, row_idx, _COL_DELTA, _NumericItem)
+            d_item.setText(f"{delta:+.1f}")
             d_item.setData(Qt.ItemDataRole.UserRole, delta)
             d_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             d_item.setFont(mono)
@@ -422,22 +472,22 @@ class VpmvDivergencePanel(QWidget):
                 d_item.setBackground(_BG_POS_SOFT if positive else _BG_NEG_SOFT)
             else:
                 d_item.setBackground(_C_TRANSPARENT)
-            table.setItem(row_idx, _COL_DELTA, d_item)
 
             for col, val in (
                 (_COL_NOW, current_vpmv.get(symbol, 0.0)),
                 (_COL_SIG, signal_vpmv.get(symbol, 0.0)),
                 (_COL_PRE, pre_vpmv.get(symbol, 0.0)),
             ):
-                it = _NumericItem(f"{val:.0f}")
+                it = self._get_item(table, row_idx, col, _NumericItem)
+                it.setText(f"{val:.0f}")
                 it.setData(Qt.ItemDataRole.UserRole, val)
                 it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 it.setFont(mono)
                 it.setForeground(_C_MUTED)
-                table.setItem(row_idx, col, it)
 
             vs_med = current_vpmv.get(symbol, 0.0) - median_vpmv
-            vs_item = _NumericItem(f"{vs_med:+.0f}")
+            vs_item = self._get_item(table, row_idx, _COL_VS_MED, _NumericItem)
+            vs_item.setText(f"{vs_med:+.0f}")
             vs_item.setData(Qt.ItemDataRole.UserRole, vs_med)
             vs_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             vs_item.setFont(mono)
@@ -448,7 +498,6 @@ class VpmvDivergencePanel(QWidget):
                 vs_item.setBackground(_BG_POS_SOFT if vs_med >= 0 else _BG_NEG_SOFT)
             else:
                 vs_item.setBackground(_C_TRANSPARENT)
-            table.setItem(row_idx, _COL_VS_MED, vs_item)
 
             sig_dt = time_map.get(symbol)
             if sig_dt:
@@ -459,11 +508,12 @@ class VpmvDivergencePanel(QWidget):
                 )
             else:
                 time_str = "—"
-            t_item = QTableWidgetItem(time_str)
+            t_item = self._get_item(table, row_idx, _COL_TIME)
+            t_item.setText(time_str)
             t_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             t_item.setFont(mono)
             t_item.setForeground(_C_MUTED)
-            table.setItem(row_idx, _COL_TIME, t_item)
 
+        self._rebuild_symbol_to_row(table, symbol_to_row)
         table.setSortingEnabled(True)
         table.resizeColumnsToContents()
