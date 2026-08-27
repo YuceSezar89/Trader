@@ -78,6 +78,7 @@ class DevisoPanel(QWidget):
         self._signals: Dict[int, Dict[str, Any]] = {}
         self._dir_filter: str = "Tümü"
         self._id_to_row: Dict[int, int] = {}
+        self._resized_once = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
@@ -289,11 +290,17 @@ class DevisoPanel(QWidget):
             self._populate_row(row_idx, i, r)
 
         self._rebuild_id_to_row()
-        self._table.resizeColumnToContents(_COL_RANK)
-        self._table.resizeColumnToContents(_COL_TF)
-        self._table.resizeColumnToContents(_COL_SCORE)
-        self._table.resizeColumnToContents(_COL_DELTA)
-        self._table.resizeColumnToContents(_COL_RATIO)
+        # resizeColumnToContents() satır başına font-shaping (CoreText) çağırıyor
+        # — event-bazlı sık tetiklenen bu panelde periyodik olarak CPU'yu
+        # tıkıyordu (27 Ağu 2026, sample ile ölçüldü). İlk dolduruluşta bir kez
+        # yapılması yeterli.
+        if not self._resized_once:
+            self._table.resizeColumnToContents(_COL_RANK)
+            self._table.resizeColumnToContents(_COL_TF)
+            self._table.resizeColumnToContents(_COL_SCORE)
+            self._table.resizeColumnToContents(_COL_DELTA)
+            self._table.resizeColumnToContents(_COL_RATIO)
+            self._resized_once = True
 
     def _populate_row(self, row_idx: int, i: int, r: Dict[str, Any]) -> None:
         score = r.get("devisso_score")

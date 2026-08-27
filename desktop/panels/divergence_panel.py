@@ -148,6 +148,8 @@ class DivergencePanel(QWidget):
         self._prev_neg_ranks: dict[str, int] = {}
         self._pos_symbol_to_row: dict[str, int] = {}
         self._neg_symbol_to_row: dict[str, int] = {}
+        self._pos_resized_once = False
+        self._neg_resized_once = False
         self._ranking: dict[str, int] = {}
         self._pos_search = ""
         self._neg_search = ""
@@ -593,4 +595,13 @@ class DivergencePanel(QWidget):
         self._rebuild_symbol_to_row(table, symbol_to_row)
 
         table.setSortingEnabled(True)
-        table.resizeColumnsToContents()
+        # resizeColumnsToContents() satır başına font-shaping (CoreText) çağırıyor
+        # — periyodik olarak CPU'yu tıkıyordu (27 Ağu 2026, sample ile ölçüldü).
+        # İlk dolduruluşta bir kez yapılması yeterli.
+        already_resized = self._pos_resized_once if positive else self._neg_resized_once
+        if not already_resized:
+            table.resizeColumnsToContents()
+            if positive:
+                self._pos_resized_once = True
+            else:
+                self._neg_resized_once = True

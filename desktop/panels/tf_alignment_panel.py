@@ -87,6 +87,7 @@ class _DirectionTable(QTableWidget):
         hh.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         hh.setSectionResizeMode(_COL_SYMBOL, QHeaderView.ResizeMode.Stretch)
         self._symbol_to_row: dict[str, int] = {}
+        self._resized_once = False
 
     @staticmethod
     def _get_item(table: QTableWidget, row: int, col: int, item_cls=QTableWidgetItem):
@@ -181,7 +182,12 @@ class _DirectionTable(QTableWidget):
             open_btn.setProperty("row_data", row_data)
 
         self.setSortingEnabled(True)
-        self.resizeColumnsToContents()
+        # resizeColumnsToContents() satır başına font-shaping (CoreText) çağırıyor
+        # — 10sn'de bir periyodik olarak CPU'yu tıkıyordu (27 Ağu 2026, sample ile
+        # ölçüldü). İlk dolduruluşta bir kez yapılması yeterli.
+        if not self._resized_once:
+            self.resizeColumnsToContents()
+            self._resized_once = True
         self._apply_search_filter(search_text)
 
     def _on_open_clicked(self) -> None:

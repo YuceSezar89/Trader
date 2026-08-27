@@ -89,6 +89,7 @@ class RankPanel(QWidget):
         super().__init__(parent)
         self._search = ""
         self._symbol_to_row: dict[str, int] = {}
+        self._resized_once = False
         self._setup_ui()
 
     # ── UI ────────────────────────────────────────────────────────────────
@@ -236,5 +237,10 @@ class RankPanel(QWidget):
 
         self._rebuild_symbol_to_row()
         self._table.setSortingEnabled(True)
-        self._table.resizeColumnsToContents()
+        # resizeColumnsToContents() satır başına font-shaping (CoreText) çağırıyor
+        # — 90sn'de bir periyodik olarak CPU'yu tıkıyordu (27 Ağu 2026, sample ile
+        # ölçüldü). İlk dolduruluşta bir kez yapılması yeterli.
+        if not self._resized_once:
+            self._table.resizeColumnsToContents()
+            self._resized_once = True
         self._apply_filter()

@@ -184,6 +184,7 @@ class TradeXRayPanel(QWidget):
         self._list_worker: Optional[_TradeListWorker] = None
         self._snap_worker: Optional[_SnapshotWorker] = None
         self._id_to_row: dict[int, int] = {}
+        self._resized_once = False
         self._setup_ui()
         self.refresh()
 
@@ -556,7 +557,12 @@ class TradeXRayPanel(QWidget):
 
         self._rebuild_id_to_row()
         self._table.setSortingEnabled(True)
-        self._table.resizeColumnsToContents()
+        # resizeColumnsToContents() satır başına font-shaping (CoreText) çağırıyor
+        # — 15sn'de bir periyodik olarak CPU'yu tıkıyordu (27 Ağu 2026, sample ile
+        # ölçüldü). İlk dolduruluşta bir kez yapılması yeterli.
+        if not self._resized_once:
+            self._table.resizeColumnsToContents()
+            self._resized_once = True
 
         if selected_id is not None:
             self._reselect_trade(selected_id)

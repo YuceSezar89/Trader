@@ -104,6 +104,7 @@ class RankingPanel(QWidget):
         self._last_result: list = []
         self._prev_ranks: dict[str, int] = {}
         self._symbol_to_row: dict[str, int] = {}
+        self._resized_once = False
         self._setup_ui()
         self._connect_worker()
         self._worker.start()
@@ -372,7 +373,14 @@ class RankingPanel(QWidget):
         self._rebuild_symbol_to_row()
 
         self._table.setSortingEnabled(True)
-        self._table.resizeColumnsToContents()
+        # resizeColumnsToContents() satır başına font-shaping (CoreText) çağırıyor
+        # — 550 satır × 12 sütunda birkaç saniye sürüp CPU'yu periyodik olarak
+        # tıkıyordu (27 Ağu 2026, sample ile ölçüldü). İlk dolduruluşta bir kez
+        # yapılması yeterli; sütunlar zaten Interactive/Stretch, kullanıcı
+        # istediğinde elle genişletebilir.
+        if not self._resized_once:
+            self._table.resizeColumnsToContents()
+            self._resized_once = True
         self._apply_search_filter()
 
     @pyqtSlot(str)
