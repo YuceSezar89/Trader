@@ -435,7 +435,10 @@ class MainWindow(QMainWindow):
         self._market_worker.connection_changed.connect(self._on_market_connection)
         self._market_worker.price_updated.connect(self._watchlist_panel.on_price_updated)
         self._market_worker.price_updated.connect(self._on_price_updated)
-        self._market_worker.prices_updated.connect(self._paper_trade_panel.on_prices_updated)
+        # 27 Ağu 2026: paper_trade_panel'in açık pozisyon PnL'i artık TEK kaynak
+        # (live_kline_data, bkz. PaperTradePanel._poll_prices) — ticker-bazlı bu
+        # bağlantı, MOVR olayında olduğu gibi iki rakip fiyat kaynağının
+        # çelişmesine yol açıyordu, kaldırıldı.
         self._market_worker.klines_updated.connect(self._chart_panel.on_klines_updated)
         self._market_worker.symbols_discovered.connect(self._watchlist_panel.on_symbols_discovered)
         self._watchlist_panel.refresh_requested.connect(self._market_worker.request_symbol_refresh)

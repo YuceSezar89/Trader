@@ -40,6 +40,13 @@ from PyQt6.QtWidgets import (  # pylint: disable=no-name-in-module
 from desktop.theme import COLORS
 from signals.paper_trade_manager import LEVERAGE_BY_STRATEGY
 
+# Açık pozisyon fiyatı/PnL'i için TEK canlı kaynak: live_kline_data:{symbol}:1m
+# (WS beslemeli, bkz. _poll_prices). Bu bardan bu kadar süre yeni veri
+# gelmemişse (ör. o sembolün WS alt-akışı donmuşsa — 27 Ağu 2026, MOVR'da
+# ~1.5 saat fark edilmeden yaşandı) fiyat/PnL hücreleri "bayat" işaretlenir,
+# sessizce yanlış bir sayı gösterilmez.
+_STALE_THRESHOLD_SEC = 300
+
 
 class _FetchWorker(QThread):
     fetched = pyqtSignal(object, list, list)  # (portfolio_dict, open_rows, hist_rows)
@@ -522,19 +529,7 @@ class PaperTradePanel(QWidget):
         )
         return t
 
-    # ── Fiyat güncellemesi (market worker'dan) ────────────────────────────
-
-    def on_price_updated(self, symbol: str, price: float, *_) -> None:
-        self._open_prices[symbol] = price
-        self._refresh_price_cells(symbol, price)
-
-    def on_prices_updated(self, prices: dict) -> None:
-        open_syms = {r["symbol"] for r in self._open_rows}
-        for sym in open_syms:
-            p = prices.get(sym)
-            if p is not None:
-                self._open_prices[sym] = float(p)
-                self._refresh_price_cells(sym, float(p))
+    # ── Fiyat güncellemesi (TEK kaynak: live_kline_data, bkz. yukarıdaki not) ──
 
     def _poll_prices(self) -> None:
         if not self._redis or not self._open_rows:
@@ -545,18 +540,23 @@ class PaperTradePanel(QWidget):
             for sym in syms:
                 pipe.get(f"live_kline_data:{sym}:1m".encode())
             results = pipe.execute()
+            now_ms = datetime.now().timestamp() * 1000
             for sym, raw in zip(syms, results):
-                price = self._extract_close(raw)
+                price, open_time_ms = self._extract_close_and_time(raw)
                 if price:
                     self._open_prices[sym] = price
-                    self._refresh_price_cells(sym, price)
+                    stale = (
+                        open_time_ms is None
+                        or (now_ms - open_time_ms) / 1000 > _STALE_THRESHOLD_SEC
+                    )
+                    self._refresh_price_cells(sym, price, stale=stale)
         except Exception:  # pylint: disable=broad-exception-caught
             pass
 
     @staticmethod
-    def _extract_close(raw: bytes | None) -> float | None:
+    def _extract_close_and_time(raw: bytes | None) -> tuple[float | None, float | None]:
         if not raw:
-            return None
+            return None, None
         try:
             if raw[:4] == b"ARDF":
                 reader = _pa.ipc.open_stream(raw[4:])
@@ -565,15 +565,20 @@ class PaperTradePanel(QWidget):
                 finally:
                     reader.close()
                 if "close" in df.columns and not df.empty:
-                    return float(df["close"].iloc[-1])
+                    price = float(df["close"].iloc[-1])
+                    open_time_ms = (
+                        float(df["open_time"].iloc[-1]) if "open_time" in df.columns else None
+                    )
+                    return price, open_time_ms
             else:
                 d = json.loads(raw.decode("utf-8"))
-                return float(d.get("price") or d.get("last_price") or 0) or None
+                price = float(d.get("price") or d.get("last_price") or 0) or None
+                return price, None
         except Exception:  # pylint: disable=broad-exception-caught
             pass
-        return None
+        return None, None
 
-    def _refresh_price_cells(self, symbol: str, live: float) -> None:
+    def _refresh_price_cells(self, symbol: str, live: float, stale: bool = False) -> None:
         id_to_row = {row["id"]: row for row in self._open_rows if row["symbol"] == symbol}
         if not id_to_row:
             return
@@ -627,9 +632,11 @@ class PaperTradePanel(QWidget):
 
             sl_danger = sl_dist is not None and abs(sl_dist) < 1.0
             danger_bg = QColor("#3d1515")
+            stale_bg = QColor(120, 70, 0, 140)
+            price_text = f"{live:.5g} ⚠bayat" if stale else f"{live:.5g}"
 
             updates: dict[int, tuple[str, float, QColor | None]] = {
-                5: (f"{live:.5g}", live, None),
+                5: (price_text, live, None),
                 6: (f"{pnl_usd:+.2f}$", pnl_usd, _pnl_color(pnl_usd)),
                 7: (f"{pnl_pct:+.2f}%", pnl_pct, _pnl_color(pnl_usd)),
                 8: (
@@ -648,7 +655,14 @@ class PaperTradePanel(QWidget):
                     it._sort_val = sort_val
                 if fg:
                     it.setForeground(fg)
-                it.setBackground(danger_bg if sl_danger else QColor(0, 0, 0, 0))
+                # Fiyat verisi bayatsa (live_kline_data N dakikadır güncellenmemiş
+                # — o sembolün WS alt-akışı donmuş olabilir, 27 Ağu 2026 MOVR
+                # olayı) tüm satır turuncu işaretlenir; sessizce yanlış bir PnL
+                # gösterilmez. sl_danger'dan ÖNCELİKLİDİR.
+                if stale:
+                    it.setBackground(stale_bg)
+                else:
+                    it.setBackground(danger_bg if sl_danger else QColor(0, 0, 0, 0))
 
     # ── Veri yükleme ──────────────────────────────────────────────────────
 
