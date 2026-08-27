@@ -32,6 +32,14 @@ from desktop.theme import COLORS
 pg.setConfigOption("background", "#0d0d12")
 pg.setConfigOption("foreground", "#555566")
 
+# TF başına dakika — bayatlık eşiği hesaplamak için (bkz. _fill_table).
+# divergence_live:{symbol}:{tf} backend'de her bar kapanışında yazılıyor,
+# bir sonraki bar kapanışına kadar taze sayılır; eşik TF süresinin 3 katı +
+# ağ/işlem gecikmesi payı.
+_TF_MINUTES = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440}
+_STALE_TOLERANCE_BARS = 3
+_STALE_BUFFER_SEC = 90
+
 _COLS = ["Sembol", "Z-score", "VPMV", "Rank", "Zaman"]
 _COL_SYMBOL = 0
 _COL_ZSCORE = 1
@@ -52,6 +60,7 @@ _BG_GREEN_STRONG = QColor(0, 120, 40, 150)
 _BG_GREEN_SOFT = QColor(0, 80, 20, 80)
 _BG_RED_STRONG = QColor(180, 20, 20, 150)
 _BG_RED_SOFT = QColor(120, 10, 10, 80)
+_BG_STALE = QColor(120, 70, 0, 140)
 
 _PALETTE = [
     (100, 220, 100),
@@ -384,6 +393,7 @@ class DivergencePanel(QWidget):
         indicators_map = result.get("indicators", {})
         series = result.get("series", {})
         vpmv_map = result.get("vpmv", {})
+        timestamps = result.get("timestamps", {})
 
         ind_filter = self._indicator_filter
         if ind_filter:
@@ -437,6 +447,7 @@ class DivergencePanel(QWidget):
             positive=True,
             rank_deltas=pos_deltas,
             symbol_to_row=self._pos_symbol_to_row,
+            timestamps=timestamps,
         )
         self._fill_table(
             self._neg_table,
@@ -446,6 +457,7 @@ class DivergencePanel(QWidget):
             positive=False,
             rank_deltas=neg_deltas,
             symbol_to_row=self._neg_symbol_to_row,
+            timestamps=timestamps,
         )
         self._apply_filter(self._pos_table, self._pos_search)
         self._apply_filter(self._neg_table, self._neg_search)
@@ -475,6 +487,7 @@ class DivergencePanel(QWidget):
         positive: bool,
         rank_deltas: Optional[dict] = None,
         symbol_to_row: Optional[dict[str, int]] = None,
+        timestamps: Optional[dict] = None,
     ) -> None:
         # 27 Ağu 2026: setRowCount(len(rows)) + tam yeniden inşa her satır için
         # yeni QTableWidgetItem yaratıp eskisini yok ediyordu — ranking_panel.py
@@ -503,6 +516,11 @@ class DivergencePanel(QWidget):
         z_color = _C_GREEN if positive else _C_RED
         if rank_deltas is None:
             rank_deltas = {}
+        if timestamps is None:
+            timestamps = {}
+        tf_minutes = _TF_MINUTES.get(self._tf_combo.currentText(), 60)
+        stale_threshold_sec = tf_minutes * 60 * _STALE_TOLERANCE_BARS + _STALE_BUFFER_SEC
+        now_ts = now.timestamp()
 
         incoming = {symbol for symbol, _ in rows}
         removed = set(symbol_to_row) - incoming
@@ -591,6 +609,19 @@ class DivergencePanel(QWidget):
             t_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             t_item.setFont(mono)
             t_item.setForeground(_C_MUTED)
+
+            # Bayatlık kontrolü: divergence_live'ın son barı (ts_recent) bu TF'nin
+            # normal bar aralığının birkaç katından eskiyse, backend'in bu sembol
+            # için veri üretmeyi durdurmuş olma ihtimali var (27 Ağu 2026, MOVR
+            # olayıyla aynı sınıf risk) — sessizce eski Z-score göstermek yerine
+            # satır turuncu işaretlenir.
+            ts_arr = timestamps.get(symbol)
+            last_ts = float(ts_arr[-1]) if ts_arr is not None and len(ts_arr) > 0 else None
+            is_stale = last_ts is None or (now_ts - last_ts) > stale_threshold_sec
+            if is_stale:
+                sym_item.setText(f"{sym_text} ⚠")
+                for stale_item in (sym_item, z_item, vpmv_item, rank_item, t_item):
+                    stale_item.setBackground(_BG_STALE)
 
         self._rebuild_symbol_to_row(table, symbol_to_row)
 

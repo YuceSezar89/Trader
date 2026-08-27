@@ -8,7 +8,9 @@ sıralanıyor, bkz. backend). Her satırda "Aç" butonu — ManualTradeDialog'u
 sembol/yön/TF/güncel fiyat önceden doldurulmuş açar.
 """
 
-from PyQt6.QtCore import Qt, pyqtSlot  # pylint: disable=no-name-in-module
+import time
+
+from PyQt6.QtCore import Qt, QTimer, pyqtSlot  # pylint: disable=no-name-in-module
 from PyQt6.QtGui import QColor, QFont  # pylint: disable=no-name-in-module
 from PyQt6.QtWidgets import (  # pylint: disable=no-name-in-module
     QHBoxLayout,
@@ -24,6 +26,13 @@ from PyQt6.QtWidgets import (  # pylint: disable=no-name-in-module
 
 from desktop.theme import COLORS
 from desktop.workers.tf_alignment_worker import TFAlignmentWorker
+
+# tf_alignment_worker 10sn'de bir yayınlıyor (bkz. o worker'ın _UPDATE_SEC'i).
+# 3 tur (30sn) hiç veri gelmezse worker/Redis bağlantısı kopmuş olabilir —
+# panel eski veriyi sessizce göstermeye devam etmesin diye uyarı gösterilir
+# (27 Ağu 2026, MOVR'daki "sessizce bayat veri" olayına karşı genel önlem).
+_STALE_THRESHOLD_SEC = 30
+_STALE_CHECK_INTERVAL_MS = 10_000
 
 _COL_SYMBOL = 0
 _COL_TF = 1
@@ -213,9 +222,16 @@ class TFAlignmentPanel(QWidget):
         self._worker = TFAlignmentWorker(redis_url, parent=self)
         self._search_text = ""
         self._last_rows: list = []
+        self._last_update_monotonic = time.monotonic()
+        self._is_stale = False
         self._setup_ui()
         self._connect_worker()
         self._worker.start()
+
+        self._stale_timer = QTimer(self)
+        self._stale_timer.setInterval(_STALE_CHECK_INTERVAL_MS)
+        self._stale_timer.timeout.connect(self._check_stale)
+        self._stale_timer.start()
 
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -281,12 +297,26 @@ class TFAlignmentPanel(QWidget):
 
     @pyqtSlot(object)
     def _on_updated(self, rows: list) -> None:
+        self._last_update_monotonic = time.monotonic()
+        if self._is_stale:
+            self._is_stale = False
+            self._status.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px;")
         self._last_rows = rows
         self._render(rows)
 
     @pyqtSlot(str)
     def _on_status(self, msg: str) -> None:
-        self._status.setText(msg)
+        if not self._is_stale:
+            self._status.setText(msg)
+
+    def _check_stale(self) -> None:
+        age = time.monotonic() - self._last_update_monotonic
+        if age > _STALE_THRESHOLD_SEC and not self._is_stale:
+            self._is_stale = True
+            self._status.setStyleSheet(
+                f"color: {COLORS['red']}; font-size: 11px; font-weight: bold;"
+            )
+            self._status.setText(f"⚠ {age:.0f}sn'dir veri güncellenmiyor")
 
     def _on_search_changed(self, text: str) -> None:
         self._search_text = text.strip().upper()

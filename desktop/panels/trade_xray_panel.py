@@ -18,6 +18,7 @@ from __future__ import annotations
 import bisect
 import json
 import logging
+import time
 from typing import Optional
 
 import psycopg2
@@ -61,6 +62,13 @@ _CROSSHAIR_PEN = pg.mkPen((120, 120, 140), width=1, style=Qt.PenStyle.DotLine)
 
 _TRADE_COLS = ["Sembol", "Strateji", "Yön", "Durum", "Açılış", "PnL%"]
 _COL_SYMBOL, _COL_STRATEGY, _COL_SIDE, _COL_STATUS, _COL_OPENED, _COL_PNL = range(6)
+
+# _refresh_timer 15sn'de bir tetikliyor. 3 tur (45sn) hiç _TradeListWorker
+# emit'i gelmezse worker takılmış/Redis bağlantısı kopmuş olabilir — panel
+# eski listeyi sessizce göstermeye devam etmesin diye uyarı gösterilir
+# (27 Ağu 2026, MOVR'daki "sessizce bayat veri" olayına karşı genel önlem).
+_STALE_THRESHOLD_SEC = 45
+_STALE_CHECK_INTERVAL_MS = 10_000
 
 _C_GREEN = QColor(COLORS["green"])
 _C_RED = QColor(COLORS["red"])
@@ -185,6 +193,8 @@ class TradeXRayPanel(QWidget):
         self._snap_worker: Optional[_SnapshotWorker] = None
         self._id_to_row: dict[int, int] = {}
         self._resized_once = False
+        self._last_update_monotonic = time.monotonic()
+        self._is_stale = False
         self._setup_ui()
         self.refresh()
 
@@ -192,6 +202,11 @@ class TradeXRayPanel(QWidget):
         self._refresh_timer.setInterval(15_000)
         self._refresh_timer.timeout.connect(self.refresh)
         self._refresh_timer.start()
+
+        self._stale_timer = QTimer(self)
+        self._stale_timer.setInterval(_STALE_CHECK_INTERVAL_MS)
+        self._stale_timer.timeout.connect(self._check_stale)
+        self._stale_timer.start()
 
     @staticmethod
     def _make_combo(options: list[str]) -> QComboBox:
@@ -406,17 +421,31 @@ class TradeXRayPanel(QWidget):
         layout.addWidget(splitter)
 
     def refresh(self) -> None:
-        self._status.setText("Yükleniyor…")
+        if not self._is_stale:
+            self._status.setText("Yükleniyor…")
         self._list_worker = _TradeListWorker(self._redis_url, parent=self)
         self._list_worker.trades_loaded.connect(self._on_trades_loaded)
         self._list_worker.start()
 
     @pyqtSlot(object)
     def _on_trades_loaded(self, trades: list) -> None:
+        self._last_update_monotonic = time.monotonic()
+        if self._is_stale:
+            self._is_stale = False
+            self._status.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px;")
         self._trades = trades
         self._status.setText(f"{len(trades)} işlem")
         self._refresh_strategy_options()
         self._apply_search_filter()
+
+    def _check_stale(self) -> None:
+        age = time.monotonic() - self._last_update_monotonic
+        if age > _STALE_THRESHOLD_SEC and not self._is_stale:
+            self._is_stale = True
+            self._status.setStyleSheet(
+                f"color: {COLORS['red']}; font-size: 11px; font-weight: bold;"
+            )
+            self._status.setText(f"⚠ {age:.0f}sn'dir veri güncellenmiyor")
 
     def _refresh_strategy_options(self) -> None:
         strategies = sorted({t["strategy"] for t in self._trades if t.get("strategy")})
