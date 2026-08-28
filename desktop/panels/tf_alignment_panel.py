@@ -6,25 +6,40 @@ eşik mimarisi).
 Long ve Short ayrı tablolarda (kendi popülasyonları içinde percentile'a göre
 sıralanıyor, bkz. backend). Her satırda "Aç" butonu — ManualTradeDialog'u
 sembol/yön/TF/güncel fiyat önceden doldurulmuş açar.
+
+28 Ağu 2026: QTableWidget → Model/View göçü (Faz 4, bkz. proje hafızası
+"masaüstü panel mimari denetimi"). Gömülü "Aç" butonu artık setCellWidget
+DEĞİL, ButtonColumnDelegate (bkz. desktop/widgets/button_column_delegate.py)
+— sıralanabilir bir QSortFilterProxyModel altında setCellWidget/setIndexWidget
+satır eşlemesi her sıralamada bozulurdu, ayrıca 26 Tem 2026'da bulunan "her
+render'da yeni QPushButton = tüm QSS'in yeniden ayrıştırılması" CPU maliyeti
+de bu şekilde ortadan kalkıyor (buton hiç widget olarak yaratılmıyor, sadece
+çiziliyor).
 """
 
-import time
-
-from PyQt6.QtCore import Qt, QTimer, pyqtSlot  # pylint: disable=no-name-in-module
-from PyQt6.QtGui import QColor, QFont  # pylint: disable=no-name-in-module
+from PyQt6.QtCore import pyqtSlot  # pylint: disable=no-name-in-module
+from PyQt6.QtGui import QFont  # pylint: disable=no-name-in-module
 from PyQt6.QtWidgets import (  # pylint: disable=no-name-in-module
+    QAbstractItemView,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
     QPushButton,
-    QTableWidget,
-    QTableWidgetItem,
+    QTableView,
     QVBoxLayout,
     QWidget,
 )
 
+from desktop.models.tf_alignment_model import (
+    COL_ACTION,
+    COL_SYMBOL,
+    TFAlignmentModel,
+    TFAlignmentProxyModel,
+)
 from desktop.theme import COLORS
+from desktop.widgets.button_column_delegate import ButtonColumnDelegate
+from desktop.widgets.staleness import StalePanelMixin
 from desktop.workers.tf_alignment_worker import TFAlignmentWorker
 
 # tf_alignment_worker 10sn'de bir yayınlıyor (bkz. o worker'ın _UPDATE_SEC'i).
@@ -34,47 +49,29 @@ from desktop.workers.tf_alignment_worker import TFAlignmentWorker
 _STALE_THRESHOLD_SEC = 30
 _STALE_CHECK_INTERVAL_MS = 10_000
 
-_COL_SYMBOL = 0
-_COL_TF = 1
-_COL_INDICATOR = 2
-_COL_OPEN_PRICE = 3
-_COL_EARLY_PCT = 4
-_COL_ACTION = 5
-_HEADERS = ["Sembol", "TF", "Gösterge", "Açılış", "Erken %", ""]
 
-_C_GREEN = QColor(COLORS["green"])
-_C_RED = QColor(COLORS["red"])
-_C_MUTED = QColor(COLORS["text_muted"])
-_C_WHITE = QColor(COLORS["text_primary"])
-
-
-class _NumericItem(QTableWidgetItem):
-    def __lt__(self, other: "QTableWidgetItem") -> bool:
-        try:
-            return float(self.data(Qt.ItemDataRole.UserRole)) < float(
-                other.data(Qt.ItemDataRole.UserRole)
-            )
-        except (TypeError, ValueError):
-            return super().__lt__(other)
-
-
-class _DirectionTable(QTableWidget):
+class _DirectionTableView(QTableView):
     """Long veya Short adaylarını gösteren tek bir tablo."""
 
     def __init__(self, direction: str, on_open, parent=None):
-        super().__init__(0, len(_HEADERS), parent)
+        super().__init__(parent)
         self._direction = direction
         self._on_open = on_open
-        self.setHorizontalHeaderLabels(_HEADERS)
-        self.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._model = TFAlignmentModel(self)
+        self._proxy = TFAlignmentProxyModel(self)
+        self._proxy.setSourceModel(self._model)
+        self.setModel(self._proxy)
+        self._resized_once = False
+
+        self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.setAlternatingRowColors(False)
         self.setSortingEnabled(True)
         self.setShowGrid(False)
         self.verticalHeader().setVisible(False)
         self.setStyleSheet(
             f"""
-            QTableWidget {{
+            QTableView {{
                 background: {COLORS['bg_primary']};
                 color: {COLORS['text_primary']};
                 border: none;
@@ -87,134 +84,38 @@ class _DirectionTable(QTableWidget):
                 padding: 4px;
                 font-size: 11px;
             }}
-            QTableWidget::item:selected {{
+            QTableView::item:selected {{
                 background: {COLORS['bg_tertiary']};
             }}
             """
         )
         hh = self.horizontalHeader()
         hh.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        hh.setSectionResizeMode(_COL_SYMBOL, QHeaderView.ResizeMode.Stretch)
-        self._symbol_to_row: dict[str, int] = {}
-        self._resized_once = False
+        hh.setSectionResizeMode(COL_SYMBOL, QHeaderView.ResizeMode.Stretch)
 
-    @staticmethod
-    def _get_item(table: QTableWidget, row: int, col: int, item_cls=QTableWidgetItem):
-        item = table.item(row, col)
-        if item is None or (item_cls is _NumericItem and not isinstance(item, _NumericItem)):
-            item = item_cls("")
-            table.setItem(row, col, item)
-        return item
+        self._delegate = ButtonColumnDelegate("Aç")
+        self._delegate.clicked.connect(self._on_action_clicked)
+        self.setItemDelegateForColumn(COL_ACTION, self._delegate)
+
+    def _on_action_clicked(self, proxy_index) -> None:
+        source_index = self._proxy.mapToSource(proxy_index)
+        row = self._model.row_at(source_index.row())
+        if row is not None:
+            self._on_open(row.raw)
 
     def render(self, rows: list, search_text: str) -> None:
-        self.setSortingEnabled(False)
-
-        # Kullanıcı iki render() arasında bir sütun başlığına tıklayıp tabloyu
-        # yeniden sıralayabilir — saklı harita bu durumda BAYATLAR (paper_trade_
-        # panel.py'de "P&L önce 31 sonra -2" bug'ının kök nedeniyle aynı sınıf,
-        # 27 Ağu 2026). Her render() başında haritayı tablonun GERÇEK anlık
-        # durumundan yeniden kurup bu riski tamamen ortadan kaldırıyoruz.
-        self._symbol_to_row = {
-            self.item(r, _COL_SYMBOL).text(): r
-            for r in range(self.rowCount())
-            if self.item(r, _COL_SYMBOL) is not None
-        }
-
-        incoming = {r.get("symbol", ""): r for r in rows}
-        for symbol in list(self._symbol_to_row):
-            if symbol not in incoming:
-                row = self._symbol_to_row.pop(symbol)
-                self.removeRow(row)
-                for sym, r in self._symbol_to_row.items():
-                    if r > row:
-                        self._symbol_to_row[sym] = r - 1
-
-        for symbol, row_data in incoming.items():
-            row_idx = self._symbol_to_row.get(symbol)
-            if row_idx is None:
-                row_idx = self.rowCount()
-                self.insertRow(row_idx)
-                self._symbol_to_row[symbol] = row_idx
-
-            sym_item = self._get_item(self, row_idx, _COL_SYMBOL)
-            sym_item.setText(symbol)
-            sym_item.setForeground(_C_WHITE)
-
-            tf_item = self._get_item(self, row_idx, _COL_TF)
-            tf_item.setText(row_data.get("interval", ""))
-            tf_item.setForeground(_C_MUTED)
-            tf_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-
-            ind_item = self._get_item(self, row_idx, _COL_INDICATOR)
-            ind_item.setText(row_data.get("indicators", ""))
-            ind_item.setForeground(_C_MUTED)
-            ind_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-
-            open_price = row_data.get("open_price")
-            price_item = self._get_item(self, row_idx, _COL_OPEN_PRICE, _NumericItem)
-            price_item.setText(f"{open_price:.6g}" if open_price is not None else "—")
-            price_item.setData(Qt.ItemDataRole.UserRole, open_price or 0)
-            price_item.setForeground(_C_MUTED)
-            price_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-
-            early_pct = row_data.get("early_pct")
-            early_item = self._get_item(self, row_idx, _COL_EARLY_PCT, _NumericItem)
-            if early_pct is None:
-                early_item.setText("—")
-                early_item.setData(Qt.ItemDataRole.UserRole, 0)
-                early_item.setForeground(_C_MUTED)
-            else:
-                sign = "+" if early_pct > 0 else ""
-                early_item.setText(f"{sign}{early_pct:.3f}")
-                early_item.setData(Qt.ItemDataRole.UserRole, early_pct)
-                early_item.setForeground(_C_GREEN if early_pct > 0 else _C_RED)
-            early_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-
-            # Mevcut satırda buton varsa YENİDEN KULLAN — her render()'da
-            # setCellWidget ile yeni QPushButton yaratmak, her birinin
-            # setVisible(True)'da ensurePolished() → tüm QSS stylesheet'in
-            # YENİDEN AYRIŞTIRILMASINI (QCss::Parser::parse) tetikliyordu.
-            # 20sn'de bir ~225 aday × yeni buton = sürekli CPU/bellek
-            # tüketimi — `sample` ile yakalanan masaüstü donma kök nedeni
-            # (26 Tem 2026).
-            open_btn = self.cellWidget(row_idx, _COL_ACTION)
-            if not isinstance(open_btn, QPushButton):
-                open_btn = QPushButton("Aç")
-                open_btn.setFixedHeight(22)
-                open_btn.setStyleSheet(
-                    f"QPushButton {{ background: {COLORS['bg_tertiary']}; color: {COLORS['accent']};"
-                    f" border: 1px solid {COLORS['border']}; border-radius: 3px; font-size: 11px; }}"
-                    f" QPushButton:hover {{ background: #2a2a3a; }}"
-                )
-                open_btn.clicked.connect(self._on_open_clicked)
-                self.setCellWidget(row_idx, _COL_ACTION, open_btn)
-            open_btn.setProperty("row_data", row_data)
-
-        self.setSortingEnabled(True)
+        self._model.bulk_upsert(rows, self._model.build_row, self._model.update_row)
+        self._model.prune_missing({r.get("symbol", "") for r in rows})
         # resizeColumnsToContents() satır başına font-shaping (CoreText) çağırıyor
         # — 10sn'de bir periyodik olarak CPU'yu tıkıyordu (27 Ağu 2026, sample ile
         # ölçüldü). İlk dolduruluşta bir kez yapılması yeterli.
         if not self._resized_once:
             self.resizeColumnsToContents()
             self._resized_once = True
-        self._apply_search_filter(search_text)
-
-    def _on_open_clicked(self) -> None:
-        btn = self.sender()
-        row_data = btn.property("row_data") if btn is not None else None
-        if row_data:
-            self._on_open(row_data)
-
-    def _apply_search_filter(self, search_text: str) -> None:
-        for row in range(self.rowCount()):
-            item = self.item(row, _COL_SYMBOL)
-            if item is None:
-                continue
-            hidden = bool(search_text) and search_text not in item.text().upper()
-            self.setRowHidden(row, hidden)
+        self._proxy.set_search(search_text)
 
 
-class TFAlignmentPanel(QWidget):
+class TFAlignmentPanel(QWidget, StalePanelMixin):
     def __init__(self, db_config: dict, redis_url: str, parent=None):
         super().__init__(parent)
         self._redis_url = redis_url
@@ -222,16 +123,14 @@ class TFAlignmentPanel(QWidget):
         self._worker = TFAlignmentWorker(redis_url, parent=self)
         self._search_text = ""
         self._last_rows: list = []
-        self._last_update_monotonic = time.monotonic()
-        self._is_stale = False
         self._setup_ui()
         self._connect_worker()
         self._worker.start()
-
-        self._stale_timer = QTimer(self)
-        self._stale_timer.setInterval(_STALE_CHECK_INTERVAL_MS)
-        self._stale_timer.timeout.connect(self._check_stale)
-        self._stale_timer.start()
+        self._init_staleness(
+            self._status,
+            threshold_sec=_STALE_THRESHOLD_SEC,
+            check_interval_ms=_STALE_CHECK_INTERVAL_MS,
+        )
 
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -276,14 +175,14 @@ class TFAlignmentPanel(QWidget):
         long_col = QVBoxLayout()
         long_label = QLabel("Long")
         long_label.setStyleSheet(f"color: {COLORS['green']}; font-weight: bold; font-size: 11px;")
-        self._long_table = _DirectionTable("Long", self._open_manual_trade)
+        self._long_table = _DirectionTableView("Long", self._open_manual_trade)
         long_col.addWidget(long_label)
         long_col.addWidget(self._long_table)
 
         short_col = QVBoxLayout()
         short_label = QLabel("Short")
         short_label.setStyleSheet(f"color: {COLORS['red']}; font-weight: bold; font-size: 11px;")
-        self._short_table = _DirectionTable("Short", self._open_manual_trade)
+        self._short_table = _DirectionTableView("Short", self._open_manual_trade)
         short_col.addWidget(short_label)
         short_col.addWidget(self._short_table)
 
@@ -297,10 +196,7 @@ class TFAlignmentPanel(QWidget):
 
     @pyqtSlot(object)
     def _on_updated(self, rows: list) -> None:
-        self._last_update_monotonic = time.monotonic()
-        if self._is_stale:
-            self._is_stale = False
-            self._status.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px;")
+        self._mark_fresh()
         self._last_rows = rows
         self._render(rows)
 
@@ -308,15 +204,6 @@ class TFAlignmentPanel(QWidget):
     def _on_status(self, msg: str) -> None:
         if not self._is_stale:
             self._status.setText(msg)
-
-    def _check_stale(self) -> None:
-        age = time.monotonic() - self._last_update_monotonic
-        if age > _STALE_THRESHOLD_SEC and not self._is_stale:
-            self._is_stale = True
-            self._status.setStyleSheet(
-                f"color: {COLORS['red']}; font-size: 11px; font-weight: bold;"
-            )
-            self._status.setText(f"⚠ {age:.0f}sn'dir veri güncellenmiyor")
 
     def _on_search_changed(self, text: str) -> None:
         self._search_text = text.strip().upper()

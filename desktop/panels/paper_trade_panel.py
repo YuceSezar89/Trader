@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 import psycopg2
 import psycopg2.extras
@@ -21,7 +21,6 @@ from PyQt6.QtCore import (  # pylint: disable=no-name-in-module
     QTimer,
     pyqtSignal,
 )
-from PyQt6.QtGui import QColor  # pylint: disable=no-name-in-module
 from PyQt6.QtWidgets import (  # pylint: disable=no-name-in-module
     QAbstractItemView,
     QComboBox,
@@ -30,13 +29,18 @@ from PyQt6.QtWidgets import (  # pylint: disable=no-name-in-module
     QLineEdit,
     QMenu,
     QPushButton,
-    QTableWidget,
-    QTableWidgetItem,
+    QTableView,
     QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from desktop.models.paper_trade_model import (
+    PaperHistModel,
+    PaperHistProxyModel,
+    PaperOpenModel,
+    PaperOpenProxyModel,
+)
 from desktop.theme import COLORS
 from signals.paper_trade_manager import LEVERAGE_BY_STRATEGY
 
@@ -125,77 +129,6 @@ class _FetchWorker(QThread):
                 conn.close()
 
 
-OPEN_COLS = [
-    "Sembol",
-    "Yön",
-    "TF",
-    "Strateji",
-    "Giriş$",
-    "Fiyat$",
-    "P&L$",
-    "P&L%",
-    "SL%",
-    "TP%",
-    "Trail$",
-    "VPMV",
-    "Kolaylık",
-    "Süre",
-]
-HIST_COLS = [
-    "Sembol",
-    "Yön",
-    "TF",
-    "Strateji",
-    "Giriş$",
-    "Çıkış$",
-    "P&L$",
-    "P&L%",
-    "Neden",
-    "Kapatma",
-]
-
-
-def _age(dt: datetime | None) -> str:
-    if dt is None:
-        return "—"
-    if dt.tzinfo is not None:
-        dt = dt.replace(tzinfo=None)
-    secs = max(0, int((datetime.now() - dt).total_seconds()))
-    if secs < 60:
-        return f"{secs}s"
-    if secs < 3600:
-        return f"{secs // 60}dk"
-    return f"{secs // 3600}s {(secs % 3600) // 60}dk"
-
-
-def _pnl_color(val: float | None) -> QColor:
-    if val is None:
-        return QColor(COLORS["text_muted"])
-    return QColor(COLORS["green"] if val >= 0 else COLORS["red"])
-
-
-def _item(text: str, align: Qt.AlignmentFlag = Qt.AlignmentFlag.AlignCenter) -> QTableWidgetItem:
-    it = QTableWidgetItem(text)
-    it.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
-    it.setTextAlignment(align)
-    return it
-
-
-class _NumItem(QTableWidgetItem):
-    """Numerik değerleri doğru sıralayan QTableWidgetItem."""
-
-    def __init__(self, text: str, sort_val: float):
-        super().__init__(text)
-        self._sort_val = sort_val
-        self.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
-        self.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-
-    def __lt__(self, other: QTableWidgetItem) -> bool:
-        if isinstance(other, _NumItem):
-            return self._sort_val < other._sort_val
-        return super().__lt__(other)
-
-
 class PaperTradePanel(QWidget):
 
     symbol_selected = pyqtSignal(str, str)  # (symbol, interval)
@@ -206,25 +139,12 @@ class PaperTradePanel(QWidget):
         self._db_config = db_config
         self._redis_url = redis_url
         self._open_prices: dict[str, float] = {}
-        self._open_ids: list[int] = []
-        self._open_rows: list[dict] = []
-        self._open_rows_by_id: dict[int, dict] = {}
-        self._hist_rows_by_id: dict[int, dict] = {}
-        self._open_id_to_row: dict[int, int] = {}
-        self._hist_id_to_row: dict[int, int] = {}
-        self._open_filter: dict[str, str] = {
-            "side": "Tümü",
-            "tf": "Tümü",
-            "strategy": "Tümü",
-            "search": "",
-        }
-        self._hist_filter: dict[str, str] = {
-            "side": "Tümü",
-            "tf": "Tümü",
-            "reason": "Tümü",
-            "strategy": "Tümü",
-            "search": "",
-        }
+        self._open_model = PaperOpenModel(self)
+        self._open_proxy = PaperOpenProxyModel(self)
+        self._open_proxy.setSourceModel(self._open_model)
+        self._hist_model = PaperHistModel(self)
+        self._hist_proxy = PaperHistProxyModel(self)
+        self._hist_proxy.setSourceModel(self._hist_model)
 
         # Redis bağlantısı — paper trade sembolleri için direkt polling (binary, Arrow)
         self._redis: _redis_lib.Redis | None = None
@@ -245,10 +165,10 @@ class PaperTradePanel(QWidget):
         self._worker = _FetchWorker(db_config, parent=self)
         self._worker.fetched.connect(self._on_fetched)
 
-        self._open_table.clicked.connect(self._on_table_clicked)
-        self._hist_table.clicked.connect(self._on_table_clicked)
-        self._open_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self._open_table.customContextMenuRequested.connect(self._on_open_context_menu)
+        self._open_view.clicked.connect(self._on_table_clicked)
+        self._hist_view.clicked.connect(self._on_table_clicked)
+        self._open_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._open_view.customContextMenuRequested.connect(self._on_open_context_menu)
 
         # DB fetch: 5 saniyede bir
         self._timer = QTimer(self)
@@ -359,8 +279,8 @@ class PaperTradePanel(QWidget):
         open_bar.addStretch()
         open_layout.addLayout(open_bar)
 
-        self._open_table = self._make_table(OPEN_COLS)
-        open_layout.addWidget(self._open_table)
+        self._open_view = self._make_view(self._open_model, self._open_proxy)
+        open_layout.addWidget(self._open_view)
 
         # ── Kapalı işlemler tab ──
         hist_widget = QWidget()
@@ -396,8 +316,8 @@ class PaperTradePanel(QWidget):
         hist_bar.addStretch()
         hist_layout.addLayout(hist_bar)
 
-        self._hist_table = self._make_table(HIST_COLS)
-        hist_layout.addWidget(self._hist_table)
+        self._hist_view = self._make_view(self._hist_model, self._hist_proxy)
+        hist_layout.addWidget(self._hist_view)
 
         self._tabs.addTab(open_widget, "Açık Pozisyonlar")
         self._tabs.addTab(hist_widget, "Kapalı İşlemler")
@@ -495,24 +415,24 @@ class PaperTradePanel(QWidget):
         return le
 
     @staticmethod
-    def _make_table(cols: list[str]) -> QTableWidget:
-        t = QTableWidget(0, len(cols))
-        t.setHorizontalHeaderLabels(cols)
-        t.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        t.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        t.setAlternatingRowColors(True)
-        t.verticalHeader().setVisible(False)
-        t.horizontalHeader().setStretchLastSection(True)
-        t.setSortingEnabled(True)
-        t.setStyleSheet(
+    def _make_view(model, proxy) -> QTableView:
+        v = QTableView()
+        v.setModel(proxy)
+        v.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        v.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        v.setAlternatingRowColors(True)
+        v.verticalHeader().setVisible(False)
+        v.horizontalHeader().setStretchLastSection(True)
+        v.setSortingEnabled(True)
+        v.setStyleSheet(
             f"""
-            QTableWidget {{
+            QTableView {{
                 background-color: {COLORS['bg_secondary']};
                 gridline-color: {COLORS['bg_tertiary']};
                 color: {COLORS['text_primary']};
                 font-size: 12px;
             }}
-            QTableWidget::item:selected {{
+            QTableView::item:selected {{
                 background-color: {COLORS['accent']};
             }}
             QHeaderView::section {{
@@ -522,25 +442,27 @@ class PaperTradePanel(QWidget):
                 border: none;
                 font-size: 11px;
             }}
-            QTableWidget::item:alternate {{
+            QTableView::item:alternate {{
                 background-color: {COLORS['bg_primary']};
             }}
         """
         )
-        return t
+        return v
 
     # ── Fiyat güncellemesi (TEK kaynak: live_kline_data, bkz. yukarıdaki not) ──
 
     def _poll_prices(self) -> None:
-        if not self._redis or not self._open_rows:
+        symbols = self._open_model.symbols()
+        if not self._redis or not symbols:
             return
         try:
-            syms = list({r["symbol"] for r in self._open_rows})
+            syms = list(symbols)
             pipe = self._redis.pipeline(transaction=False)
             for sym in syms:
                 pipe.get(f"live_kline_data:{sym}:1m".encode())
             results = pipe.execute()
             now_ms = datetime.now().timestamp() * 1000
+            price_updates: dict[str, tuple[float, bool]] = {}
             for sym, raw in zip(syms, results):
                 price, open_time_ms = self._extract_close_and_time(raw)
                 if price:
@@ -549,7 +471,9 @@ class PaperTradePanel(QWidget):
                         open_time_ms is None
                         or (now_ms - open_time_ms) / 1000 > _STALE_THRESHOLD_SEC
                     )
-                    self._refresh_price_cells(sym, price, stale=stale)
+                    price_updates[sym] = (price, stale)
+            if price_updates:
+                self._open_model.update_prices(price_updates)
         except Exception:  # pylint: disable=broad-exception-caught
             pass
 
@@ -577,92 +501,6 @@ class PaperTradePanel(QWidget):
         except Exception:  # pylint: disable=broad-exception-caught
             pass
         return None, None
-
-    def _refresh_price_cells(self, symbol: str, live: float, stale: bool = False) -> None:
-        id_to_row = {row["id"]: row for row in self._open_rows if row["symbol"] == symbol}
-        if not id_to_row:
-            return
-
-        # 27 Ağu 2026: self._symbol_to_rows sadece _fill_open'de (5sn'de bir)
-        # yeniden kuruluyordu — ama _open_table'da setSortingEnabled(True)
-        # açık olduğu için (kullanıcı bir sütuna tıklayıp sıralayabiliyor,
-        # ya da bu fonksiyonun kendisi aktif sıralama sütununu güncellerken
-        # Qt satırı otomatik yer değiştiriyor) tablo satırları HARİTADAN
-        # BAĞIMSIZ olarak yer değiştirebiliyordu. Bayat harita, YANLIŞ
-        # trade'in verisini YANLIŞ satıra yazıyordu — "P&L önce 31 sonra -2
-        # sonra başka bir şey" şikayetinin kök nedeni. Artık her çağrıda
-        # tablo TARANIP sembol gerçek satırından bulunuyor, haritaya
-        # güvenilmiyor (açık pozisyon sayısı küçük, tarama ucuz).
-        for t_idx in range(self._open_table.rowCount()):
-            sym_item = self._open_table.item(t_idx, 0)
-            if sym_item is None or sym_item.text() != symbol:
-                continue
-            trade_id = sym_item.data(Qt.ItemDataRole.UserRole)
-            row = id_to_row.get(trade_id)
-            if not row:
-                continue
-
-            side = row["signal_type"]
-            entry = float(row["entry_price"])
-            sl = row["stop_loss_price"]
-            tp = row["take_profit_price"]
-
-            position_usd = float(row.get("position_usd") or 100.0)
-            leverage = LEVERAGE_BY_STRATEGY.get(row.get("strategy", ""), 1.0)
-            pnl_pct = (
-                (live - entry) / entry * 100 if side == "Long" else (entry - live) / entry * 100
-            )
-            pnl_usd = pnl_pct / 100 * position_usd * leverage
-
-            if sl and live:
-                sl_dist = (
-                    (float(sl) - live) / live * 100
-                    if side == "Long"
-                    else (live - float(sl)) / live * 100
-                )
-                sl_str = f"{sl_dist:+.2f}%"
-            else:
-                sl_dist, sl_str = None, "—"
-
-            tp_str = (
-                f"{((float(tp) - live) / live * 100 if side == 'Long' else (live - float(tp)) / live * 100):+.2f}%"
-                if tp and live
-                else "—"
-            )
-
-            sl_danger = sl_dist is not None and abs(sl_dist) < 1.0
-            danger_bg = QColor("#3d1515")
-            stale_bg = QColor(120, 70, 0, 140)
-            price_text = f"{live:.5g} ⚠bayat" if stale else f"{live:.5g}"
-
-            updates: dict[int, tuple[str, float, QColor | None]] = {
-                5: (price_text, live, None),
-                6: (f"{pnl_usd:+.2f}$", pnl_usd, _pnl_color(pnl_usd)),
-                7: (f"{pnl_pct:+.2f}%", pnl_pct, _pnl_color(pnl_usd)),
-                8: (
-                    sl_str,
-                    sl_dist if sl_dist is not None else 0,
-                    QColor("#ff4444") if sl_danger else QColor(COLORS["red"]),
-                ),
-                9: (tp_str, 0, QColor(COLORS["green"])),
-            }
-            for c_idx, (text, sort_val, fg) in updates.items():
-                it = self._open_table.item(t_idx, c_idx)
-                if it is None:
-                    continue
-                it.setText(text)
-                if isinstance(it, _NumItem):
-                    it._sort_val = sort_val
-                if fg:
-                    it.setForeground(fg)
-                # Fiyat verisi bayatsa (live_kline_data N dakikadır güncellenmemiş
-                # — o sembolün WS alt-akışı donmuş olabilir, 27 Ağu 2026 MOVR
-                # olayı) tüm satır turuncu işaretlenir; sessizce yanlış bir PnL
-                # gösterilmez. sl_danger'dan ÖNCELİKLİDİR.
-                if stale:
-                    it.setBackground(stale_bg)
-                else:
-                    it.setBackground(danger_bg if sl_danger else QColor(0, 0, 0, 0))
 
     # ── Veri yükleme ──────────────────────────────────────────────────────
 
@@ -700,170 +538,24 @@ class PaperTradePanel(QWidget):
             self._lbl_drawdown, f"{dd:.2f}%", COLORS["red"] if dd > 5 else COLORS["text_primary"]
         )
 
-    # OPEN_COLS = [Sembol0, Yön1, TF2, Strateji3, Giriş$4, Fiyat$5, P&L$6, P&L%7, SL%8, TP%9, Trail$10, VPMS11, Kolaylık12, Süre13]
-    _OPEN_NUM_COLS = {4, 5, 6, 7, 8, 9, 10, 11, 12}  # numerik sıralama gereken kolonlar
-
-    @staticmethod
-    def _get_row_item(
-        table: QTableWidget, row: int, col: int, text: str, sort_val: Optional[float] = None
-    ) -> QTableWidgetItem:
-        existing = table.item(row, col)
-        if sort_val is not None:
-            if isinstance(existing, _NumItem):
-                existing.setText(text)
-                existing._sort_val = sort_val  # pylint: disable=protected-access
-                return existing
-            it = _NumItem(text, sort_val)
-            table.setItem(row, col, it)
-            return it
-        if existing is not None and not isinstance(existing, _NumItem):
-            existing.setText(text)
-            return existing
-        it = _item(text)
-        table.setItem(row, col, it)
-        return it
-
-    def _rebuild_open_id_to_row(self) -> None:
-        self._open_id_to_row = {}
-        for r in range(self._open_table.rowCount()):
-            it = self._open_table.item(r, 0)
-            tid = it.data(Qt.ItemDataRole.UserRole) if it is not None else None
-            if tid is not None:
-                self._open_id_to_row[tid] = r
-
     def _fill_open(self, rows: list[dict]) -> float:
-        self._open_table.setSortingEnabled(False)
-
-        # Kullanıcı iki _fill_open() çağrısı (5sn'de bir) arasında bir sütun
-        # başlığına tıklayıp tabloyu yeniden sıralayabilir — harita bu durumda
-        # bayatlar (27 Ağu 2026, ranking_panel.py/deviso_panel.py'de bulunan
-        # aynı kök neden sınıfı). Her çağrı başında haritayı tablonun GERÇEK
-        # anlık durumundan yeniden kuruyoruz.
-        self._rebuild_open_id_to_row()
-
-        incoming_ids = {r["id"] for r in rows}
-        removed = set(self._open_id_to_row) - incoming_ids
-        if removed:
-            rows_to_remove = sorted(
-                (self._open_id_to_row[tid] for tid in removed if tid in self._open_id_to_row),
-                reverse=True,
-            )
-            for row in rows_to_remove:
-                self._open_table.removeRow(row)
-            # removeRow altındaki satırların index'ini kaydırır — haritayı
-            # hemen yeniden kurmazsak kalan id'ler YANLIŞ (kaymış) satırı
-            # işaret edebilir (27 Ağu 2026, deviso_panel.py'de bulundu).
-            self._rebuild_open_id_to_row()
+        items = []
+        for row in rows:
+            item = dict(row)
+            item["live_price"] = self._open_prices.get(row["symbol"], float(row["entry_price"]))
+            items.append(item)
+        self._open_model.bulk_upsert(items, self._open_model.build_row, self._open_model.update_row)
+        self._open_model.prune_missing({r["id"] for r in rows})
 
         self._stat_value(self._lbl_open, str(len(rows)))
-        self._open_ids = [r["id"] for r in rows]
-        self._open_rows = rows
-        self._open_rows_by_id = {r["id"]: r for r in rows}
 
         total_unrealized = 0.0
         strategies: set[str] = set()
-        for row in rows:
-            r_idx = self._open_id_to_row.get(row["id"])
-            if (
-                r_idx is None
-                or r_idx >= self._open_table.rowCount()
-                or self._open_table.item(r_idx, 0) is None
-            ):
-                r_idx = self._open_table.rowCount()
-                self._open_table.insertRow(r_idx)
-            sym = row["symbol"]
-            side = row["signal_type"]
-            tf = row["interval"]
-            strat = row.get("strategy", "")
-            src = row.get("source", "signal")
-            entry = float(row["entry_price"])
-            trail = row["trailing_stop_price"]
-            vpms = row.get("vpms_score")
-            devisso = row.get("devisso_score")
+        for r_idx in range(self._open_model.rowCount()):
+            row_obj = self._open_model.row_at(r_idx)
+            total_unrealized += row_obj.pnl_usd
+            strategies.add(row_obj.strategy_label)
 
-            live = self._open_prices.get(sym, entry)
-            position_usd = float(row.get("position_usd") or 100.0)
-            leverage = LEVERAGE_BY_STRATEGY.get(row.get("strategy", ""), 1.0)
-            pnl_pct = (
-                (live - entry) / entry * 100 if side == "Long" else (entry - live) / entry * 100
-            )
-            pnl_usd = pnl_pct / 100 * position_usd * leverage
-            total_unrealized += pnl_usd
-
-            sl = row["stop_loss_price"]
-            tp = row["take_profit_price"]
-
-            if sl and live:
-                sl_dist = (
-                    (float(sl) - live) / live * 100
-                    if side == "Long"
-                    else (live - float(sl)) / live * 100
-                )
-                sl_str = f"{sl_dist:+.2f}%"
-            else:
-                sl_dist, sl_str = None, "—"
-
-            if tp and live:
-                tp_dist = (
-                    (float(tp) - live) / live * 100
-                    if side == "Long"
-                    else (live - float(tp)) / live * 100
-                )
-                tp_str = f"{tp_dist:+.2f}%"
-            else:
-                tp_dist, tp_str = None, "—"
-
-            trail_str = f"{float(trail):.5g}" if trail else "—"
-            vpms_val = float(vpms) if vpms is not None else 0.0
-            vpms_str = f"{vpms_val:.1f}" if vpms is not None else "—"
-            devisso_val = float(devisso) if devisso is not None else 0.0
-            devisso_str = f"{devisso_val:.1f}" if devisso is not None else "—"
-            strat_label = "✋ " + strat if src == "manual" else strat
-            strategies.add(strat_label)
-            sl_danger = sl_dist is not None and abs(sl_dist) < 1.0
-
-            # (text, sort_value)
-            cell_data = [
-                (sym, None),
-                (side, None),
-                (tf, None),
-                (strat_label, None),
-                (f"{entry:.5g}", entry),
-                (f"{live:.5g}", live),
-                (f"{pnl_usd:+.2f}$", pnl_usd),
-                (f"{pnl_pct:+.2f}%", pnl_pct),
-                (sl_str, sl_dist if sl_dist is not None else 0.0),
-                (tp_str, tp_dist if tp_dist is not None else 0.0),
-                (trail_str, float(trail) if trail else 0.0),
-                (vpms_str, vpms_val),
-                (devisso_str, devisso_val),
-                (_age(row["opened_at"]), None),
-            ]
-
-            for c_idx, (text, sort_val) in enumerate(cell_data):
-                it = self._get_row_item(self._open_table, r_idx, c_idx, text, sort_val)
-                if c_idx == 0:
-                    it.setData(Qt.ItemDataRole.UserRole, row["id"])
-                # Get-or-create ile item yeniden kullanıldığı için önceki turdan
-                # kalan arka plan/renk "hayalet" olarak kalmasın diye her dal
-                # koşulsuz (else ile) sıfırlanıyor (27 Ağu 2026).
-                it.setBackground(QColor("#3d1515") if sl_danger else QColor(0, 0, 0, 0))
-                if c_idx == 1:
-                    it.setForeground(
-                        QColor(COLORS["green"]) if side == "Long" else QColor(COLORS["red"])
-                    )
-                if c_idx in (6, 7):
-                    it.setForeground(_pnl_color(pnl_usd))
-                if c_idx == 8:
-                    it.setForeground(QColor("#ff4444") if sl_danger else QColor(COLORS["red"]))
-                if c_idx == 9:
-                    it.setForeground(QColor(COLORS["green"]))
-                if c_idx == 10:
-                    it.setForeground(
-                        QColor(COLORS["accent"]) if trail else QColor(COLORS["text_muted"])
-                    )
-
-        # Strateji dropdown'ını güncelle
         cur_strategy = self._open_cb_strategy.currentText()
         self._open_cb_strategy.blockSignals(True)
         self._open_cb_strategy.clear()
@@ -872,93 +564,19 @@ class PaperTradePanel(QWidget):
         self._open_cb_strategy.setCurrentIndex(max(0, idx))
         self._open_cb_strategy.blockSignals(False)
 
-        self._rebuild_open_id_to_row()
-        self._open_table.setSortingEnabled(True)
-        self._apply_open_filter()
         return total_unrealized
 
-    # HIST_COLS = [Sembol0, Yön1, TF2, Strateji3, Giriş$4, Çıkış$5, P&L$6, P&L%7, Neden8, Kapatma9]
-
-    def _rebuild_hist_id_to_row(self) -> None:
-        self._hist_id_to_row = {}
-        for r in range(self._hist_table.rowCount()):
-            it = self._hist_table.item(r, 0)
-            tid = it.data(Qt.ItemDataRole.UserRole) if it is not None else None
-            if tid is not None:
-                self._hist_id_to_row[tid] = r
-
     def _fill_hist(self, rows: list[dict]) -> None:
-        self._hist_table.setSortingEnabled(False)
-
-        # Aynı sıralama-bayatlığı riski _fill_open() ile aynı (27 Ağu 2026) —
-        # her çağrı başında haritayı tablonun GERÇEK anlık durumundan kuruyoruz.
-        self._rebuild_hist_id_to_row()
-
-        incoming_ids = {r["id"] for r in rows}
-        removed = set(self._hist_id_to_row) - incoming_ids
-        if removed:
-            rows_to_remove = sorted(
-                (self._hist_id_to_row[tid] for tid in removed if tid in self._hist_id_to_row),
-                reverse=True,
-            )
-            for row in rows_to_remove:
-                self._hist_table.removeRow(row)
-            self._rebuild_hist_id_to_row()
-
-        self._hist_rows_by_id = {r["id"]: r for r in rows}
+        self._hist_model.bulk_upsert(rows, self._hist_model.build_row, self._hist_model.update_row)
+        self._hist_model.prune_missing({r["id"] for r in rows})
 
         reasons: set[str] = set()
         strategies: set[str] = set()
-        for row in rows:
-            r_idx = self._hist_id_to_row.get(row["id"])
-            if (
-                r_idx is None
-                or r_idx >= self._hist_table.rowCount()
-                or self._hist_table.item(r_idx, 0) is None
-            ):
-                r_idx = self._hist_table.rowCount()
-                self._hist_table.insertRow(r_idx)
-            pnl_usd = float(row["pnl_usd"]) if row["pnl_usd"] else 0.0
-            pnl_pct = float(row["pnl_pct"]) if row["pnl_pct"] else 0.0
-            closed = row["closed_at"]
-            if isinstance(closed, datetime) and closed.tzinfo is not None:
-                closed = closed.replace(tzinfo=None)
-            src = row.get("source", "signal")
-            strat = row.get("strategy", "")
-            strat_label = "✋ " + strat if src == "manual" else strat
-            strategies.add(strat_label)
-            reason = row["close_reason"] or "—"
-            reasons.add(reason)
+        for r_idx in range(self._hist_model.rowCount()):
+            row_obj = self._hist_model.row_at(r_idx)
+            reasons.add(row_obj.reason)
+            strategies.add(row_obj.strategy_label)
 
-            cell_data = [
-                (row["symbol"], None),
-                (row["signal_type"], None),
-                (row["interval"], None),
-                (strat_label, None),
-                (f"{float(row['entry_price']):.5g}", float(row["entry_price"])),
-                (
-                    f"{float(row['exit_price']):.5g}" if row["exit_price"] else "—",
-                    float(row["exit_price"]) if row["exit_price"] else 0.0,
-                ),
-                (f"{pnl_usd:+.2f}$", pnl_usd),
-                (f"{pnl_pct:+.2f}%", pnl_pct),
-                (reason, None),
-                (closed.strftime("%d/%m %H:%M") if closed else "—", None),
-            ]
-            for c_idx, (text, sort_val) in enumerate(cell_data):
-                it = self._get_row_item(self._hist_table, r_idx, c_idx, text, sort_val)
-                if c_idx == 0:
-                    it.setData(Qt.ItemDataRole.UserRole, row["id"])
-                if c_idx == 1:
-                    it.setForeground(
-                        QColor(COLORS["green"])
-                        if row["signal_type"] == "Long"
-                        else QColor(COLORS["red"])
-                    )
-                if c_idx in (6, 7):
-                    it.setForeground(_pnl_color(pnl_usd))
-
-        # Neden dropdown'ını güncelle
         cur_reason = self._hist_cb_reason.currentText()
         self._hist_cb_reason.blockSignals(True)
         self._hist_cb_reason.clear()
@@ -967,7 +585,6 @@ class PaperTradePanel(QWidget):
         self._hist_cb_reason.setCurrentIndex(max(0, idx))
         self._hist_cb_reason.blockSignals(False)
 
-        # Strateji dropdown'ını güncelle
         cur_strategy = self._hist_cb_strategy.currentText()
         self._hist_cb_strategy.blockSignals(True)
         self._hist_cb_strategy.clear()
@@ -976,117 +593,53 @@ class PaperTradePanel(QWidget):
         self._hist_cb_strategy.setCurrentIndex(max(0, idx))
         self._hist_cb_strategy.blockSignals(False)
 
-        self._rebuild_hist_id_to_row()
-        self._hist_table.setSortingEnabled(True)
-        self._apply_hist_filter()
-
     # ── Filtre ────────────────────────────────────────────────────────────
 
     def _set_open_filter(self, key: str, val: str) -> None:
-        self._open_filter[key] = val
-        self._apply_open_filter()
+        {
+            "side": self._open_proxy.set_side,
+            "tf": self._open_proxy.set_tf,
+            "strategy": self._open_proxy.set_strategy,
+            "search": self._open_proxy.set_search,
+        }[key](val)
+        self._tabs.setTabText(0, f"Açık Pozisyonlar ({self._open_proxy.rowCount()})")
 
     def _set_hist_filter(self, key: str, val: str) -> None:
-        self._hist_filter[key] = val
-        self._apply_hist_filter()
-
-    def _apply_open_filter(self) -> None:
-        side = self._open_filter["side"]
-        tf = self._open_filter["tf"]
-        strategy = self._open_filter["strategy"]
-        search = self._open_filter["search"].upper()
-        visible = 0
-        for r in range(self._open_table.rowCount()):
-            sym_it = self._open_table.item(r, 0)
-            side_it = self._open_table.item(r, 1)
-            tf_it = self._open_table.item(r, 2)
-            strat_it = self._open_table.item(r, 3)
-            hide = bool(
-                (side != "Tümü" and side_it and side_it.text() != side)
-                or (tf != "Tümü" and tf_it and tf_it.text() != tf)
-                or (strategy != "Tümü" and strat_it and strat_it.text() != strategy)
-                or (search and sym_it and search not in sym_it.text().upper())
-            )
-            self._open_table.setRowHidden(r, hide)
-            if not hide:
-                visible += 1
-        self._tabs.setTabText(0, f"Açık Pozisyonlar ({visible})")
-
-    def _apply_hist_filter(self) -> None:
-        side = self._hist_filter["side"]
-        tf = self._hist_filter["tf"]
-        reason = self._hist_filter["reason"]
-        strategy = self._hist_filter["strategy"]
-        search = self._hist_filter["search"].upper()
-        visible = 0
-        for r in range(self._hist_table.rowCount()):
-            sym_it = self._hist_table.item(r, 0)
-            side_it = self._hist_table.item(r, 1)
-            tf_it = self._hist_table.item(r, 2)
-            strat_it = self._hist_table.item(r, 3)
-            reason_it = self._hist_table.item(r, 8)
-            hide = bool(
-                (side != "Tümü" and side_it and side_it.text() != side)
-                or (tf != "Tümü" and tf_it and tf_it.text() != tf)
-                or (reason != "Tümü" and reason_it and reason_it.text() != reason)
-                or (strategy != "Tümü" and strat_it and strat_it.text() != strategy)
-                or (search and sym_it and search not in sym_it.text().upper())
-            )
-            self._hist_table.setRowHidden(r, hide)
-            if not hide:
-                visible += 1
-        self._tabs.setTabText(1, f"Kapalı İşlemler ({visible})")
+        {
+            "side": self._hist_proxy.set_side,
+            "tf": self._hist_proxy.set_tf,
+            "reason": self._hist_proxy.set_reason,
+            "strategy": self._hist_proxy.set_strategy,
+            "search": self._hist_proxy.set_search,
+        }[key](val)
+        self._tabs.setTabText(1, f"Kapalı İşlemler ({self._hist_proxy.rowCount()})")
 
     def _on_table_clicked(self, index) -> None:
-        table = self.sender()
-        row = index.row()
-        sym_item = table.item(row, 0)
-        tf_item = table.item(row, 2)
-        if sym_item and tf_item:
-            self.symbol_selected.emit(sym_item.text(), tf_item.text())
-
-        trade_id = sym_item.data(Qt.ItemDataRole.UserRole) if sym_item else None
-        if trade_id is None:
-            return
-        if table is self._open_table:
-            trade = self._open_rows_by_id.get(trade_id)
-        elif table is self._hist_table:
-            trade = self._hist_rows_by_id.get(trade_id)
+        view = self.sender()
+        if view is self._open_view:
+            proxy, model = self._open_proxy, self._open_model
+        elif view is self._hist_view:
+            proxy, model = self._hist_proxy, self._hist_model
         else:
-            trade = None
-        if trade:
-            self.signal_data_selected.emit(dict(trade))
+            return
+        row = model.row_at(proxy.mapToSource(index).row())
+        if row is None:
+            return
+        self.symbol_selected.emit(row.symbol, row.interval)
+        self.signal_data_selected.emit(dict(row.raw))
 
     def _on_open_context_menu(self, pos: QPoint) -> None:
-        row = self._open_table.rowAt(pos.y())
-        if row < 0:
+        index = self._open_view.indexAt(pos)
+        if not index.isValid():
             return
-        sym_item = self._open_table.item(row, 0)
-        tf_item = self._open_table.item(row, 2)
-        if not sym_item or not tf_item:
+        row = self._open_model.row_at(self._open_proxy.mapToSource(index).row())
+        if row is None:
             return
-        sym_txt = sym_item.text()
-        tf_txt = tf_item.text()
-        trade_id = next(
-            (
-                r["id"]
-                for r in self._open_rows
-                if r["symbol"] == sym_txt and r["interval"] == tf_txt
-            ),
-            None,
-        )
-        if trade_id is None:
-            return
-        sym_item = self._open_table.item(row, 0)
-        side_item = self._open_table.item(row, 1)
-        sym = sym_item.text() if sym_item else "?"
-        side = side_item.text() if side_item else "?"
-
         menu = QMenu(self)
-        act_close = menu.addAction(f"Manuel Kapat — {sym} {side}")
-        action = menu.exec(self._open_table.viewport().mapToGlobal(pos))
+        act_close = menu.addAction(f"Manuel Kapat — {row.symbol} {row.signal_type}")
+        action = menu.exec(self._open_view.viewport().mapToGlobal(pos))
         if action == act_close:
-            self._manual_close(trade_id, sym)
+            self._manual_close(row.id, row.symbol)
 
     def _manual_close(self, trade_id: int, symbol: str) -> None:
         price = self._open_prices.get(symbol, 0.0)

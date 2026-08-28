@@ -2,127 +2,49 @@
 RankingPanel — tüm coinleri VPMV güç skoruna göre sıralayan panel.
 
 Kolonlar: Rank | Sembol | 5m | 15m | 1h | Birleşik | TF Uyum | VS BTC
+
+28 Ağu 2026: QTableWidget → Model/View göçü (Faz 3, bkz. proje hafızası
+"masaüstü panel mimari denetimi"). Eski elle yönetilen get-or-create/satır
+haritası/sıralama-bayatlığı kodu ve elle yazılmış staleness-timer kaldırıldı
+— RankingModel/RankingProxyModel (desktop/models/ranking_model.py) ve
+StalePanelMixin (desktop/widgets/staleness.py) bunları tek doğru şekilde
+çözüyor.
 """
 
-import time
-from typing import Optional
-
-from PyQt6.QtCore import Qt, QTimer, pyqtSlot  # pylint: disable=no-name-in-module
-from PyQt6.QtGui import QColor, QFont  # pylint: disable=no-name-in-module
+from PyQt6.QtCore import pyqtSlot  # pylint: disable=no-name-in-module
+from PyQt6.QtGui import QFont  # pylint: disable=no-name-in-module
 from PyQt6.QtWidgets import (  # pylint: disable=no-name-in-module
+    QAbstractItemView,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
     QPushButton,
-    QTableWidget,
-    QTableWidgetItem,
+    QTableView,
     QVBoxLayout,
     QWidget,
 )
 
+from desktop.models.ranking_model import COL_SYMBOL, RankingModel, RankingProxyModel
 from desktop.theme import COLORS
+from desktop.widgets.staleness import StalePanelMixin
 from desktop.workers.ranking_worker import RankingWorker
 
-# ranking_worker 30sn'de bir yayınlıyor (bkz. ranking_worker.py::_UPDATE_SEC).
-# 3 tur (90sn) hiç veri gelmezse worker/Redis bağlantısı kopmuş olabilir —
-# panel eski veriyi sessizce göstermeye devam etmesin diye uyarı gösterilir
-# (27 Ağu 2026, MOVR'daki "sessizce bayat veri" olayına karşı genel önlem).
-_STALE_THRESHOLD_SEC = 90
-_STALE_CHECK_INTERVAL_MS = 10_000
 
-_COL_RANK = 0
-_COL_SYMBOL = 1
-_COL_5M = 2
-_COL_15M = 3
-_COL_1H = 4
-_COL_4H = 5
-_COL_COMBINED = 6
-_COL_RSICROSS = 7
-_COL_ZCONF = 8
-_COL_RSCORE = 9
-_COL_ALIGN = 10
-_COL_VSBTC = 11
-_HEADERS = [
-    "#",
-    "Sembol",
-    "5m",
-    "15m",
-    "1h",
-    "4h",
-    "Birleşik",
-    "RSI Cross",
-    "Z-Conf",
-    "R-Score",
-    "TF Uyum",
-    "VS BTC",
-]
-
-_C_GREEN = QColor(COLORS["green"])
-_C_RED = QColor(COLORS["red"])
-_C_YELLOW = QColor(COLORS["yellow"])
-_C_MUTED = QColor(COLORS["text_muted"])
-_C_WHITE = QColor(COLORS["text_primary"])
-
-_BG_STRONG_BULL = QColor(0, 120, 40, 120)
-_BG_SOFT_BULL = QColor(0, 80, 20, 60)
-_BG_STRONG_BEAR = QColor(180, 20, 20, 120)
-_BG_SOFT_BEAR = QColor(120, 10, 10, 60)
-
-_PINE_20 = {
-    "BTCUSDT",
-    "ETHUSDT",
-    "BNBUSDT",
-    "ADAUSDT",
-    "XRPUSDT",
-    "LTCUSDT",
-    "DOTUSDT",
-    "SOLUSDT",
-    "AVAXUSDT",
-    "TRXUSDT",
-    "UNIUSDT",
-    "LINKUSDT",
-    "VETUSDT",
-    "XLMUSDT",
-    "NEARUSDT",
-    "WIFUSDT",
-    "ZRXUSDT",
-    "ATOMUSDT",
-    "CAKEUSDT",
-    "KSMUSDT",
-}
-
-
-class _NumericItem(QTableWidgetItem):
-    def __lt__(self, other: "QTableWidgetItem") -> bool:
-        try:
-            return float(self.data(Qt.ItemDataRole.UserRole)) < float(
-                other.data(Qt.ItemDataRole.UserRole)
-            )
-        except (TypeError, ValueError):
-            return super().__lt__(other)
-
-
-class RankingPanel(QWidget):
+class RankingPanel(QWidget, StalePanelMixin):
     def __init__(self, redis_url: str, parent=None):
         super().__init__(parent)
         self._worker = RankingWorker(redis_url, parent=self)
         self._pine_filter = False
-        self._search_text = ""
-        self._last_result: list = []
         self._prev_ranks: dict[str, int] = {}
-        self._symbol_to_row: dict[str, int] = {}
         self._resized_once = False
-        self._last_update_monotonic = time.monotonic()
-        self._is_stale = False
+        self._model = RankingModel(self)
+        self._proxy = RankingProxyModel(self)
+        self._proxy.setSourceModel(self._model)
         self._setup_ui()
         self._connect_worker()
         self._worker.start()
-
-        self._stale_timer = QTimer(self)
-        self._stale_timer.setInterval(_STALE_CHECK_INTERVAL_MS)
-        self._stale_timer.timeout.connect(self._check_stale)
-        self._stale_timer.start()
+        self._init_staleness(self._status)
 
     # ------------------------------------------------------------------
     def _setup_ui(self) -> None:
@@ -172,17 +94,17 @@ class RankingPanel(QWidget):
         layout.addLayout(top)
 
         # Tablo
-        self._table = QTableWidget(0, len(_HEADERS))
-        self._table.setHorizontalHeaderLabels(_HEADERS)
-        self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self._table.setAlternatingRowColors(False)
-        self._table.setSortingEnabled(True)
-        self._table.setShowGrid(False)
-        self._table.verticalHeader().setVisible(False)
-        self._table.setStyleSheet(
+        self._view = QTableView()
+        self._view.setModel(self._proxy)
+        self._view.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._view.setAlternatingRowColors(False)
+        self._view.setSortingEnabled(True)
+        self._view.setShowGrid(False)
+        self._view.verticalHeader().setVisible(False)
+        self._view.setStyleSheet(
             f"""
-            QTableWidget {{
+            QTableView {{
                 background: {COLORS['bg_primary']};
                 color: {COLORS['text_primary']};
                 border: none;
@@ -195,22 +117,21 @@ class RankingPanel(QWidget):
                 padding: 4px;
                 font-size: 11px;
             }}
-            QTableWidget::item:selected {{
+            QTableView::item:selected {{
                 background: {COLORS['bg_tertiary']};
             }}
             """
         )
 
-        hh = self._table.horizontalHeader()
-        # ResizeToContents sürekli modda HER setItem() çağrısında tüm sütunu yeniden
-        # ölçüyor (O(satır) maliyet × N setItem = O(satır²)) — 550 sembolle bu, ana
-        # thread'i kilitleyip panel kasmasına yol açıyordu. Interactive + _render
-        # sonunda tek seferlik resizeColumnsToContents() aynı görünümü verir, sürekli
-        # yeniden ölçüm olmadan.
+        hh = self._view.horizontalHeader()
+        # ResizeToContents sürekli modda HER veri değişikliğinde tüm sütunu yeniden
+        # ölçüyor (O(satır) maliyet × N güncelleme = O(satır²)) — 550 sembolle bu, ana
+        # thread'i kilitleyip panel kasmasına yol açıyordu. Interactive + tek seferlik
+        # resizeColumnsToContents() aynı görünümü verir, sürekli yeniden ölçüm olmadan.
         hh.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        hh.setSectionResizeMode(_COL_SYMBOL, QHeaderView.ResizeMode.Stretch)
+        hh.setSectionResizeMode(COL_SYMBOL, QHeaderView.ResizeMode.Stretch)
 
-        layout.addWidget(self._table)
+        layout.addWidget(self._view)
 
     @staticmethod
     def _filter_btn_style(active: bool) -> str:
@@ -228,20 +149,10 @@ class RankingPanel(QWidget):
     def _on_pine_toggled(self, checked: bool) -> None:
         self._pine_filter = checked
         self._pine_btn.setStyleSheet(self._filter_btn_style(checked))
-        self._render(self._last_result)
+        self._proxy.set_pine_filter(checked)
 
     def _on_search_changed(self, text: str) -> None:
-        self._search_text = text.strip().upper()
-        self._apply_search_filter()
-
-    def _apply_search_filter(self) -> None:
-        for row in range(self._table.rowCount()):
-            item = self._table.item(row, _COL_SYMBOL)
-            if item is None:
-                continue
-            symbol = item.text().split()[0]  # "BTCUSDT ↑3" → "BTCUSDT"
-            hidden = bool(self._search_text) and self._search_text not in symbol
-            self._table.setRowHidden(row, hidden)
+        self._proxy.set_search(text)
 
     def _connect_worker(self) -> None:
         self._worker.ranking_updated.connect(self._on_updated)
@@ -250,42 +161,8 @@ class RankingPanel(QWidget):
     # ------------------------------------------------------------------
     @pyqtSlot(object)
     def _on_updated(self, result: list) -> None:
-        self._last_update_monotonic = time.monotonic()
-        if self._is_stale:
-            self._is_stale = False
-            self._status.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px;")
-        self._last_result = result
-        self._render(result)
+        self._mark_fresh()
 
-    def _check_stale(self) -> None:
-        age = time.monotonic() - self._last_update_monotonic
-        if age > _STALE_THRESHOLD_SEC and not self._is_stale:
-            self._is_stale = True
-            self._status.setStyleSheet(
-                f"color: {COLORS['red']}; font-size: 11px; font-weight: bold;"
-            )
-            self._status.setText(f"⚠ {age:.0f}sn'dir veri güncellenmiyor")
-
-    def _rebuild_symbol_to_row(self) -> None:
-        self._symbol_to_row = {}
-        for r in range(self._table.rowCount()):
-            it = self._table.item(r, _COL_SYMBOL)
-            if it is not None:
-                self._symbol_to_row[it.text().split()[0]] = r
-
-    def _render(self, result: list) -> None:
-        # 27 Ağu 2026: setRowCount(0) + tam yeniden inşa (her satır için yeni
-        # QTableWidgetItem) her 30sn'de ~550 sembol × 12 sütun = ~6600 nesne
-        # yok edip yeniden yaratıyordu — sample ile ölçüldü, CPU'nun %87'si
-        # QTableWidget::setItem->dataChanged zincirinde, panel 14 dakikada
-        # 87.9GB'a çıkıp "swap exhaustion" ile kernel tarafından durduruldu.
-        # Artık var olan satır/hücreler YERİNDE güncelleniyor (paper_trade_
-        # panel.py::_refresh_price_cells ile aynı desen) — sadece evrenden
-        # çıkan/giren semboller için satır silinip/eklenıyor.
-        if self._pine_filter:
-            result = [r for r in result if r["symbol"] in _PINE_20]
-
-        # Sıra değişimlerini hesapla
         rank_deltas: dict[str, int] = {}
         for row_data in result:
             sym = row_data["symbol"]
@@ -293,218 +170,22 @@ class RankingPanel(QWidget):
                 rank_deltas[sym] = self._prev_ranks[sym] - row_data["rank"]
         self._prev_ranks = {r["symbol"]: r["rank"] for r in result}
 
-        self._table.setSortingEnabled(False)
+        items = [{**r, "rank_delta": rank_deltas.get(r["symbol"], 0)} for r in result]
+        self._model.bulk_upsert(items, self._model.build_row, self._model.update_row)
+        self._model.prune_missing({r["symbol"] for r in result})
 
-        # Kullanıcı iki _render() arasında bir sütun başlığına tıklayıp tabloyu
-        # yeniden sıralayabilir — harita sadece fonksiyon SONUNDA kurulduğu için
-        # bu durumda bayatlar (paper_trade_panel.py'deki "P&L önce 31 sonra -2"
-        # bug'ıyla aynı kök neden sınıfı, 27 Ağu 2026). Her render başında
-        # haritayı tablonun GERÇEK anlık durumundan yeniden kurup bu riski
-        # tamamen ortadan kaldırıyoruz.
-        self._rebuild_symbol_to_row()
-
-        incoming = {r["symbol"] for r in result}
-        removed = set(self._symbol_to_row) - incoming
-        if removed:
-            rows_to_remove = sorted(
-                (self._symbol_to_row[s] for s in removed if s in self._symbol_to_row),
-                reverse=True,
-            )
-            for r in rows_to_remove:
-                self._table.removeRow(r)
-            # removeRow altındaki satırların index'ini kaydırır — haritayı hemen
-            # yeniden kurmazsak kalan semboller YANLIŞ (kaymış) satırı işaret
-            # eder, bir sonraki sembolün verisi o satıra yazılabilir (27 Ağu
-            # 2026, deviso_panel.py'de bulundu, aynı desen burada da geçerli).
-            self._rebuild_symbol_to_row()
-
-        for row_data in result:
-            sym = row_data["symbol"]
-            row = self._symbol_to_row.get(sym)
-            if (
-                row is None
-                or row >= self._table.rowCount()
-                or self._table.item(row, _COL_SYMBOL) is None
-            ):
-                row = self._table.rowCount()
-                self._table.insertRow(row)
-
-            rank_score = row_data.get("rank_score", 50)
-            direction = row_data.get("direction", "long")
-            combined = row_data.get("combined", 50)
-
-            # Satır arka plan rengi
-            if rank_score >= 80:
-                bg = _BG_STRONG_BULL if direction == "long" else _BG_STRONG_BEAR
-            elif rank_score >= 60:
-                bg = _BG_SOFT_BULL if direction == "long" else _BG_SOFT_BEAR
-            else:
-                bg = None
-
-            # Rank
-            self._set_num(row, _COL_RANK, row_data["rank"], bg)
-
-            # Sembol + sıra değişimi
-            delta = rank_deltas.get(sym, 0)
-            if delta > 0:
-                sym_text = f"{sym} ↑{delta}"
-                sym_color = _C_GREEN
-            elif delta < 0:
-                sym_text = f"{sym} ↓{abs(delta)}"
-                sym_color = _C_RED
-            else:
-                sym_text = sym
-                sym_color = _C_WHITE
-            sym_item = self._get_item(row, _COL_SYMBOL, QTableWidgetItem)
-            sym_item.setText(sym_text)
-            sym_item.setForeground(sym_color)
-            self._apply_bg(sym_item, bg)
-
-            # TF skorları
-            for col, key in (
-                (_COL_5M, "score_5m"),
-                (_COL_15M, "score_15m"),
-                (_COL_1H, "score_1h"),
-                (_COL_4H, "score_4h"),
-            ):
-                val = row_data.get(key)
-                self._set_score(row, col, val, bg)
-
-            # Birleşik
-            self._set_score(row, _COL_COMBINED, combined, bg, bold=True)
-
-            # RSI Cross (RSI9-RSI24, 18 Tem 2026 dogrulamasi)
-            self._set_score(row, _COL_RSICROSS, row_data.get("rsi_cross_combined"), bg)
-
-            # Z-Conf
-            self._set_zconf(row, row_data.get("z_confluence"), bg)
-
-            # R-Score
-            self._set_rscore(row, row_data.get("r_score"), bg)
-
-            # TF Uyum
-            align_count = row_data.get("alignment_count", 0)
-            tf_count = row_data.get("tf_count", 0)
-            aligned = row_data.get("aligned", False)
-            align_text = f"{'✓' if aligned else '~'} {align_count}/{tf_count}"
-            align_item = self._get_item(row, _COL_ALIGN, QTableWidgetItem)
-            align_item.setText(align_text)
-            align_item.setForeground(_C_GREEN if aligned else _C_YELLOW)
-            self._apply_bg(align_item, bg)
-
-            # VS BTC
-            vs_btc = row_data.get("vs_btc")
-            self._set_vs_btc(row, vs_btc, bg)
-
-        # Harita gerçek tablo durumuna göre yeniden kurulur — silme/ekleme
-        # sonrası satır index'leri kaymış olabilir.
-        self._rebuild_symbol_to_row()
-
-        self._table.setSortingEnabled(True)
         # resizeColumnsToContents() satır başına font-shaping (CoreText) çağırıyor
         # — 550 satır × 12 sütunda birkaç saniye sürüp CPU'yu periyodik olarak
         # tıkıyordu (27 Ağu 2026, sample ile ölçüldü). İlk dolduruluşta bir kez
         # yapılması yeterli; sütunlar zaten Interactive/Stretch, kullanıcı
         # istediğinde elle genişletebilir.
         if not self._resized_once:
-            self._table.resizeColumnsToContents()
+            self._view.resizeColumnsToContents()
             self._resized_once = True
-        self._apply_search_filter()
 
     @pyqtSlot(str)
     def _on_status(self, msg: str) -> None:
         self._status.setText(msg)
 
-    # ------------------------------------------------------------------
-    # 27 Ağu 2026: get-or-create deseni — hücre zaten varsa YENİDEN
-    # KULLANILIR (yeni QTableWidgetItem yaratılmaz), sadece text/renk
-    # güncellenir. bg=None ise önceki turdan kalan arka plan temizlenir
-    # (aksi halde eskiden geçerli bg, artık geçerli olmasa bile kalırdı).
-    def _get_item(self, row: int, col: int, item_cls) -> QTableWidgetItem:
-        item = self._table.item(row, col)
-        if item is None:
-            item = item_cls("")
-            self._table.setItem(row, col, item)
-        return item
-
-    @staticmethod
-    def _apply_bg(item: QTableWidgetItem, bg: Optional[QColor]) -> None:
-        item.setBackground(bg if bg is not None else QColor(0, 0, 0, 0))
-
-    def _set_num(self, row: int, col: int, val: Optional[float], bg) -> None:
-        item = self._get_item(row, col, _NumericItem)
-        item.setText(str(int(val)) if val is not None else "—")
-        item.setData(Qt.ItemDataRole.UserRole, val if val is not None else 0)
-        item.setForeground(_C_MUTED)
-        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._apply_bg(item, bg)
-
-    def _set_score(self, row: int, col: int, val: Optional[float], bg, bold: bool = False) -> None:
-        item = self._get_item(row, col, _NumericItem)
-        item.setText(f"{val:.0f}" if val is not None else "—")
-        item.setData(Qt.ItemDataRole.UserRole, val if val is not None else 0)
-        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-        if val is not None:
-            item.setForeground(_C_GREEN if val >= 55 else _C_RED if val <= 45 else _C_MUTED)
-        else:
-            item.setForeground(_C_MUTED)
-        if bold:
-            f = item.font()
-            f.setBold(True)
-            item.setFont(f)
-        self._apply_bg(item, bg)
-
-    def _set_rscore(self, row: int, val: Optional[float], bg) -> None:
-        item = self._get_item(row, _COL_RSCORE, _NumericItem)
-        if val is None:
-            item.setText("—")
-            item.setData(Qt.ItemDataRole.UserRole, 0)
-            item.setForeground(_C_MUTED)
-        else:
-            sign = "+" if val > 0 else ""
-            item.setText(f"{sign}{val:.3f}")
-            item.setData(Qt.ItemDataRole.UserRole, val)
-            item.setForeground(_C_GREEN if val > 0 else _C_RED)
-        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._apply_bg(item, bg)
-
-    def _set_zconf(self, row: int, val: Optional[float], bg) -> None:
-        item = self._get_item(row, _COL_ZCONF, _NumericItem)
-        if val is None:
-            item.setText("—")
-            item.setData(Qt.ItemDataRole.UserRole, 0)
-            item.setForeground(_C_MUTED)
-        else:
-            sign = "+" if val > 0 else ""
-            item.setText(f"{sign}{val:.2f}")
-            item.setData(Qt.ItemDataRole.UserRole, val)
-            if val >= 1.5:
-                item.setForeground(_C_GREEN)
-            elif val >= 0.5:
-                item.setForeground(QColor(100, 200, 100))
-            elif val <= -1.5:
-                item.setForeground(_C_RED)
-            elif val <= -0.5:
-                item.setForeground(QColor(200, 100, 100))
-            else:
-                item.setForeground(_C_MUTED)
-        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._apply_bg(item, bg)
-
-    def _set_vs_btc(self, row: int, val: Optional[float], bg) -> None:
-        item = self._get_item(row, _COL_VSBTC, _NumericItem)
-        if val is None:
-            item.setText("—")
-            item.setData(Qt.ItemDataRole.UserRole, 0)
-            item.setForeground(_C_MUTED)
-        else:
-            sign = "+" if val > 0 else ""
-            item.setText(f"{sign}{val:.1f}")
-            item.setData(Qt.ItemDataRole.UserRole, val)
-            item.setForeground(_C_GREEN if val > 0 else _C_RED if val < 0 else _C_MUTED)
-        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._apply_bg(item, bg)
-
     def closeEvent(self, event) -> None:
         self._worker.stop()
-        super().closeEvent(event)

@@ -18,7 +18,6 @@ from __future__ import annotations
 import bisect
 import json
 import logging
-import time
 from typing import Optional
 
 import psycopg2
@@ -33,6 +32,7 @@ from PyQt6.QtCore import (  # pylint: disable=no-name-in-module
 )
 from PyQt6.QtGui import QColor, QFont  # pylint: disable=no-name-in-module
 from PyQt6.QtWidgets import (  # pylint: disable=no-name-in-module
+    QAbstractItemView,
     QComboBox,
     QHBoxLayout,
     QHeaderView,
@@ -40,13 +40,18 @@ from PyQt6.QtWidgets import (  # pylint: disable=no-name-in-module
     QLineEdit,
     QPushButton,
     QSplitter,
-    QTableWidget,
-    QTableWidgetItem,
+    QTableView,
     QVBoxLayout,
     QWidget,
 )
 
+from desktop.models.trade_xray_model import (
+    COL_SYMBOL,
+    TradeXRayModel,
+    TradeXRayProxyModel,
+)
 from desktop.theme import COLORS
+from desktop.widgets.staleness import StalePanelMixin
 
 logger = logging.getLogger(__name__)
 
@@ -60,9 +65,6 @@ _GRID_ALPHA = 0.12
 _ZERO_PEN = pg.mkPen((70, 70, 85), width=1, style=Qt.PenStyle.DashLine)
 _CROSSHAIR_PEN = pg.mkPen((120, 120, 140), width=1, style=Qt.PenStyle.DotLine)
 
-_TRADE_COLS = ["Sembol", "Strateji", "Yön", "Durum", "Açılış", "PnL%"]
-_COL_SYMBOL, _COL_STRATEGY, _COL_SIDE, _COL_STATUS, _COL_OPENED, _COL_PNL = range(6)
-
 # _refresh_timer 15sn'de bir tetikliyor. 3 tur (45sn) hiç _TradeListWorker
 # emit'i gelmezse worker takılmış/Redis bağlantısı kopmuş olabilir — panel
 # eski listeyi sessizce göstermeye devam etmesin diye uyarı gösterilir
@@ -71,9 +73,6 @@ _STALE_THRESHOLD_SEC = 45
 _STALE_CHECK_INTERVAL_MS = 10_000
 
 _C_GREEN = QColor(COLORS["green"])
-_C_RED = QColor(COLORS["red"])
-_C_MUTED = QColor(COLORS["text_muted"])
-_C_WHITE = QColor(COLORS["text_primary"])
 
 _VPMV_SERIES = [
     ("vol_score", (100, 220, 100), "V"),
@@ -166,47 +165,32 @@ class _SnapshotWorker(QThread):
             self.snapshots_loaded.emit([])
 
 
-class _NumericItem(QTableWidgetItem):
-    def __lt__(self, other: "QTableWidgetItem") -> bool:
-        try:
-            return float(self.data(Qt.ItemDataRole.UserRole)) < float(
-                other.data(Qt.ItemDataRole.UserRole)
-            )
-        except (TypeError, ValueError):
-            return super().__lt__(other)
-
-
-class TradeXRayPanel(QWidget):
+class TradeXRayPanel(QWidget, StalePanelMixin):
     def __init__(self, db_config: dict, redis_url: str, parent=None):
         super().__init__(parent)
         self._db_config = db_config
         self._redis_url = redis_url
         self._trades: list[dict] = []
-        self._filtered_trades: list[dict] = []
-        self._search_text = ""
-        self._status_filter = "Tümü"
-        self._side_filter = "Tümü"
-        self._strategy_filter = "Tümü"
+        self._model = TradeXRayModel(self)
+        self._table_proxy = TradeXRayProxyModel(self)
+        self._table_proxy.setSourceModel(self._model)
         self._status_buttons: dict[str, QPushButton] = {}
         self._side_buttons: dict[str, QPushButton] = {}
         self._list_worker: Optional[_TradeListWorker] = None
         self._snap_worker: Optional[_SnapshotWorker] = None
-        self._id_to_row: dict[int, int] = {}
         self._resized_once = False
-        self._last_update_monotonic = time.monotonic()
-        self._is_stale = False
         self._setup_ui()
+        self._init_staleness(
+            self._status,
+            threshold_sec=_STALE_THRESHOLD_SEC,
+            check_interval_ms=_STALE_CHECK_INTERVAL_MS,
+        )
         self.refresh()
 
         self._refresh_timer = QTimer(self)
         self._refresh_timer.setInterval(15_000)
         self._refresh_timer.timeout.connect(self.refresh)
         self._refresh_timer.start()
-
-        self._stale_timer = QTimer(self)
-        self._stale_timer.setInterval(_STALE_CHECK_INTERVAL_MS)
-        self._stale_timer.timeout.connect(self._check_stale)
-        self._stale_timer.start()
 
     @staticmethod
     def _make_combo(options: list[str]) -> QComboBox:
@@ -325,17 +309,17 @@ class TradeXRayPanel(QWidget):
 
         splitter = QSplitter(Qt.Orientation.Vertical)
 
-        self._table = QTableWidget(0, len(_TRADE_COLS))
-        self._table.setHorizontalHeaderLabels(_TRADE_COLS)
-        self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self._table.setAlternatingRowColors(False)
-        self._table.setSortingEnabled(True)
-        self._table.setShowGrid(False)
-        self._table.verticalHeader().setVisible(False)
-        self._table.setStyleSheet(
+        self._view = QTableView()
+        self._view.setModel(self._table_proxy)
+        self._view.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._view.setAlternatingRowColors(False)
+        self._view.setSortingEnabled(True)
+        self._view.setShowGrid(False)
+        self._view.verticalHeader().setVisible(False)
+        self._view.setStyleSheet(
             f"""
-            QTableWidget {{
+            QTableView {{
                 background: {COLORS['bg_primary']};
                 color: {COLORS['text_primary']};
                 border: none;
@@ -348,16 +332,16 @@ class TradeXRayPanel(QWidget):
                 padding: 4px;
                 font-size: 11px;
             }}
-            QTableWidget::item:selected {{
+            QTableView::item:selected {{
                 background: {COLORS['bg_tertiary']};
             }}
             """
         )
-        hh = self._table.horizontalHeader()
+        hh = self._view.horizontalHeader()
         hh.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        hh.setSectionResizeMode(_COL_SYMBOL, QHeaderView.ResizeMode.Stretch)
-        self._table.itemSelectionChanged.connect(self._on_row_selected)
-        splitter.addWidget(self._table)
+        hh.setSectionResizeMode(COL_SYMBOL, QHeaderView.ResizeMode.Stretch)
+        self._view.selectionModel().selectionChanged.connect(self._on_row_selected)
+        splitter.addWidget(self._view)
 
         self._plot_widget = pg.GraphicsLayoutWidget()
         self._plot_widget.ci.layout.setSpacing(2)
@@ -421,6 +405,12 @@ class TradeXRayPanel(QWidget):
         layout.addWidget(splitter)
 
     def refresh(self) -> None:
+        # 28 Ağu 2026 bugfix: önceden isRunning() kontrolü YAPMADAN her
+        # 15sn'de bir yeni _TradeListWorker yaratılıyordu — bir fetch 15sn'den
+        # uzun sürerse (ör. Redis geçici yavaşlaması) worker'lar birikebilirdi,
+        # diğer panellerin `if not worker.isRunning()` deseninden farklıydı.
+        if self._list_worker is not None and self._list_worker.isRunning():
+            return
         if not self._is_stale:
             self._status.setText("Yükleniyor…")
         self._list_worker = _TradeListWorker(self._redis_url, parent=self)
@@ -429,23 +419,15 @@ class TradeXRayPanel(QWidget):
 
     @pyqtSlot(object)
     def _on_trades_loaded(self, trades: list) -> None:
-        self._last_update_monotonic = time.monotonic()
-        if self._is_stale:
-            self._is_stale = False
-            self._status.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px;")
+        self._mark_fresh()
         self._trades = trades
         self._status.setText(f"{len(trades)} işlem")
         self._refresh_strategy_options()
-        self._apply_search_filter()
-
-    def _check_stale(self) -> None:
-        age = time.monotonic() - self._last_update_monotonic
-        if age > _STALE_THRESHOLD_SEC and not self._is_stale:
-            self._is_stale = True
-            self._status.setStyleSheet(
-                f"color: {COLORS['red']}; font-size: 11px; font-weight: bold;"
-            )
-            self._status.setText(f"⚠ {age:.0f}sn'dir veri güncellenmiyor")
+        self._model.bulk_upsert(trades, self._model.build_row, self._model.update_row)
+        self._model.prune_missing({t["id"] for t in trades})
+        if not self._resized_once:
+            self._view.resizeColumnsToContents()
+            self._resized_once = True
 
     def _refresh_strategy_options(self) -> None:
         strategies = sorted({t["strategy"] for t in self._trades if t.get("strategy")})
@@ -456,167 +438,30 @@ class TradeXRayPanel(QWidget):
         idx = self._strategy_combo.findText(current)
         self._strategy_combo.setCurrentIndex(idx if idx >= 0 else 0)
         self._strategy_combo.blockSignals(False)
-        self._strategy_filter = self._strategy_combo.currentText()
+        self._table_proxy.set_strategy(self._strategy_combo.currentText())
 
     def _on_strategy_changed(self, value: str) -> None:
-        self._strategy_filter = value
-        self._apply_search_filter()
+        self._table_proxy.set_strategy(value)
 
     def _on_search_changed(self, text: str) -> None:
-        self._search_text = text.strip().upper()
-        self._apply_search_filter()
+        self._table_proxy.set_search(text)
 
     def _set_status_filter(self, value: str) -> None:
-        self._status_filter = value
         for v, btn in self._status_buttons.items():
             btn.setChecked(v == value)
-        self._apply_search_filter()
+        self._table_proxy.set_status(value)
 
     def _set_side_filter(self, value: str) -> None:
-        self._side_filter = value
         for v, btn in self._side_buttons.items():
             btn.setChecked(v == value)
-        self._apply_search_filter()
-
-    def _apply_search_filter(self) -> None:
-        trades = self._trades
-        if self._search_text:
-            trades = [t for t in trades if self._search_text in t["symbol"].upper()]
-        if self._strategy_filter != "Tümü":
-            trades = [t for t in trades if t.get("strategy") == self._strategy_filter]
-        if self._status_filter != "Tümü":
-            trades = [t for t in trades if t.get("status") == self._status_filter]
-        if self._side_filter != "Tümü":
-            trades = [t for t in trades if t.get("signal_type") == self._side_filter]
-        self._filtered_trades = trades
-        self._render_table()
-
-    def _get_item(self, row: int, col: int, item_cls=QTableWidgetItem):
-        item = self._table.item(row, col)
-        if item is None or (item_cls is _NumericItem and not isinstance(item, _NumericItem)):
-            item = item_cls("")
-            self._table.setItem(row, col, item)
-        return item
-
-    def _rebuild_id_to_row(self) -> None:
-        self._id_to_row = {}
-        for r in range(self._table.rowCount()):
-            it = self._table.item(r, _COL_SYMBOL)
-            trade_id = it.data(Qt.ItemDataRole.UserRole) if it is not None else None
-            if trade_id is not None:
-                self._id_to_row[trade_id] = r
-
-    def _render_table(self) -> None:
-        selected_id = self._selected_trade_id()
-
-        self._table.setSortingEnabled(False)
-
-        # Kullanıcı iki _render_table() çağrısı arasında bir sütun başlığına
-        # tıklayıp tabloyu yeniden sıralayabilir — harita bu durumda bayatlar
-        # (paper_trade_panel.py'deki "P&L önce 31 sonra -2" bug'ıyla aynı kök
-        # neden sınıfı, 27 Ağu 2026). Her çağrı başında haritayı tablonun
-        # GERÇEK anlık durumundan yeniden kuruyoruz.
-        self._rebuild_id_to_row()
-
-        incoming_ids = {t["id"] for t in self._filtered_trades}
-        removed = set(self._id_to_row) - incoming_ids
-        if removed:
-            rows_to_remove = sorted(
-                (self._id_to_row[tid] for tid in removed if tid in self._id_to_row),
-                reverse=True,
-            )
-            for row in rows_to_remove:
-                self._table.removeRow(row)
-            # removeRow altındaki satırların index'ini kaydırır — haritayı hemen
-            # yeniden kurmazsak kalan id'ler YANLIŞ (kaymış) satırı işaret
-            # edebilir (27 Ağu 2026, deviso_panel.py'de bulundu).
-            self._rebuild_id_to_row()
-
-        for t in self._filtered_trades:
-            row_idx = self._id_to_row.get(t["id"])
-            if (
-                row_idx is None
-                or row_idx >= self._table.rowCount()
-                or self._table.item(row_idx, _COL_SYMBOL) is None
-            ):
-                row_idx = self._table.rowCount()
-                self._table.insertRow(row_idx)
-
-            sym_item = self._get_item(row_idx, _COL_SYMBOL)
-            sym_item.setText(t["symbol"])
-            sym_item.setForeground(_C_WHITE)
-            sym_item.setData(Qt.ItemDataRole.UserRole, t["id"])
-
-            strat_item = self._get_item(row_idx, _COL_STRATEGY)
-            strat_item.setText(t["strategy"])
-            strat_item.setForeground(_C_MUTED)
-
-            side = t.get("signal_type", "")
-            side_color = _C_GREEN if side == "Long" else _C_RED if side == "Short" else _C_MUTED
-            side_item = self._get_item(row_idx, _COL_SIDE)
-            side_item.setText(side)
-            side_item.setForeground(side_color)
-            side_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-
-            status = t.get("status", "")
-            status_item = self._get_item(row_idx, _COL_STATUS)
-            status_item.setText(
-                "Açık" if status == "open" else "Kapalı" if status == "closed" else status
-            )
-            status_item.setForeground(_C_GREEN if status == "open" else _C_MUTED)
-            status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-
-            opened_item = self._get_item(row_idx, _COL_OPENED)
-            opened_item.setText(t.get("opened_at_str") or "—")
-            opened_item.setForeground(_C_MUTED)
-            opened_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-
-            pnl = t.get("pnl_pct")
-            pnl_item = self._get_item(row_idx, _COL_PNL, _NumericItem)
-            if pnl is None:
-                pnl_item.setText("—")
-                pnl_item.setForeground(_C_MUTED)
-                pnl_item.setData(Qt.ItemDataRole.UserRole, 0)
-            else:
-                sign = "+" if pnl > 0 else ""
-                pnl_item.setText(f"{sign}{pnl:.2f}")
-                pnl_item.setData(Qt.ItemDataRole.UserRole, pnl)
-                pnl_item.setForeground(_C_GREEN if pnl > 0 else _C_RED)
-            pnl_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        self._rebuild_id_to_row()
-        self._table.setSortingEnabled(True)
-        # resizeColumnsToContents() satır başına font-shaping (CoreText) çağırıyor
-        # — 15sn'de bir periyodik olarak CPU'yu tıkıyordu (27 Ağu 2026, sample ile
-        # ölçüldü). İlk dolduruluşta bir kez yapılması yeterli.
-        if not self._resized_once:
-            self._table.resizeColumnsToContents()
-            self._resized_once = True
-
-        if selected_id is not None:
-            self._reselect_trade(selected_id)
+        self._table_proxy.set_side(value)
 
     def _selected_trade_id(self) -> Optional[int]:
-        row = self._table.currentRow()
-        if row < 0:
+        index = self._view.currentIndex()
+        if not index.isValid():
             return None
-        sym_item = self._table.item(row, _COL_SYMBOL)
-        if sym_item is None:
-            return None
-        trade_id = sym_item.data(Qt.ItemDataRole.UserRole)
-        return int(trade_id) if trade_id is not None else None
-
-    def _reselect_trade(self, trade_id: int) -> None:
-        """Refresh sonrası sıralama/satır kayması nedeniyle seçili işlemin
-        grafiği sessizce yanlış işlemi göstermeye devam etmesin diye —
-        satırı bulup yeniden seçer ve grafiği tazeler."""
-        for row in range(self._table.rowCount()):
-            sym_item = self._table.item(row, _COL_SYMBOL)
-            if sym_item is not None and sym_item.data(Qt.ItemDataRole.UserRole) == trade_id:
-                self._table.selectRow(row)
-                self._update_ta_info_label(trade_id)
-                self._load_snapshots(trade_id)
-                return
+        row = self._model.row_at(self._table_proxy.mapToSource(index).row())
+        return row.id if row is not None else None
 
     def _on_row_selected(self) -> None:
         trade_id = self._selected_trade_id()
@@ -626,8 +471,8 @@ class TradeXRayPanel(QWidget):
         self._load_snapshots(trade_id)
 
     def _update_ta_info_label(self, trade_id: int) -> None:
-        trade = next((t for t in self._filtered_trades if t["id"] == trade_id), None)
-        features = (trade or {}).get("entry_features") or {}
+        trade = self._model.row_by_id(trade_id)
+        features = (trade.raw if trade is not None else {}).get("entry_features") or {}
         if "ta_pct_1h" not in features:
             self._ta_info_label.setText("")
             return

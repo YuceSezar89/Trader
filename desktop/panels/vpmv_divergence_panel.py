@@ -8,50 +8,37 @@ Delta = vpmv_şimdi - vpmv_sinyal_anı
 Grafik tabında sinyal barından itibaren VPMV serisi (0-100).
 """
 
-import time
 from datetime import datetime
 from typing import Optional
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt6.QtCore import Qt, QTimer, pyqtSlot  # pylint: disable=no-name-in-module
-from PyQt6.QtGui import QColor, QFont  # pylint: disable=no-name-in-module
+from PyQt6.QtCore import Qt, pyqtSlot  # pylint: disable=no-name-in-module
+from PyQt6.QtGui import QFont  # pylint: disable=no-name-in-module
 from PyQt6.QtWidgets import (  # pylint: disable=no-name-in-module
+    QAbstractItemView,
     QComboBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
-    QTableWidget,
-    QTableWidgetItem,
+    QTableView,
     QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from desktop.models.vpmv_divergence_model import (
+    COL_SYMBOL,
+    COL_TIME,
+    VpmvDivergenceModel,
+    VpmvDivergenceProxyModel,
+)
 from desktop.theme import COLORS
+from desktop.widgets.staleness import StalePanelMixin
 
 pg.setConfigOption("background", "#0d0d12")
 pg.setConfigOption("foreground", "#555566")
-
-_COLS = ["Sembol", "Δ VPMV", "Şimdi", "vs Med", "Sinyal", "Pre", "Zaman"]
-_COL_SYMBOL = 0
-_COL_DELTA = 1
-_COL_NOW = 2
-_COL_VS_MED = 3
-_COL_SIG = 4
-_COL_PRE = 5
-_COL_TIME = 6
-
-_C_GREEN = QColor(COLORS["green"])
-_C_RED = QColor(COLORS["red"])
-_C_MUTED = QColor(COLORS["text_muted"])
-_C_TRANSPARENT = QColor(0, 0, 0, 0)
-
-_BG_POS_STRONG = QColor(0, 120, 40, 150)
-_BG_POS_SOFT = QColor(0, 80, 20, 80)
-_BG_NEG_STRONG = QColor(180, 20, 20, 150)
-_BG_NEG_SOFT = QColor(120, 10, 10, 80)
 
 _PALETTE = [
     (100, 220, 100),
@@ -89,36 +76,28 @@ _STALE_THRESHOLD_SEC = 90
 _STALE_CHECK_INTERVAL_MS = 10_000
 
 
-class _NumericItem(QTableWidgetItem):
-    def __lt__(self, other: "QTableWidgetItem") -> bool:
-        try:
-            return float(self.data(Qt.ItemDataRole.UserRole)) < float(
-                other.data(Qt.ItemDataRole.UserRole)
-            )
-        except (TypeError, ValueError):
-            return super().__lt__(other)
-
-
-def _make_table() -> QTableWidget:
-    t = QTableWidget(0, len(_COLS))
-    t.setHorizontalHeaderLabels(_COLS)
-    t.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-    t.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-    t.setAlternatingRowColors(False)
-    t.setSortingEnabled(False)
-    t.setShowGrid(False)
-    t.verticalHeader().setVisible(False)
-    t.verticalHeader().setDefaultSectionSize(24)
-    hh = t.horizontalHeader()
-    # ResizeToContents sürekli modda HER setItem() çağrısında tüm sütunu yeniden
-    # ölçüyor (O(satır) maliyet × N setItem = O(satır²)) — 550 sembolle bu, ana
-    # thread'i kilitleyip panel kasmasına yol açıyordu. Interactive + tabloyu
-    # dolduran fonksiyonun sonunda tek seferlik resizeColumnsToContents() aynı
-    # görünümü verir, sürekli yeniden ölçüm olmadan.
+def _make_view(positive: bool) -> tuple[QTableView, VpmvDivergenceModel, VpmvDivergenceProxyModel]:
+    model = VpmvDivergenceModel(positive)
+    proxy = VpmvDivergenceProxyModel()
+    proxy.setSourceModel(model)
+    v = QTableView()
+    v.setModel(proxy)
+    v.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+    v.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+    v.setAlternatingRowColors(False)
+    v.setSortingEnabled(True)
+    v.setShowGrid(False)
+    v.verticalHeader().setVisible(False)
+    v.verticalHeader().setDefaultSectionSize(24)
+    hh = v.horizontalHeader()
+    # ResizeToContents sürekli modda HER veri değişikliğinde tüm sütunu yeniden
+    # ölçüyor (O(satır) maliyet × N güncelleme = O(satır²)) — 550 sembolle bu, ana
+    # thread'i kilitleyip panel kasmasına yol açıyordu. Interactive + tek seferlik
+    # resizeColumnsToContents() aynı görünümü verir, sürekli yeniden ölçüm olmadan.
     hh.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-    hh.setSectionResizeMode(_COL_SYMBOL, QHeaderView.ResizeMode.Interactive)
-    hh.setSectionResizeMode(_COL_TIME, QHeaderView.ResizeMode.Interactive)
-    return t
+    hh.setSectionResizeMode(COL_SYMBOL, QHeaderView.ResizeMode.Interactive)
+    hh.setSectionResizeMode(COL_TIME, QHeaderView.ResizeMode.Interactive)
+    return v, model, proxy
 
 
 def _make_search(placeholder: str) -> QLineEdit:
@@ -133,7 +112,7 @@ def _make_search(placeholder: str) -> QLineEdit:
     return box
 
 
-class VpmvDivergencePanel(QWidget):
+class VpmvDivergencePanel(QWidget, StalePanelMixin):
     """Sinyal sonrası VPMV delta tablosu + çizgi grafik."""
 
     def __init__(self, parent=None):
@@ -141,23 +120,17 @@ class VpmvDivergencePanel(QWidget):
         self._last_result: Optional[dict] = None
         self._indicator_filter = ""
         self._tf_filter = ""
-        self._pos_search = ""
-        self._neg_search = ""
         self._curves: dict[str, pg.PlotDataItem] = {}
         self._labels: dict[str, pg.TextItem] = {}
         self._sym_colors: dict[str, tuple] = {}
-        self._pos_symbol_to_row: dict[str, int] = {}
-        self._neg_symbol_to_row: dict[str, int] = {}
         self._pos_resized_once = False
         self._neg_resized_once = False
-        self._last_update_monotonic = time.monotonic()
-        self._is_stale = False
         self._setup_ui()
-
-        self._stale_timer = QTimer(self)
-        self._stale_timer.setInterval(_STALE_CHECK_INTERVAL_MS)
-        self._stale_timer.timeout.connect(self._check_stale)
-        self._stale_timer.start()
+        self._init_staleness(
+            self._status_label,
+            threshold_sec=_STALE_THRESHOLD_SEC,
+            check_interval_ms=_STALE_CHECK_INTERVAL_MS,
+        )
 
     def _setup_ui(self) -> None:
         root = QVBoxLayout(self)
@@ -208,9 +181,9 @@ class VpmvDivergencePanel(QWidget):
         pos_hdr.addWidget(pos_title)
         pos_hdr.addStretch()
         pos_hdr.addWidget(self._pos_search_box)
-        self._pos_table = _make_table()
+        self._pos_view, self._pos_model, self._pos_proxy = _make_view(positive=True)
         pos_col.addLayout(pos_hdr)
-        pos_col.addWidget(self._pos_table)
+        pos_col.addWidget(self._pos_view)
 
         neg_col = QVBoxLayout()
         neg_col.setSpacing(4)
@@ -224,9 +197,9 @@ class VpmvDivergencePanel(QWidget):
         neg_hdr.addWidget(neg_title)
         neg_hdr.addStretch()
         neg_hdr.addWidget(self._neg_search_box)
-        self._neg_table = _make_table()
+        self._neg_view, self._neg_model, self._neg_proxy = _make_view(positive=False)
         neg_col.addLayout(neg_hdr)
-        neg_col.addWidget(self._neg_table)
+        neg_col.addWidget(self._neg_view)
 
         tbl_lay.addLayout(pos_col)
         tbl_lay.addLayout(neg_col)
@@ -263,10 +236,7 @@ class VpmvDivergencePanel(QWidget):
 
     @pyqtSlot(object)
     def on_vpmv_updated(self, result: dict) -> None:
-        self._last_update_monotonic = time.monotonic()
-        if self._is_stale:
-            self._is_stale = False
-            self._status_label.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px;")
+        self._mark_fresh()
         self._last_result = result
         current = result.get("current", {})
         n = len(current)
@@ -276,15 +246,6 @@ class VpmvDivergencePanel(QWidget):
             f"  •  {n} sembol  •  Med: {med:.0f}"
         )
         self._populate(result)
-
-    def _check_stale(self) -> None:
-        age = time.monotonic() - self._last_update_monotonic
-        if age > _STALE_THRESHOLD_SEC and not self._is_stale:
-            self._is_stale = True
-            self._status_label.setStyleSheet(
-                f"color: {COLORS['red']}; font-size: 11px; font-weight: bold;"
-            )
-            self._status_label.setText(f"⚠ {age:.0f}sn'dir veri güncellenmiyor")
 
     def _on_tf_changed(self, text: str) -> None:
         self._tf_filter = "" if text == "Tümü" else text
@@ -297,20 +258,10 @@ class VpmvDivergencePanel(QWidget):
             self._populate(self._last_result)
 
     def _on_pos_search(self, text: str) -> None:
-        self._pos_search = text.strip().upper()
-        self._apply_filter(self._pos_table, self._pos_search)
+        self._pos_proxy.set_search(text)
 
     def _on_neg_search(self, text: str) -> None:
-        self._neg_search = text.strip().upper()
-        self._apply_filter(self._neg_table, self._neg_search)
-
-    @staticmethod
-    def _apply_filter(table: QTableWidget, search: str) -> None:
-        for row in range(table.rowCount()):
-            item = table.item(row, _COL_SYMBOL)
-            if item is None:
-                continue
-            table.setRowHidden(row, bool(search) and search not in item.text())
+        self._neg_proxy.set_search(text)
 
     # ── Grafik ────────────────────────────────────────────────────────────
 
@@ -396,7 +347,8 @@ class VpmvDivergencePanel(QWidget):
         )
 
         self._fill_table(
-            self._pos_table,
+            self._pos_model,
+            self._pos_view,
             pos_rows,
             current_vpmv,
             signal_vpmv,
@@ -404,10 +356,10 @@ class VpmvDivergencePanel(QWidget):
             time_map,
             median_vpmv,
             positive=True,
-            symbol_to_row=self._pos_symbol_to_row,
         )
         self._fill_table(
-            self._neg_table,
+            self._neg_model,
+            self._neg_view,
             neg_rows,
             current_vpmv,
             signal_vpmv,
@@ -415,30 +367,12 @@ class VpmvDivergencePanel(QWidget):
             time_map,
             median_vpmv,
             positive=False,
-            symbol_to_row=self._neg_symbol_to_row,
         )
-        self._apply_filter(self._pos_table, self._pos_search)
-        self._apply_filter(self._neg_table, self._neg_search)
 
-    @staticmethod
-    def _get_item(table: QTableWidget, row: int, col: int, item_cls=QTableWidgetItem):
-        item = table.item(row, col)
-        if item is None or (item_cls is _NumericItem and not isinstance(item, _NumericItem)):
-            item = item_cls("")
-            table.setItem(row, col, item)
-        return item
-
-    @staticmethod
-    def _rebuild_symbol_to_row(table: QTableWidget, symbol_to_row: dict) -> None:
-        symbol_to_row.clear()
-        for r in range(table.rowCount()):
-            it = table.item(r, _COL_SYMBOL)
-            if it is not None:
-                symbol_to_row[it.text()] = r
-
-    def _fill_table(  # pylint: disable=too-many-arguments,too-many-locals
+    def _fill_table(  # pylint: disable=too-many-arguments
         self,
-        table: QTableWidget,
+        model: VpmvDivergenceModel,
+        view: QTableView,
         rows: list,
         current_vpmv: dict,
         signal_vpmv: dict,
@@ -446,90 +380,10 @@ class VpmvDivergencePanel(QWidget):
         time_map: dict,
         median_vpmv: float,
         positive: bool,
-        symbol_to_row: dict,
     ) -> None:
-        table.setSortingEnabled(False)
-
-        # Kullanıcı iki _fill_table() çağrısı arasında bir sütun başlığına
-        # tıklayıp tabloyu yeniden sıralayabilir — harita bu durumda bayatlar
-        # (paper_trade_panel.py'deki "P&L önce 31 sonra -2" bug'ıyla aynı kök
-        # neden sınıfı, 27 Ağu 2026). Her çağrı başında haritayı tablonun
-        # GERÇEK anlık durumundan yeniden kuruyoruz.
-        self._rebuild_symbol_to_row(table, symbol_to_row)
-
-        mono = QFont("Courier New", 11)
-        bold = QFont("Courier New", 11, QFont.Weight.Bold)
-        d_color = _C_GREEN if positive else _C_RED
         now = datetime.now()
-
-        incoming = {symbol for symbol, _ in rows}
-        removed = set(symbol_to_row) - incoming
-        if removed:
-            rows_to_remove = sorted(
-                (symbol_to_row[s] for s in removed if s in symbol_to_row), reverse=True
-            )
-            for row in rows_to_remove:
-                table.removeRow(row)
-            # removeRow altındaki satırların index'ini kaydırır — haritayı hemen
-            # yeniden kurmazsak kalan semboller YANLIŞ (kaymış) satırı işaret
-            # edebilir (27 Ağu 2026, deviso_panel.py'de bulundu).
-            self._rebuild_symbol_to_row(table, symbol_to_row)
-
+        items = []
         for symbol, delta in rows:
-            row_idx = symbol_to_row.get(symbol)
-            if (
-                row_idx is None
-                or row_idx >= table.rowCount()
-                or table.item(row_idx, _COL_SYMBOL) is None
-            ):
-                row_idx = table.rowCount()
-                table.insertRow(row_idx)
-
-            sym_item = self._get_item(table, row_idx, _COL_SYMBOL)
-            sym_item.setText(symbol)
-            sym_item.setFont(bold)
-            sym_item.setForeground(d_color)
-
-            d_item = self._get_item(table, row_idx, _COL_DELTA, _NumericItem)
-            d_item.setText(f"{delta:+.1f}")
-            d_item.setData(Qt.ItemDataRole.UserRole, delta)
-            d_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            d_item.setFont(mono)
-            d_item.setForeground(d_color)
-            abs_d = abs(delta)
-            if abs_d >= 20:
-                d_item.setBackground(_BG_POS_STRONG if positive else _BG_NEG_STRONG)
-            elif abs_d >= 10:
-                d_item.setBackground(_BG_POS_SOFT if positive else _BG_NEG_SOFT)
-            else:
-                d_item.setBackground(_C_TRANSPARENT)
-
-            for col, val in (
-                (_COL_NOW, current_vpmv.get(symbol, 0.0)),
-                (_COL_SIG, signal_vpmv.get(symbol, 0.0)),
-                (_COL_PRE, pre_vpmv.get(symbol, 0.0)),
-            ):
-                it = self._get_item(table, row_idx, col, _NumericItem)
-                it.setText(f"{val:.0f}")
-                it.setData(Qt.ItemDataRole.UserRole, val)
-                it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                it.setFont(mono)
-                it.setForeground(_C_MUTED)
-
-            vs_med = current_vpmv.get(symbol, 0.0) - median_vpmv
-            vs_item = self._get_item(table, row_idx, _COL_VS_MED, _NumericItem)
-            vs_item.setText(f"{vs_med:+.0f}")
-            vs_item.setData(Qt.ItemDataRole.UserRole, vs_med)
-            vs_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            vs_item.setFont(mono)
-            vs_item.setForeground(_C_GREEN if vs_med >= 0 else _C_RED)
-            if abs(vs_med) >= 15:
-                vs_item.setBackground(_BG_POS_STRONG if vs_med >= 0 else _BG_NEG_STRONG)
-            elif abs(vs_med) >= 8:
-                vs_item.setBackground(_BG_POS_SOFT if vs_med >= 0 else _BG_NEG_SOFT)
-            else:
-                vs_item.setBackground(_C_TRANSPARENT)
-
             sig_dt = time_map.get(symbol)
             if sig_dt:
                 time_str = (
@@ -539,20 +393,26 @@ class VpmvDivergencePanel(QWidget):
                 )
             else:
                 time_str = "—"
-            t_item = self._get_item(table, row_idx, _COL_TIME)
-            t_item.setText(time_str)
-            t_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            t_item.setFont(mono)
-            t_item.setForeground(_C_MUTED)
+            items.append(
+                {
+                    "symbol": symbol,
+                    "delta": delta,
+                    "now": current_vpmv.get(symbol, 0.0),
+                    "sig": signal_vpmv.get(symbol, 0.0),
+                    "pre": pre_vpmv.get(symbol, 0.0),
+                    "vs_med": current_vpmv.get(symbol, 0.0) - median_vpmv,
+                    "time_str": time_str,
+                }
+            )
+        model.bulk_upsert(items, model.build_row, model.update_row)
+        model.prune_missing({d["symbol"] for d in items})
 
-        self._rebuild_symbol_to_row(table, symbol_to_row)
-        table.setSortingEnabled(True)
         # resizeColumnsToContents() satır başına font-shaping (CoreText) çağırıyor
         # — 30sn'de bir periyodik olarak CPU'yu tıkıyordu (27 Ağu 2026, sample ile
         # ölçüldü). İlk dolduruluşta bir kez yapılması yeterli.
         already_resized = self._pos_resized_once if positive else self._neg_resized_once
         if not already_resized:
-            table.resizeColumnsToContents()
+            view.resizeColumnsToContents()
             if positive:
                 self._pos_resized_once = True
             else:
