@@ -333,11 +333,14 @@ async def run_all_services():
                 max_age_seconds={
                     "redis_batch_flush": 60,
                     "ws_ingestion": 120,
-                    # 16 Ağu 2026: masaüstü panel donduğunda (05:03-12:11, 7 saat)
-                    # hiçbir izleme yoktu. Panel manuel açılıp kapatıldığı için
-                    # key yoksa (watchdog_loop last is None → skip) alarm YOK —
-                    # sadece panel açıkken donarsa alarm üretir.
-                    "desktop_panel": 60,
+                    # desktop_panel BİLEREK burada yok (28 Ağu 2026) — bu süreç
+                    # desktop.main'in gerçekten çalışıp çalışmadığını bilmiyor,
+                    # sadece Redis key'ine bakıyor. Panel terminal kapatma/Ctrl+C
+                    # gibi closeEvent'i atlayan bir yolla kapanırsa (key TTL'siz
+                    # olduğu dönemde 22+ saat böyle bir yanlış "donuk" alarmı
+                    # üretti) burada donma sanılabiliyordu. Process+heartbeat
+                    # korelasyonunu PID'yi zaten izleyen scripts/monitor_desktop_perf.py
+                    # yapıyor artık — bkz. proje hafızası.
                 }
             ),
             "heartbeat_watchdog",

@@ -15,6 +15,14 @@ sonlandırıyor — bir UI bug'ının tüm sistemi (swap'ı tüketip Postgres'in
 arka plan job'larını etkileyerek) felç etmesini önlemek için (bulkhead
 izolasyonu, bkz. proje CLAUDE.md "Backend Hesaplar, Arayüz Okur" ilkesi).
 
+28 Ağu 2026: event-loop donması tespiti de eklendi — desktop.main'in
+GUI thread'i her 15sn'de bir heartbeat:desktop_panel'i Redis'e yazıyor
+(desktop/main_window.py), donarsa bu da durur. Bu script zaten PID'yi
+izlediği için hem "süreç çalışıyor" hem "heartbeat bayat" korelasyonunu
+tek yerde yapabiliyor (run_services.py'deki genel heartbeat_watchdog_loop
+bunu yapamıyordu — process çöktüğünde/kapandığında da key bayat kalıyor,
+"donmuş" ile "kapanmış"ı ayıramıyordu, bkz. proje hafızası 28 Ağu).
+
 Kullanım:
     .venv/bin/python scripts/monitor_desktop_perf.py &
 
@@ -31,7 +39,9 @@ import time
 from datetime import datetime
 
 import psutil
+import redis
 
+from config import Config
 from utils.telegram_notify import send_telegram_message
 
 _LOG_PATH = os.path.join(
@@ -85,6 +95,47 @@ def _footprint_mb(pid: int) -> float | None:
 _FD_WARN = 3000
 _FD_CRITICAL = 3800
 
+# 28 Ağu 2026: event-loop donması — desktop.main'in GUI thread'i her 15sn'de
+# heartbeat:desktop_panel'i yazıyor (ex=90 TTL'li). Süreç çalışıyor AMA key
+# max_age_sec'ten uzun süredir güncellenmemişse GUI thread tıkanmış demektir.
+_HEARTBEAT_WATCHED: dict[str, dict[str, object]] = {
+    "desktop.main": {"key": "heartbeat:desktop_panel", "max_age_sec": 90},
+}
+
+_redis_client: "redis.Redis | None" = None
+
+
+def _get_redis_client() -> "redis.Redis | None":
+    global _redis_client  # pylint: disable=global-statement
+    if _redis_client is None:
+        try:
+            _redis_client = redis.Redis.from_url(
+                Config.REDIS_URL,
+                decode_responses=True,
+                socket_timeout=2,
+                socket_connect_timeout=2,
+            )
+        except Exception:  # pylint: disable=broad-exception-caught
+            return None
+    return _redis_client
+
+
+def _heartbeat_age_sec(key: str) -> float | None:
+    client = _get_redis_client()
+    if client is None:
+        return None
+    try:
+        raw = client.get(key)
+    except Exception:  # pylint: disable=broad-exception-caught
+        return None
+    if not raw:
+        return None
+    try:
+        last = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    return (datetime.now() - last).total_seconds()
+
 
 def _find_pids() -> dict[str, int]:
     found: dict[str, int] = {}
@@ -104,25 +155,27 @@ def _alert(text: str) -> None:
         print(f"[UYARI] Telegram gönderilemedi: {exc}")
 
 
-def _kill_process(proc: psutil.Process, name: str, effective_mb: float) -> None:
+def _kill_process(proc: psutil.Process, name: str, reason: str) -> None:
     """SADECE _KILL_ON_CRITICAL kümesindeki süreçler için çağrılır — önce
     nazikçe (terminate/SIGTERM) kapatmayı dener, _KILL_GRACE_SEC içinde
-    kapanmazsa zorla (kill/SIGKILL) sonlandırır. Amaç: 27 Ağu 2026'daki
-    87.9GB swap-exhaustion olayının tekrarında, bu sürecin sistemin geri
-    kalanını (Postgres arka plan job'ları dahil) etkilemesine izin
-    vermeden, kendi kendine sessizce sonlanmasını sağlamak."""
+    kapanmazsa zorla (kill/SIGKILL) sonlandırır. `reason` sonlandırma
+    nedenini açıklar (ör. "bellek 4200MB" veya "event-loop donması").
+    Amaç: 27 Ağu 2026'daki 87.9GB swap-exhaustion olayının tekrarında,
+    bu sürecin sistemin geri kalanını (Postgres arka plan job'ları dahil)
+    etkilemesine izin vermeden, kendi kendine sessizce sonlanmasını
+    sağlamak."""
     try:
         proc.terminate()
         proc.wait(timeout=_KILL_GRACE_SEC)
         _alert(
-            f"{name} (PID {proc.pid}) bellek {effective_mb:.0f}MB nedeniyle "
+            f"{name} (PID {proc.pid}) {reason} nedeniyle "
             f"OTOMATİK KAPATILDI (terminate) — sistemin geri kalanını korumak için."
         )
     except psutil.TimeoutExpired:
         try:
             proc.kill()
             _alert(
-                f"{name} (PID {proc.pid}) bellek {effective_mb:.0f}MB nedeniyle "
+                f"{name} (PID {proc.pid}) {reason} nedeniyle "
                 f"ZORLA SONLANDIRILDI (kill, terminate yanıt vermedi)."
             )
         except Exception as exc:  # pylint: disable=broad-exception-caught
@@ -217,7 +270,7 @@ def main() -> None:
                         )
                         alerted[name].add("critical")
                         if name in _KILL_ON_CRITICAL:
-                            _kill_process(proc, name, effective_mb)
+                            _kill_process(proc, name, f"bellek {effective_mb:.0f}MB")
                     elif effective_mb >= thresholds["warn_mb"] and "warn" not in alerted[name]:
                         _alert(
                             f"{name} (PID {proc.pid}) bellek {effective_mb:.0f}MB "
@@ -247,6 +300,23 @@ def main() -> None:
                             alerted[name].add("fd_warn")
                         elif num_fds < _FD_WARN:
                             alerted[name] -= {"fd_warn", "fd_critical"}
+
+                    if name in _HEARTBEAT_WATCHED:
+                        hb = _HEARTBEAT_WATCHED[name]
+                        age = _heartbeat_age_sec(hb["key"])
+                        max_age = hb["max_age_sec"]
+                        if age is not None and age >= max_age and "freeze" not in alerted[name]:
+                            alerted[name].add("freeze")
+                            _alert(
+                                f"{name} (PID {proc.pid}) event-loop {age:.0f}s'dir "
+                                f"heartbeat göndermiyor (limit {max_age}s) — donmuş olabilir."
+                            )
+                            if name in _KILL_ON_CRITICAL:
+                                _kill_process(
+                                    proc, name, f"event-loop donması (heartbeat {age:.0f}s bayat)"
+                                )
+                        elif age is not None and age < max_age:
+                            alerted[name].discard("freeze")
 
                 except psutil.NoSuchProcess:
                     print(f"[{name}] artık çalışmıyor, izlemeden çıkarılıyor")

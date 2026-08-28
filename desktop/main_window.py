@@ -702,7 +702,11 @@ class MainWindow(QMainWindow):
 
     def _send_heartbeat(self) -> None:
         try:
-            self._heartbeat_redis.set("heartbeat:desktop_panel", datetime.now().isoformat())
+            # ex=90 (6x gönderim aralığı) — terminal kapatma/Ctrl+C gibi closeEvent'i
+            # atlayan çıkışlarda key kalıcı bayat kalmasın (28 Ağu 2026 vakası: aynı
+            # gecenin son commit testinden sonra oturum kapatılmış, closeEvent hiç
+            # çalışmamış, TTL'siz key 22+ saat donuk göründü).
+            self._heartbeat_redis.set("heartbeat:desktop_panel", datetime.now().isoformat(), ex=90)
         except Exception:  # pylint: disable=broad-exception-caught
             pass
 
