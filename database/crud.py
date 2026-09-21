@@ -17,7 +17,15 @@ logger = get_logger(__name__)
 # 4h←1h, 6h←1h, 8h/12h←4h. Yanlış sırada refresh edilirse üst seviye kendi
 # (henüz tazelenmemiş) kaynağından eski veri okur — 29 Tem 2026, restart sonrası
 # backfill edilen 1m'in cagg_1h'ye hiç yansımadığı vakada bulundu.
-_CAGG_REFRESH_ORDER = ["cagg_5m", "cagg_15m", "cagg_1h", "cagg_4h", "cagg_6h", "cagg_8h", "cagg_12h"]
+_CAGG_REFRESH_ORDER = [
+    "cagg_5m",
+    "cagg_15m",
+    "cagg_1h",
+    "cagg_4h",
+    "cagg_6h",
+    "cagg_8h",
+    "cagg_12h",
+]
 
 
 async def refresh_cagg_chain(start: datetime, end: datetime) -> None:
@@ -33,11 +41,15 @@ async def refresh_cagg_chain(start: datetime, end: datetime) -> None:
         for view in _CAGG_REFRESH_ORDER:
             try:
                 await conn.execute(
-                    text("CALL refresh_continuous_aggregate(:view, :start, :end)"),
+                    text(
+                        "CALL refresh_continuous_aggregate(:view, "
+                        "CAST(:start AS timestamp), CAST(:end AS timestamp))"
+                    ),
                     {"view": view, "start": start, "end": end},
                 )
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.warning("[CAGG-Refresh] %s yenilenemedi: %s", view, exc)
+
 
 _CAGG_MAP = {
     "5m": "cagg_5m",

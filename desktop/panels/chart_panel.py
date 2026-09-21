@@ -28,6 +28,11 @@ _DEFAULT_TF = "1h"
 _DEFAULT_SYM = "BTCUSDT"
 _LIMIT = 200
 
+# price_data tablosu sadece '1m' satırı tutuyor — 1m dışındaki TF'lerin DB
+# yedeği bu continuous aggregate view'larından okunur (database/crud.py
+# _CAGG_MAP ile aynı eşleme). '1d' için cagg view'ı yok.
+_CAGG_TABLE_MAP = {"5m": "cagg_5m", "15m": "cagg_15m", "1h": "cagg_1h", "4h": "cagg_4h"}
+
 
 class ChartPanel(QWidget):  # pylint: disable=too-many-instance-attributes
     """
@@ -239,22 +244,41 @@ class ChartPanel(QWidget):  # pylint: disable=too-many-instance-attributes
         return df
 
     def _fetch_from_db(self, symbol: str, tf: str) -> Optional[pd.DataFrame]:
+        """Redis boşsa/bayatsa yedek. price_data SADECE '1m' satırı tutuyor
+        (diğer interval'lar hiç yazılmadı) — bu yüzden 1m dışındaki TF'ler
+        için ilgili cagg_* view'ından okunur. '1d' için cagg view'ı yok,
+        yedek de yok."""
+        view = _CAGG_TABLE_MAP.get(tf)
+        if tf != "1m" and view is None:
+            return None
         conn = None
         try:
             import psycopg2  # pylint: disable=import-outside-toplevel
 
             conn = psycopg2.connect(**self._db_cfg)
             cur = conn.cursor()
-            cur.execute(
-                """
-                SELECT timestamp, open, high, low, close, volume
-                FROM price_data
-                WHERE symbol = %s AND interval = %s
-                ORDER BY timestamp DESC
-                LIMIT %s
-                """,
-                (symbol, tf, _LIMIT),
-            )
+            if tf == "1m":
+                cur.execute(
+                    """
+                    SELECT timestamp, open, high, low, close, volume
+                    FROM price_data
+                    WHERE symbol = %s AND interval = '1m'
+                    ORDER BY timestamp DESC
+                    LIMIT %s
+                    """,
+                    (symbol, _LIMIT),
+                )
+            else:
+                cur.execute(
+                    f"""
+                    SELECT bucket, open, high, low, close, volume
+                    FROM {view}
+                    WHERE symbol = %s
+                    ORDER BY bucket DESC
+                    LIMIT %s
+                    """,
+                    (symbol, _LIMIT),
+                )
             rows = cur.fetchall()
             if not rows:
                 return None
