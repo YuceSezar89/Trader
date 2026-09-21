@@ -53,7 +53,7 @@ _STALE_THRESHOLD_SEC = 300
 
 
 class _FetchWorker(QThread):
-    fetched = pyqtSignal(object, list, list)  # (portfolio_dict, open_rows, hist_rows)
+    fetched = pyqtSignal(list, list, list)  # (summary_rows, open_rows, hist_rows)
 
     def __init__(self, db_config: dict[str, Any], parent=None):
         super().__init__(parent)
@@ -64,29 +64,25 @@ class _FetchWorker(QThread):
         try:
             conn = psycopg2.connect(**self._db_config)
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                # Portföy özeti sadece ta_kovalama_live'ı izliyor (24 Tem 2026 —
-                # tf_alignment_live ÇÜRÜTÜLDÜ/durduruldu, ta_kovalama_live'a geçildi;
-                # $2000 başlangıç bakiyesi bu bütçeyle eşleşiyor, bkz. paper_portfolio
-                # tablosu) — manuel işlemlerin VE totalamount_rank1'in (13 Ağu 2026,
-                # kendi ayrı bütçesi/portföy satırı var) P&L'i bu bütçeye karışmasın
-                # diye buraya dahil edilmiyor. Açık/kapalı TABLOLAR ise ayrıca
-                # source='manual' işlemleri de gösteriyor (1 Ağu 2026 — manuel
-                # işlem, ManualTradeDialog'un o zamanki hatalı "tf_alignment_live"
-                # varsayılanı yüzünden panelde hiç görünmüyordu).
+                # Özet bar (Bakiye/Win Rate/Max DD) artık seçilen stratejiye göre
+                # dinamik hesaplanıyor (21 Eyl 2026) — paper_portfolio tablosu
+                # totalamount_rank1/manual için hiç satır içermiyor (_apply_close
+                # portfolio=None geldiğinde bakiye/drawdown güncellemiyor), bu
+                # yüzden kapanmış işlemler limitsiz çekilip equity-curve max
+                # drawdown'u burada, Python tarafında hesaplanıyor. Aşağıdaki
+                # open/hist sorgularındaki source='manual' dahiliyeti (1 Ağu
+                # 2026 — ManualTradeDialog'un eski hatalı "tf_alignment_live"
+                # varsayılanı) korunuyor.
                 cur.execute(
                     """
-                    SELECT
-                        COUNT(*) FILTER (WHERE status = 'closed') AS total_trades,
-                        COUNT(*) FILTER (WHERE status = 'closed' AND pnl_pct > 0) AS winning_trades,
-                        COALESCE(SUM(pnl_usd) FILTER (WHERE status = 'closed'), 0) AS total_pnl_usd,
-                        2000 + COALESCE(SUM(pnl_usd) FILTER (WHERE status = 'closed'), 0) AS balance,
-                        2000 AS initial_balance,
-                        0 AS max_drawdown_pct
+                    SELECT strategy, pnl_usd, closed_at
                     FROM paper_trades
-                    WHERE strategy = 'ta_kovalama_live'
+                    WHERE status = 'closed'
+                          AND (strategy IN ('ta_kovalama_live', 'totalamount_rank1') OR source = 'manual')
+                    ORDER BY closed_at ASC
                 """
                 )
-                pf = dict(cur.fetchone()) if cur.rowcount else None
+                summary_rows = [dict(r) for r in cur.fetchall()]
 
                 cur.execute(
                     """
@@ -117,7 +113,7 @@ class _FetchWorker(QThread):
                 )
                 hist_rows = [dict(r) for r in cur.fetchall()]
 
-            self.fetched.emit(pf, open_rows, hist_rows)
+            self.fetched.emit(summary_rows, open_rows, hist_rows)
         except Exception as exc:
             import logging
 
@@ -139,6 +135,8 @@ class PaperTradePanel(QWidget):
         self._db_config = db_config
         self._redis_url = redis_url
         self._open_prices: dict[str, float] = {}
+        self._summary_rows: list[dict] = []
+        self._summary_strategy_initialized = False
         self._open_model = PaperOpenModel(self)
         self._open_proxy = PaperOpenProxyModel(self)
         self._open_proxy.setSourceModel(self._open_model)
@@ -191,10 +189,10 @@ class PaperTradePanel(QWidget):
 
         # ── Özet bar ──
         summary = QHBoxLayout()
-        self._lbl_balance = self._stat_label("Bakiye", "$2,000.00")
+        self._lbl_balance = self._stat_label("Bakiye", "$0.00")
         self._lbl_pnl = self._stat_label("Toplam P&L", "$0.00")
         self._lbl_winrate = self._stat_label("Win Rate", "—")
-        self._lbl_drawdown = self._stat_label("Max DD", "0.00%")
+        self._lbl_drawdown = self._stat_label("Max DD", "-$0.00")
         self._lbl_open = self._stat_label("Açık", "0")
         for w in [
             self._lbl_balance,
@@ -205,6 +203,11 @@ class PaperTradePanel(QWidget):
         ]:
             summary.addWidget(w)
         summary.addStretch()
+
+        summary.addWidget(QLabel("Strateji:"))
+        self._summary_cb_strategy = self._make_combo(["Tümü"])
+        self._summary_cb_strategy.currentTextChanged.connect(lambda _v: self._recompute_summary())
+        summary.addWidget(self._summary_cb_strategy)
 
         self._pt_toggle_btn = QPushButton("● PT: Aktif")
         self._pt_toggle_btn.setFixedWidth(110)
@@ -474,6 +477,7 @@ class PaperTradePanel(QWidget):
                     price_updates[sym] = (price, stale)
             if price_updates:
                 self._open_model.update_prices(price_updates)
+                self._recompute_summary()
         except Exception:  # pylint: disable=broad-exception-caught
             pass
 
@@ -508,21 +512,117 @@ class PaperTradePanel(QWidget):
         if not self._worker.isRunning():
             self._worker.start()
 
-    def _on_fetched(self, pf: dict | None, open_rows: list, hist_rows: list) -> None:
-        unrealized = self._fill_open(open_rows)
-        if pf:
-            self._update_summary(pf, unrealized)
+    def _on_fetched(self, summary_rows: list, open_rows: list, hist_rows: list) -> None:
+        self._summary_rows = summary_rows
+        self._fill_open(open_rows)
+        self._populate_summary_strategy_options(summary_rows, open_rows)
+        self._recompute_summary()
         self._fill_hist(hist_rows)
         self._tabs.setTabText(0, f"Açık Pozisyonlar ({len(open_rows)})")
         self._tabs.setTabText(1, f"Kapalı İşlemler ({len(hist_rows)})")
 
-    def _update_summary(self, pf: dict, unrealized: float = 0.0) -> None:
-        balance = float(pf["balance"])
-        realized = float(pf["total_pnl_usd"])
-        total = int(pf["total_trades"])
-        wins = int(pf["winning_trades"])
-        dd = float(pf["max_drawdown_pct"])
+    def _populate_summary_strategy_options(self, summary_rows: list, open_rows: list) -> None:
+        strategies: set[str] = set()
+        latest_ts: dict[str, datetime] = {}
+        for r in summary_rows:
+            s = r["strategy"]
+            strategies.add(s)
+            ts = r["closed_at"]
+            if ts and (s not in latest_ts or ts > latest_ts[s]):
+                latest_ts[s] = ts
+        for r in open_rows:
+            s = r["strategy"]
+            strategies.add(s)
+            ts = r["opened_at"]
+            if ts and (s not in latest_ts or ts > latest_ts[s]):
+                latest_ts[s] = ts
+
+        cur_selection = self._summary_cb_strategy.currentText()
+        self._summary_cb_strategy.blockSignals(True)
+        self._summary_cb_strategy.clear()
+        self._summary_cb_strategy.addItems(["Tümü"] + sorted(strategies))
+        if not self._summary_strategy_initialized and latest_ts:
+            # İlk yüklemede en son aktif stratejiyi seçili getir (ör. totalamount_rank1);
+            # sonraki fetch'lerde kullanıcının seçimi korunur.
+            default_strategy = max(latest_ts, key=latest_ts.get)
+            idx = self._summary_cb_strategy.findText(default_strategy)
+            self._summary_cb_strategy.setCurrentIndex(max(0, idx))
+            self._summary_strategy_initialized = True
+        else:
+            idx = self._summary_cb_strategy.findText(cur_selection)
+            self._summary_cb_strategy.setCurrentIndex(max(0, idx))
+        self._summary_cb_strategy.blockSignals(False)
+
+    # Her iki strateji de $2000 sermayeyle başlatıldı (ta_kovalama_live:
+    # paper_portfolio.initial_balance=2000; totalamount_rank1: kullanıcı
+    # teyidi, 21 Eyl 2026 — "sermaye 2000 dolardı strateji başlarken").
+    # manual: ad-hoc elle girilen işlemler, bir "başlangıç sermayesi"
+    # kavramı yok — bakiye yerine sadece PnL toplamı gösterilir.
+    _STRATEGY_INITIAL_BALANCE: dict[str, float] = {
+        "totalamount_rank1": 2000.0,
+        "ta_kovalama_live": 2000.0,
+    }
+
+    def _initial_balance_for(self, strategy: str) -> float:
+        if strategy == "Tümü":
+            return sum(self._STRATEGY_INITIAL_BALANCE.values())
+        return self._STRATEGY_INITIAL_BALANCE.get(strategy, 0.0)
+
+    def _compute_realized_stats(self, strategy: str) -> tuple[int, int, float, float, float]:
+        """(toplam_islem, kazanan, gerceklesen_pnl, max_dd_usd, max_dd_pct).
+
+        Equity, bilinen başlangıç sermayesinden başlatılır — bu sayede peak
+        hiç sıfıra yakın kalmıyor ve % drawdown istikrarlı çıkıyor (sermayesiz
+        stratejilerde erken küçük bir tepe paydaya bölününce %400+ gibi
+        anlamsız değerler üretiyordu, 21 Eyl 2026).
+        """
+        rows = [r for r in self._summary_rows if strategy == "Tümü" or r["strategy"] == strategy]
+        total = len(rows)
+        wins = sum(1 for r in rows if float(r["pnl_usd"] or 0) > 0)
+        initial_balance = self._initial_balance_for(strategy)
+        total_pnl = 0.0
+        equity = initial_balance
+        peak = initial_balance
+        max_dd_usd = 0.0
+        max_dd_pct = 0.0
+        for r in rows:  # closed_at ASC sıralı geldi (SQL) — filtre sırayı bozmaz
+            pnl = float(r["pnl_usd"] or 0)
+            total_pnl += pnl
+            equity += pnl
+            if equity > peak:
+                peak = equity
+            dd_usd = peak - equity
+            if dd_usd > max_dd_usd:
+                max_dd_usd = dd_usd
+            if peak > 0:
+                dd_pct = dd_usd / peak * 100
+                if dd_pct > max_dd_pct:
+                    max_dd_pct = dd_pct
+        return total, wins, total_pnl, max_dd_usd, max_dd_pct
+
+    def _compute_open_stats_by_strategy(self) -> dict[str, tuple[int, float]]:
+        """strateji -> (acik_pozisyon_sayisi, gerceklesmemis_pnl_usd)."""
+        result: dict[str, tuple[int, float]] = {}
+        for i in range(self._open_model.rowCount()):
+            row = self._open_model.row_at(i)
+            strat = row.raw.get("strategy", "")
+            cnt, pnl = result.get(strat, (0, 0.0))
+            result[strat] = (cnt + 1, pnl + row.pnl_usd)
+        return result
+
+    def _recompute_summary(self) -> None:
+        strategy = self._summary_cb_strategy.currentText() or "Tümü"
+        total, wins, realized, max_dd_usd, max_dd_pct = self._compute_realized_stats(strategy)
+        open_stats = self._compute_open_stats_by_strategy()
+        if strategy == "Tümü":
+            open_count = sum(c for c, _ in open_stats.values())
+            unrealized = sum(p for _, p in open_stats.values())
+        else:
+            open_count, unrealized = open_stats.get(strategy, (0, 0.0))
         total_pnl = realized + unrealized
+        initial_balance = self._initial_balance_for(strategy)
+        has_capital = initial_balance > 0
+        balance = initial_balance + total_pnl if has_capital else total_pnl
 
         pnl_color = COLORS["green"] if total_pnl >= 0 else COLORS["red"]
         wr_color = COLORS["green"] if total > 0 and wins / total >= 0.5 else COLORS["red"]
@@ -531,14 +631,19 @@ class PaperTradePanel(QWidget):
         unr_str = f" ({unrealized:+.2f}$ açık)" if unrealized != 0 else ""
         pnl_str = f"${total_pnl:+,.2f}{unr_str}"
 
-        self._stat_value(self._lbl_balance, f"${balance + unrealized:,.2f}")
+        self._stat_value(self._lbl_balance, f"${balance:,.2f}", None if has_capital else pnl_color)
         self._stat_value(self._lbl_pnl, pnl_str, pnl_color)
         self._stat_value(self._lbl_winrate, wr_str, wr_color)
-        self._stat_value(
-            self._lbl_drawdown, f"{dd:.2f}%", COLORS["red"] if dd > 5 else COLORS["text_primary"]
-        )
+        if has_capital:
+            dd_text = f"{max_dd_pct:.2f}%"
+            dd_color = COLORS["red"] if max_dd_pct > 5 else COLORS["text_primary"]
+        else:
+            dd_text = f"-${max_dd_usd:,.2f}"
+            dd_color = COLORS["red"] if max_dd_usd > 0 else COLORS["text_primary"]
+        self._stat_value(self._lbl_drawdown, dd_text, dd_color)
+        self._stat_value(self._lbl_open, str(open_count))
 
-    def _fill_open(self, rows: list[dict]) -> float:
+    def _fill_open(self, rows: list[dict]) -> None:
         items = []
         for row in rows:
             item = dict(row)
@@ -547,13 +652,9 @@ class PaperTradePanel(QWidget):
         self._open_model.bulk_upsert(items, self._open_model.build_row, self._open_model.update_row)
         self._open_model.prune_missing({r["id"] for r in rows})
 
-        self._stat_value(self._lbl_open, str(len(rows)))
-
-        total_unrealized = 0.0
         strategies: set[str] = set()
         for r_idx in range(self._open_model.rowCount()):
             row_obj = self._open_model.row_at(r_idx)
-            total_unrealized += row_obj.pnl_usd
             strategies.add(row_obj.strategy_label)
 
         cur_strategy = self._open_cb_strategy.currentText()
@@ -563,8 +664,6 @@ class PaperTradePanel(QWidget):
         idx = self._open_cb_strategy.findText(cur_strategy)
         self._open_cb_strategy.setCurrentIndex(max(0, idx))
         self._open_cb_strategy.blockSignals(False)
-
-        return total_unrealized
 
     def _fill_hist(self, rows: list[dict]) -> None:
         self._hist_model.bulk_upsert(rows, self._hist_model.build_row, self._hist_model.update_row)
